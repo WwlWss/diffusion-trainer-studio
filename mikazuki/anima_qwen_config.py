@@ -64,6 +64,13 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
         )
 
     try:
+        dit_lr = float(config.get("learning_rate"))
+    except (TypeError, ValueError):
+        raise ValueError("Anima: Qwen3 联合训练要求有效的主 DiT learning_rate。")
+    if dit_lr <= 0:
+        raise ValueError("Anima: Qwen3 联合训练第一版要求主 DiT learning_rate 大于 0；暂不支持仅训练 Qwen3。")
+
+    try:
         qwen3_lr = float(config.get("qwen3_lr"))
     except (TypeError, ValueError):
         raise ValueError("Anima: 训练 Qwen3 时必须设置有效的 qwen3_lr（建议从 5e-7 起）。")
