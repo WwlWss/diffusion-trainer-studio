@@ -125,12 +125,30 @@ class AnimaQwenConfigTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "不是目录"):
                 normalize_qwen_training_config(config, "finetune")
 
-    def test_trainer_capability_probe(self):
+    def test_trainer_capability_probe_requires_trainer_and_cli_markers(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            trainer = Path(temp_dir) / "anima_train.py"
-            trainer.write_text("parser.add_argument('--train_qwen3_text_encoder')", encoding="utf-8")
+            root = Path(temp_dir)
+            trainer = root / "anima_train.py"
+            args_file = root / "library" / "anima_train_utils.py"
+            args_file.parent.mkdir(parents=True)
+
+            trainer.write_text("train_qwen3_text_encoder = True", encoding="utf-8")
+            args_file.write_text(
+                "parser.add_argument('--train_qwen3_text_encoder')\n"
+                "parser.add_argument('--qwen3_lr')\n",
+                encoding="utf-8",
+            )
             self.assertTrue(trainer_supports_qwen_training(str(trainer)))
+
+            args_file.write_text("parser.add_argument('--train_qwen3_text_encoder')", encoding="utf-8")
+            self.assertFalse(trainer_supports_qwen_training(str(trainer)))
+
             trainer.write_text("print('old trainer')", encoding="utf-8")
+            args_file.write_text(
+                "parser.add_argument('--train_qwen3_text_encoder')\n"
+                "parser.add_argument('--qwen3_lr')\n",
+                encoding="utf-8",
+            )
             self.assertFalse(trainer_supports_qwen_training(str(trainer)))
 
     @staticmethod
