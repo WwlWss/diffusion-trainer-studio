@@ -1,0 +1,42 @@
+name: Anima Qwen3 review
+
+on:
+  pull_request:
+    paths:
+      - "mikazuki/anima_qwen_config.py"
+      - "mikazuki/process.py"
+      - "mikazuki/schema/flux-lora.ts"
+      - "tests/test_anima_qwen_config.py"
+      - "tools/apply_anima_qwen3_sd_scripts_patch.py"
+      - "ANIMA.md"
+      - ".gitmodules"
+      - "sd-scripts"
+      - ".github/workflows/anima-qwen3-review.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository and pinned submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile host-side Python
+        run: |
+          python -m py_compile \
+            mikazuki/anima_qwen_config.py \
+            mikazuki/process.py \
+            tools/apply_anima_qwen3_sd_scripts_patch.py \
+            tests/test_anima_qwen_config.py
+
+      - name: Run Qwen3 configuration regression tests
+        run: python -m unittest tests.test_anima_qwen_config -v
+
+      - name: Validate sd-scripts patch against pinned source
+        run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
