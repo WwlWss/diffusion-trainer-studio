@@ -70,6 +70,18 @@ class AnimaQwenConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "qwen3_lr"):
                     normalize_qwen_training_config(config, "finetune")
 
+    def test_missing_or_non_positive_dit_lr_is_rejected(self):
+        config = self._valid_config()
+        config.pop("learning_rate")
+        with self.assertRaisesRegex(ValueError, "learning_rate"):
+            normalize_qwen_training_config(config, "finetune")
+
+        for value in ("0", "-1e-5"):
+            with self.subTest(value=value):
+                config = self._valid_config(learning_rate=value)
+                with self.assertRaisesRegex(ValueError, "learning_rate"):
+                    normalize_qwen_training_config(config, "finetune")
+
     def test_supported_optimizer_is_accepted(self):
         config = self._valid_config(optimizer_type="AdamW8bit")
         self.assertTrue(normalize_qwen_training_config(config, "finetune"))
@@ -125,6 +137,7 @@ class AnimaQwenConfigTests(unittest.TestCase):
     def _valid_config(**overrides):
         config = {
             "train_qwen3_text_encoder": True,
+            "learning_rate": "1e-5",
             "qwen3_lr": "5e-7",
             "qwen3_gradient_checkpointing": True,
             "optimizer_type": "AdamW8bit",
