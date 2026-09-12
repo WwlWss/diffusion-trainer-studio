@@ -6,4 +6,4 @@
 	url = https://github.com/Akegarasu/dataset-tag-editor
 [submodule "sd-scripts"]
 	path = sd-scripts
-	url = https://github.com/kohya-ss/sd-scripts
+	url = https://github.com/gazingstars123/sd-scripts
