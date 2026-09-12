@@ -16,6 +16,11 @@ from starlette.requests import Request
 
 import mikazuki.process as process
 from mikazuki import launch_utils
+from mikazuki.anima_qwen_config import (
+    normalize_qwen_training_config,
+    text_encoder_cache_enabled,
+    trainer_supports_qwen_training,
+)
 from mikazuki.app.config import app_config
 from mikazuki.app.models import (APIResponse, APIResponseFail,
                                  APIResponseSuccess, TaggerInterrogateRequest)
@@ -157,7 +162,10 @@ def _normalize_anima_common_config(config: dict) -> None:
     if unsloth_offload and cpu_offload:
         raise ValueError("Anima: unsloth_offload_checkpointing 不能与 cpu_offload_checkpointing 同时启用")
 
-    if config.get("cache_text_encoder_outputs"):
+    # sd-scripts treats *_to_disk as enabling the text-encoder cache even when
+    # cache_text_encoder_outputs itself is false. Validate the effective state,
+    # not only the visible checkbox.
+    if text_encoder_cache_enabled(config):
         if config.get("shuffle_caption"):
             raise ValueError("Anima: 缓存 Qwen3 输出时必须关闭 shuffle_caption")
         if float(config.get("caption_tag_dropout_rate") or 0) > 0:
@@ -182,6 +190,7 @@ def resolve_training_backend(config: dict, model_train_type: str) -> Tuple[str, 
 
         config.pop("model_type", None)
         _normalize_anima_common_config(config)
+        normalize_qwen_training_config(config, anima_training_mode)
 
         if anima_training_mode == "finetune":
             _strip_network_training_keys(config)
@@ -200,6 +209,7 @@ def resolve_training_backend(config: dict, model_train_type: str) -> Tuple[str, 
         return effective_train_type, trainer_mapping[effective_train_type]
 
     _strip_keys(config, ANIMA_ONLY_KEYS | ANIMA_FINETUNE_ONLY_KEYS)
+    normalize_qwen_training_config(config, "disabled")
     return model_train_type, trainer_mapping[model_train_type]
 
 
@@ -310,6 +320,15 @@ async def create_toml_file(request: Request):
 
         if effective_train_type == "anima-lora":
             config.setdefault("network_module", "networks.lora_anima")
+
+        if config.get("train_qwen3_text_encoder") and not trainer_supports_qwen_training(trainer_file):
+            return APIResponseFail(
+                message=(
+                    "当前 sd-scripts 子模块尚未包含 Anima Qwen3 联合训练补丁。"
+                    "普通 Anima LoRA / 全参微调不受影响；请先更新到支持 "
+                    "--train_qwen3_text_encoder 的 sd-scripts 版本。"
+                )
+            )
 
     validated, message = train_utils.validate_model(config["pretrained_model_name_or_path"], effective_train_type)
     if not validated:
@@ -496,44 +515,3 @@ async def list_avaliable_cards() -> APIResponse:
     return APIResponseSuccess(data={
         "cards": printable_devices
     })
-
-
-@router.get("/schemas/hashes")
-async def list_schema_hashes() -> APIResponse:
-    if os.environ.get("MIKAZUKI_SCHEMA_HOT_RELOAD", "0") == "1":
-        log.info("Hot reloading schemas")
-        await load_schemas()
-
-    return APIResponseSuccess(data={
-        "schemas": [
-            {
-                "name": schema["name"],
-                "hash": schema["hash"]
-            }
-            for schema in avaliable_schemas
-        ]
-    })
-
-
-@router.get("/schemas/all")
-async def get_all_schemas() -> APIResponse:
-    return APIResponseSuccess(data={
-        "schemas": avaliable_schemas
-    })
-
-
-@router.get("/presets")
-async def get_presets() -> APIResponse:
-    if os.environ.get("MIKAZUKI_SCHEMA_HOT_RELOAD", "0") == "1":
-        log.info("Hot reloading presets")
-        await load_presets()
-
-    return APIResponseSuccess(data={
-        "presets": avaliable_presets
-    })
-
-
-@router.get("/config/saved_params")
-async def get_saved_params() -> APIResponse:
-    saved_params = app_config["saved_params"]
-    return APIResponseSuccess(data=saved_params)
