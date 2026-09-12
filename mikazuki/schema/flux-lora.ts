@@ -15,7 +15,11 @@ Schema.intersect([
         Schema.object({
             model_type: Schema.const("anima").required(),
             anima_model_variant: Schema.union(["base", "2.9b"]).default("base").description("Anima 模型版本：base = 标准 28 blocks；2.9b = 扩展 40 blocks（约 2.9B 参数）"),
-            anima_training_mode: Schema.union(["lora", "finetune"]).default("lora").description("Anima 训练方式：LoRA 或全参微调（实际 trainer 由后端唯一根据此字段选择）"),
+            // Do not use an implicit default here. The legacy prebuilt frontend can
+            // evaluate sibling unions before a default has been materialized into
+            // the form model. Requiring an explicit value makes mode-dependent
+            // Qwen3 controls deterministic. Included presets already set this field.
+            anima_training_mode: Schema.union(["lora", "finetune"]).description("Anima 训练方式：请选择 LoRA 或全参微调；显式选择可确保旧版 GUI 正确切换条件设置"),
             qwen3: Schema.string().role('filepicker', { type: "model-file" }).description("Anima 文本编码器：Qwen3-0.6B safetensors 或本地 HuggingFace 模型目录；启动训练时后端会校验必填"),
             vae: Schema.string().role('filepicker', { type: "model-file" }).description("Anima VAE：Qwen-Image VAE safetensors / pth；启动训练时后端会校验必填"),
             llm_adapter_path: Schema.string().role('filepicker', { type: "model-file" }).description("可选：独立 LLM Adapter 权重；留空时从 DiT 中读取"),
@@ -133,8 +137,9 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
-    // Keep the finetune controls attached to Anima itself instead of a mode-dependent
-    // union. The backend removes these fields automatically for LoRA.
+    // Keep the existing finetune component-LR controls attached to Anima itself.
+    // The backend removes these fields automatically for LoRA; changing this older
+    // block would broaden the regression surface of the Qwen3 feature.
     Schema.union([
         Schema.object({
             model_type: Schema.const("anima").required(),
@@ -145,6 +150,31 @@ Schema.intersect([
             llm_adapter_lr: Schema.string().description("LLM Adapter 学习率；仅 finetune 使用；留空=总学习率，0=冻结 Adapter"),
             cpu_offload_checkpointing: Schema.boolean().description("仅 finetune 使用；将 gradient-checkpoint activation 卸载到 CPU；不能与 blocks_to_swap / unsloth_offload_checkpointing 同时使用"),
         }).description("Anima 全参微调分组件学习率（LoRA 模式下后端自动忽略）"),
+        Schema.object({}),
+    ]),
+
+    // Qwen3 joint finetuning is the only new mode-dependent block. It relies on
+    // anima_training_mode being an explicit form value (not an implicit default).
+    Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            anima_training_mode: Schema.const("finetune").required(),
+            train_qwen3_text_encoder: Schema.boolean().default(false).description("训练 Qwen3-0.6B 文本编码器（本次训练全程）。关闭时保持 sd-scripts 原有冻结 Qwen3 的行为"),
+        }).description("Anima 文本编码器微调"),
+        Schema.object({}),
+    ]),
+
+    // The detailed controls are expanded only after the user explicitly enables
+    // Qwen3 training. The backend independently validates every incompatibility.
+    Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            anima_training_mode: Schema.const("finetune").required(),
+            train_qwen3_text_encoder: Schema.const(true).required(),
+            qwen3_lr: Schema.string().default("5e-7").description("Qwen3 文本编码器学习率；必须大于 0。建议从 5e-7 起，显著低于 DiT 学习率"),
+            qwen3_gradient_checkpointing: Schema.boolean().default(true).description("Qwen3 梯度检查点：降低 activation 显存占用，但会增加重计算时间"),
+            qwen3_output_dir: Schema.string().role('filepicker', { type: "folder" }).description("可选：Qwen3 sidecar checkpoint 输出目录；留空时与主 Anima checkpoint 保存在同一目录，文件名自动配对"),
+        }).description("⚠ Qwen3 联合训练与 cache_text_encoder_outputs / cache_text_encoder_outputs_to_disk 不兼容；请关闭两项 Qwen3 输出缓存。cache_latents 不受影响。第一版也不支持 DeepSpeed、fused_backward_pass、D-Adaptation、Prodigy 或 Adafactor。每个主模型 checkpoint 会保存匹配的完整 Qwen3 sidecar，因此会增加磁盘占用和保存停顿。"),
         Schema.object({}),
     ]),
 
