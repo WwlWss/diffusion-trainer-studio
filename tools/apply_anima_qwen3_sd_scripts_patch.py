@@ -1,8 +1,8 @@
 """Apply the optional Anima Qwen3 joint-finetune patch to the pinned sd-scripts tree.
 
 This is a staging tool until the project can point the submodule at a WwlWss-owned
-sd-scripts fork.  It is intentionally pinned to the exact current submodule commit
-and fails closed if any expected source block has drifted.
+sd-scripts fork. It is pinned to the exact current submodule commit and fails
+closed if any expected source block has drifted.
 
 Usage:
     python tools/apply_anima_qwen3_sd_scripts_patch.py --check
@@ -18,12 +18,6 @@ from pathlib import Path
 
 
 EXPECTED_SD_SCRIPTS_HEAD = "45dddfccb704b6b0591f65d98f0d695c997b3115"
-TARGET_FILES = (
-    "anima_train.py",
-    "library/anima_train_utils.py",
-    "library/anima_utils.py",
-    "library/strategy_anima.py",
-)
 
 
 def replace_once(text: str, old: str, new: str, label: str) -> str:
@@ -41,9 +35,14 @@ def patch_anima_train_utils(text: str) -> str:
         "anima_train_utils import",
     )
 
-    old = '''    parser.add_argument(\n        "--qwen3",\n        type=str,\n        default=None,\n        help="Path to Qwen3-0.6B model (safetensors file or directory)",\n    )\n'''
-    new = old + '''    parser.add_argument(\n        "--train_qwen3_text_encoder",\n        action="store_true",\n        help="Jointly train the Qwen3-0.6B text encoder during Anima full finetuning.",\n    )\n    parser.add_argument(\n        "--qwen3_lr",\n        type=float,\n        default=5e-7,\n        help="Learning rate for trainable Qwen3 text encoder (default: 5e-7).",\n    )\n    parser.add_argument(\n        "--qwen3_gradient_checkpointing",\n        action="store_true",\n        help="Enable gradient checkpointing in Qwen3 when it is trainable.",\n    )\n    parser.add_argument(\n        "--qwen3_output_dir",\n        type=str,\n        default=None,\n        help="Optional directory for Qwen3 sidecar checkpoints. Defaults to the Anima checkpoint directory.",\n    )\n'''
-    text = replace_once(text, old, new, "Anima Qwen3 CLI arguments")
+    qwen_arg = '''    parser.add_argument(\n        "--qwen3",\n        type=str,\n        default=None,\n        help="Path to Qwen3-0.6B model (safetensors file or directory)",\n    )\n'''
+    text = replace_once(
+        text,
+        qwen_arg,
+        qwen_arg
+        + '''    parser.add_argument(\n        "--train_qwen3_text_encoder",\n        action="store_true",\n        help="Jointly train the Qwen3-0.6B text encoder during Anima full finetuning.",\n    )\n    parser.add_argument(\n        "--qwen3_lr",\n        type=float,\n        default=5e-7,\n        help="Learning rate for trainable Qwen3 text encoder (default: 5e-7).",\n    )\n    parser.add_argument(\n        "--qwen3_gradient_checkpointing",\n        action="store_true",\n        help="Enable gradient checkpointing in Qwen3 when it is trainable.",\n    )\n    parser.add_argument(\n        "--qwen3_output_dir",\n        type=str,\n        default=None,\n        help="Optional directory for Qwen3 sidecar checkpoints. Defaults to the Anima checkpoint directory.",\n    )\n''',
+        "Anima Qwen3 CLI arguments",
+    )
 
     text = replace_once(
         text,
@@ -66,7 +65,7 @@ def patch_anima_train_utils(text: str) -> str:
     text = replace_once(
         text,
         '''    return param_groups\n\n\n# Save functions\n''',
-        '''    if return_names:\n        return param_groups, group_names\n    return param_groups\n\n\ndef get_qwen3_sidecar_path(args: argparse.Namespace, main_ckpt_file: str, create_dir: bool = True) -> str:\n    output_dir = args.qwen3_output_dir or os.path.dirname(main_ckpt_file) or "."\n    if create_dir:\n        os.makedirs(output_dir, exist_ok=True)\n    basename = os.path.splitext(os.path.basename(main_ckpt_file))[0]\n    return os.path.join(output_dir, basename + "_qwen3.safetensors")\n\n\ndef save_qwen3_sidecar(\n    args: argparse.Namespace,\n    main_ckpt_file: str,\n    qwen3_text_encoder,\n    save_dtype: torch.dtype,\n    force_sync_upload: bool = False,\n):\n    if qwen3_text_encoder is None:\n        return\n    qwen3_file = get_qwen3_sidecar_path(args, main_ckpt_file)\n    anima_utils.save_qwen3_text_encoder(qwen3_file, qwen3_text_encoder, save_dtype)\n    if args.huggingface_repo_id is not None:\n        huggingface_util.upload(\n            args, qwen3_file, "/" + os.path.basename(qwen3_file), force_sync_upload=force_sync_upload\n        )\n\n\ndef remove_old_qwen3_sidecar(\n    args: argparse.Namespace,\n    on_epoch_end: bool,\n    epoch: int,\n    num_train_epochs: int,\n    global_step: int,\n):\n    if on_epoch_end:\n        epoch_no = epoch + 1\n        if args.save_every_n_epochs is None or epoch_no % args.save_every_n_epochs != 0 or epoch_no >= num_train_epochs:\n            return\n        remove_no = checkpoint_io.get_remove_epoch_no(args, epoch_no)\n        if remove_no is None:\n            return\n        old_name = checkpoint_io.get_epoch_ckpt_name(args, ".safetensors", remove_no)\n    else:\n        remove_no = checkpoint_io.get_remove_step_no(args, global_step)\n        if remove_no is None:\n            return\n        old_name = checkpoint_io.get_step_ckpt_name(args, ".safetensors", remove_no)\n\n    old_main = os.path.join(args.output_dir, old_name)\n    old_qwen3 = get_qwen3_sidecar_path(args, old_main, create_dir=False)\n    if os.path.exists(old_qwen3):\n        logger.info(f"removing old Qwen3 sidecar: {old_qwen3}")\n        os.remove(old_qwen3)\n\n\n# Save functions\n''',
+        '''    if return_names:\n        return param_groups, group_names\n    return param_groups\n\n\ndef get_qwen3_sidecar_path(args: argparse.Namespace, main_ckpt_file: str, create_dir: bool = True) -> str:\n    output_dir = args.qwen3_output_dir or os.path.dirname(main_ckpt_file) or "."\n    if create_dir:\n        os.makedirs(output_dir, exist_ok=True)\n    basename = os.path.splitext(os.path.basename(main_ckpt_file))[0]\n    return os.path.join(output_dir, basename + "_qwen3.safetensors")\n\n\ndef save_qwen3_sidecar(\n    args: argparse.Namespace,\n    main_ckpt_file: str,\n    qwen3_text_encoder,\n    save_dtype: torch.dtype,\n    force_sync_upload: bool = False,\n):\n    if qwen3_text_encoder is None:\n        return\n\n    qwen3_file = get_qwen3_sidecar_path(args, main_ckpt_file)\n    temp_file = qwen3_file + ".tmp"\n    try:\n        anima_utils.save_qwen3_text_encoder(temp_file, qwen3_text_encoder, save_dtype)\n        os.replace(temp_file, qwen3_file)\n    finally:\n        if os.path.exists(temp_file):\n            os.remove(temp_file)\n\n    if args.huggingface_repo_id is not None:\n        huggingface_util.upload(\n            args, qwen3_file, "/" + os.path.basename(qwen3_file), force_sync_upload=force_sync_upload\n        )\n\n\ndef remove_old_qwen3_sidecar(\n    args: argparse.Namespace,\n    on_epoch_end: bool,\n    epoch: int,\n    num_train_epochs: int,\n    global_step: int,\n):\n    if on_epoch_end:\n        epoch_no = epoch + 1\n        if args.save_every_n_epochs is None or epoch_no % args.save_every_n_epochs != 0 or epoch_no >= num_train_epochs:\n            return\n        remove_no = checkpoint_io.get_remove_epoch_no(args, epoch_no)\n        if remove_no is None:\n            return\n        old_name = checkpoint_io.get_epoch_ckpt_name(args, ".safetensors", remove_no)\n    else:\n        remove_no = checkpoint_io.get_remove_step_no(args, global_step)\n        if remove_no is None:\n            return\n        old_name = checkpoint_io.get_step_ckpt_name(args, ".safetensors", remove_no)\n\n    old_main = os.path.join(args.output_dir, old_name)\n    old_qwen3 = get_qwen3_sidecar_path(args, old_main, create_dir=False)\n    if os.path.exists(old_qwen3):\n        logger.info(f"removing old Qwen3 sidecar: {old_qwen3}")\n        os.remove(old_qwen3)\n\n\n# Save functions\n''',
         "Qwen3 sidecar helpers",
     )
 
@@ -79,7 +78,7 @@ def patch_anima_train_utils(text: str) -> str:
     text = replace_once(
         text,
         '''        # Save with 'net.' prefix for ComfyUI compatibility\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n\n    checkpoint_io.save_sd_model_on_train_end_common(args, True, True, epoch, global_step, sd_saver, None)\n''',
-        '''        # Save with 'net.' prefix for ComfyUI compatibility\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n        save_qwen3_sidecar(args, ckpt_file, qwen3_text_encoder, save_dtype, force_sync_upload=True)\n\n    checkpoint_io.save_sd_model_on_train_end_common(args, True, True, epoch, global_step, sd_saver, None)\n''',
+        '''        # Save Qwen3 first: if the sidecar write fails, do not publish a new\n        # DiT checkpoint that has no matching text encoder.\n        save_qwen3_sidecar(args, ckpt_file, qwen3_text_encoder, save_dtype, force_sync_upload=True)\n        # Save with 'net.' prefix for ComfyUI compatibility\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n\n    checkpoint_io.save_sd_model_on_train_end_common(args, True, True, epoch, global_step, sd_saver, None)\n''',
         "final Qwen3 sidecar save",
     )
 
@@ -92,7 +91,7 @@ def patch_anima_train_utils(text: str) -> str:
     text = replace_once(
         text,
         '''        dit_sd = dit.state_dict()\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n\n    checkpoint_io.save_sd_model_on_epoch_end_or_stepwise_common(\n''',
-        '''        dit_sd = dit.state_dict()\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n        save_qwen3_sidecar(args, ckpt_file, qwen3_text_encoder, save_dtype)\n\n    checkpoint_io.save_sd_model_on_epoch_end_or_stepwise_common(\n''',
+        '''        dit_sd = dit.state_dict()\n        save_qwen3_sidecar(args, ckpt_file, qwen3_text_encoder, save_dtype)\n        anima_utils.save_anima_model(ckpt_file, dit_sd, sai_metadata, save_dtype)\n\n    checkpoint_io.save_sd_model_on_epoch_end_or_stepwise_common(\n''',
         "step Qwen3 sidecar save",
     )
     text = replace_once(
@@ -106,7 +105,7 @@ def patch_anima_train_utils(text: str) -> str:
 
 def patch_anima_utils(text: str) -> str:
     old = '''    logger.info(f"Loaded Qwen3 text encoder. Parameters: {sum(p.numel() for p in model.parameters()):,}")\n    return model, tokenizer\n\n\ndef load_t5_tokenizer'''
-    new = '''    logger.info(f"Loaded Qwen3 text encoder. Parameters: {sum(p.numel() for p in model.parameters()):,}")\n    return model, tokenizer\n\n\ndef save_qwen3_text_encoder(save_path: str, text_encoder, dtype: Optional[torch.dtype] = None):\n    """Save the trainable Qwen3 base model as a standalone safetensors sidecar."""\n    state_dict = {}\n    for key, value in text_encoder.state_dict().items():\n        value = value.detach().clone().to("cpu")\n        if dtype is not None:\n            value = value.to(dtype)\n        state_dict[key] = value.contiguous()\n\n    output_dir = os.path.dirname(save_path)\n    if output_dir:\n        os.makedirs(output_dir, exist_ok=True)\n    save_file(state_dict, save_path, metadata={"format": "pt", "model": "qwen3-0.6b-anima-text-encoder"})\n    logger.info(f"Saved Qwen3 text encoder to {save_path}")\n\n\ndef load_t5_tokenizer'''
+    new = '''    logger.info(f"Loaded Qwen3 text encoder. Parameters: {sum(p.numel() for p in model.parameters()):,}")\n    return model, tokenizer\n\n\ndef save_qwen3_text_encoder(save_path: str, text_encoder, dtype: Optional[torch.dtype] = None):\n    """Save the trainable Qwen3 base model as a standalone safetensors sidecar."""\n    state_dict = {}\n    for key, value in text_encoder.state_dict().items():\n        target_dtype = dtype if dtype is not None else value.dtype\n        # Copy directly to CPU. Avoid clone().to("cpu"), which first creates an\n        # unnecessary GPU clone and can add a large checkpoint-time VRAM spike.\n        value = value.detach().to(device="cpu", dtype=target_dtype, copy=True).contiguous()\n        state_dict[key] = value\n\n    output_dir = os.path.dirname(save_path)\n    if output_dir:\n        os.makedirs(output_dir, exist_ok=True)\n    save_file(state_dict, save_path, metadata={"format": "pt", "model": "qwen3-0.6b-anima-text-encoder"})\n    logger.info(f"Saved Qwen3 text encoder to {save_path}")\n\n\ndef load_t5_tokenizer'''
     return replace_once(text, old, new, "Qwen3 saver")
 
 
@@ -206,7 +205,6 @@ def patch_anima_train(text: str) -> str:
         "dynamic Anima LR names",
     )
 
-    # The same save call occurs once for epoch checkpoints. Replace the remaining occurrence.
     text = replace_once(
         text,
         '''                    global_step,\n                    accelerator.unwrap_model(dit) if train_dit else None,\n                )\n\n        anima_train_utils.sample_images(\n            accelerator,\n            args,\n            epoch + 1,\n            global_step,\n            dit,\n            vae,\n            qwen3_text_encoder,\n            tokenize_strategy,\n            text_encoding_strategy,\n            sample_prompts_te_outputs,\n        )\n''',
