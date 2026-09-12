@@ -7,6 +7,11 @@ from typing import Optional
 
 import toml
 
+from mikazuki.anima_qwen_config import (
+    normalize_qwen_training_config,
+    text_encoder_cache_enabled,
+    trainer_supports_qwen_training,
+)
 from mikazuki.app.models import APIResponse
 from mikazuki.log import log
 from mikazuki.tasks import tm
@@ -67,6 +72,21 @@ def _detect_anima_variant(model_path: str) -> Optional[str]:
     return None
 
 
+def _validate_effective_text_encoder_cache(config: dict) -> None:
+    """Mirror sd-scripts semantics before launching the subprocess.
+
+    sd-scripts treats cache_text_encoder_outputs_to_disk as implicitly enabling
+    the text-encoder cache. Validate the effective state here so disk-only cache
+    configurations cannot bypass the GUI-side compatibility checks.
+    """
+    if not text_encoder_cache_enabled(config):
+        return
+    if config.get("shuffle_caption"):
+        raise ValueError("Anima: 缓存 Qwen3 输出时必须关闭 shuffle_caption")
+    if float(config.get("caption_tag_dropout_rate") or 0) > 0:
+        raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 caption_tag_dropout_rate")
+
+
 def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     """Prepare Anima jobs and switch between LoRA and full finetune.
 
@@ -91,6 +111,11 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     if mode not in {"lora", "finetune"}:
         log.warning(f"Unknown Anima training mode '{mode}', falling back to {default_mode}")
         mode = default_mode
+
+    # New Qwen3 fields are strictly opt-in. When disabled (or when LoRA is
+    # selected) they are removed completely before sd-scripts sees the config.
+    train_qwen3 = normalize_qwen_training_config(config, mode)
+    _validate_effective_text_encoder_cache(config)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
@@ -130,6 +155,17 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
             raise FileNotFoundError(
                 "Anima full finetune script is missing. Run `git submodule update --init --recursive`."
             )
+        if train_qwen3 and not trainer_supports_qwen_training(trainer_file):
+            raise RuntimeError(
+                "当前 sd-scripts 子模块尚未包含 Anima Qwen3 联合训练补丁。"
+                "普通 Anima LoRA / 全参微调不受影响；请更新到支持 "
+                "--train_qwen3_text_encoder 的 sd-scripts 版本。"
+            )
+        if train_qwen3 and config.get("qwen3_output_dir"):
+            try:
+                os.makedirs(config["qwen3_output_dir"], exist_ok=True)
+            except OSError as e:
+                raise ValueError(f"Anima: 无法创建 Qwen3 输出目录 {config['qwen3_output_dir']}: {e}") from e
         log.info("Anima full finetune selected; using sd-scripts/anima_train.py")
     else:
         # Component LRs belong to full finetune only. Remove stale values when a
