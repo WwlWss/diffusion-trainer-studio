@@ -1,26 +1,23 @@
 [metadata]
-name = "Anima LoRA 训练"
+name = "Anima 2.9B 全参微调"
 version = "1.0"
 author = "WwlWss"
 train_type = "flux-lora"
-description = "使用新版 kohya-ss/sd-scripts 的 anima_train_network.py 训练标准 28-block Anima LoRA。"
+description = "使用支持 40-block Anima 2.9B 的 sd-scripts anima_train.py 做全参微调；Qwen3 文本编码器保持冻结。"
 
 [data]
 model_type = "anima"
-anima_model_variant = "base"
-anima_training_mode = "lora"
-network_module = "networks.lora_anima"
-network_dim = 8
-network_alpha = 1
-learning_rate = "1e-4"
+anima_model_variant = "2.9b"
+anima_training_mode = "finetune"
+learning_rate = "1e-5"
 optimizer_type = "AdamW8bit"
 lr_scheduler = "constant"
 timestep_sampling = "sigmoid"
 sigmoid_scale = 1.0
 discrete_flow_shift = 1.0
 mixed_precision = "bf16"
+full_bf16 = true
 gradient_checkpointing = true
-network_train_unet_only = true
 cache_latents = true
 cache_latents_to_disk = true
 cache_text_encoder_outputs = true
@@ -31,4 +28,8 @@ qwen_image_vae_2d = true
 attn_mode = "torch"
 split_attn = false
 blocks_to_swap = 0
+unsloth_offload_checkpointing = false
+cpu_offload_checkpointing = false
 cuda_allow_tf32 = true
+qwen3_max_token_length = 512
+t5_max_token_length = 512

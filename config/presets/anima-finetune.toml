@@ -3,10 +3,11 @@ name = "Anima 全参微调"
 version = "1.0"
 author = "WwlWss"
 train_type = "flux-lora"
-description = "使用新版 kohya-ss/sd-scripts 的 anima_train.py 对 Anima DiT 做全参微调；Qwen3 文本编码器保持冻结。"
+description = "使用新版 kohya-ss/sd-scripts 的 anima_train.py 对标准 28-block Anima DiT 做全参微调；Qwen3 文本编码器保持冻结。"
 
 [data]
 model_type = "anima"
+anima_model_variant = "base"
 anima_training_mode = "finetune"
 learning_rate = "1e-5"
 optimizer_type = "AdamW8bit"
