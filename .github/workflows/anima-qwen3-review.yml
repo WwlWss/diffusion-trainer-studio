@@ -7,6 +7,7 @@ on:
       - "mikazuki/process.py"
       - "mikazuki/schema/flux-lora.ts"
       - "tests/test_anima_qwen_config.py"
+      - "tests/test_anima_qwen_off_compat.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -33,10 +34,11 @@ jobs:
             mikazuki/anima_qwen_config.py \
             mikazuki/process.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
-            tests/test_anima_qwen_config.py
+            tests/test_anima_qwen_config.py \
+            tests/test_anima_qwen_off_compat.py
 
       - name: Run Qwen3 configuration regression tests
-        run: python -m unittest tests.test_anima_qwen_config -v
+        run: python -m unittest discover -s tests -p 'test_anima_qwen*.py' -v
 
       - name: Validate sd-scripts patch against pinned source
         run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
