@@ -14,6 +14,7 @@ Schema.intersect([
         }),
         Schema.object({
             model_type: Schema.const("anima").required(),
+            anima_model_variant: Schema.union(["base", "2.9b"]).default("base").description("Anima 模型版本：base = 标准 28 blocks；2.9b = 扩展 40 blocks（约 2.9B 参数）"),
             anima_training_mode: Schema.union(["lora", "finetune"]).default("lora").description("Anima 训练方式：LoRA 或全参微调（实际 trainer 由后端唯一根据此字段选择）"),
             qwen3: Schema.string().role('filepicker', { type: "model-file" }).description("Anima 文本编码器：Qwen3-0.6B safetensors 或本地 HuggingFace 模型目录；启动训练时后端会校验必填"),
             vae: Schema.string().role('filepicker', { type: "model-file" }).description("Anima VAE：Qwen-Image VAE safetensors / pth；启动训练时后端会校验必填"),
@@ -59,7 +60,7 @@ Schema.intersect([
             vae_chunk_size: Schema.number().min(2).step(2).default(64).description("Qwen-Image VAE 空间分块大小；3D VAE 下越小越省显存；2D VAE 下影响较小"),
             vae_disable_cache: Schema.boolean().default(true).description("关闭 3D Qwen-Image VAE 内部缓存；启用 2D VAE 时此项无效果"),
             qwen_image_vae_2d: Schema.boolean().default(true).description("使用图像专用 2D Qwen-Image VAE；单图训练推荐，速度更快且显存更低"),
-            blocks_to_swap: Schema.number().min(0).max(30).step(1).default(0).description("将 DiT block 交换到 CPU；0 为关闭。不能与 CPU/Unsloth checkpoint offload 同时使用"),
+            blocks_to_swap: Schema.number().min(0).max(38).step(1).default(0).description("将 DiT block 交换到 CPU；0 为关闭。标准 Anima 最多 26，Anima 2.9B 最多 38；不能与 CPU/Unsloth checkpoint offload 同时使用"),
             unsloth_offload_checkpointing: Schema.boolean().default(false).description("将 checkpoint activation 异步卸载到 CPU；不能和 blocks_to_swap / cpu_offload_checkpointing 同时使用"),
             cuda_allow_tf32: Schema.boolean().default(true).description("Ampere 及更新显卡允许 TF32；旧显卡保持开启也不会获得 TF32 加速"),
         }).description("Anima 专用参数"),
