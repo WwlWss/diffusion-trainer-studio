@@ -40,3 +40,14 @@ jobs:
 
       - name: Validate sd-scripts patch against pinned source
         run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
+
+      - name: Apply patch in ephemeral checkout and compile patched sources
+        run: |
+          python tools/apply_anima_qwen3_sd_scripts_patch.py --write
+          python -m py_compile \
+            sd-scripts/anima_train.py \
+            sd-scripts/library/anima_train_utils.py \
+            sd-scripts/library/anima_utils.py \
+            sd-scripts/library/strategy_anima.py
+          git -C sd-scripts diff --check
+          git -C sd-scripts diff --stat
