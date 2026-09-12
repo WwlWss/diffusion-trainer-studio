@@ -104,9 +104,22 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
 
 
 def trainer_supports_qwen_training(trainer_path: str) -> bool:
-    """Fail closed when the pinned sd-scripts does not yet contain the patch."""
+    """Verify both the Anima trainer branch and its CLI argument definition.
+
+    The CLI arguments live in ``library/anima_train_utils.py``, not directly in
+    ``anima_train.py``. Requiring markers in both files avoids reporting support
+    for a partially applied patch.
+    """
+    trainer = Path(trainer_path)
+    args_file = trainer.parent / "library" / "anima_train_utils.py"
     try:
-        text = Path(trainer_path).read_text(encoding="utf-8", errors="ignore")
+        trainer_text = trainer.read_text(encoding="utf-8", errors="ignore")
+        args_text = args_file.read_text(encoding="utf-8", errors="ignore")
     except OSError:
         return False
-    return "--train_qwen3_text_encoder" in text
+
+    return (
+        "train_qwen3_text_encoder" in trainer_text
+        and "--train_qwen3_text_encoder" in args_text
+        and "--qwen3_lr" in args_text
+    )
