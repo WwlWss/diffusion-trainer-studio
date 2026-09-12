@@ -7,6 +7,7 @@ from typing import Optional
 
 import toml
 
+from mikazuki.anima_qwen_config import normalize_qwen_training_config
 from mikazuki.app.models import APIResponse
 from mikazuki.log import log
 from mikazuki.tasks import tm
@@ -91,6 +92,10 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     if mode not in {"lora", "finetune"}:
         log.warning(f"Unknown Anima training mode '{mode}', falling back to {default_mode}")
         mode = default_mode
+
+    # Revalidate the new optional Qwen3 settings at the final launch boundary.
+    # This also strips every Qwen-training-only field from LoRA/Qwen-off jobs.
+    normalize_qwen_training_config(config, mode)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
