@@ -10,6 +10,7 @@ import toml
 from fastapi import Request
 
 import mikazuki.app.api as legacy_api
+from mikazuki.anima_qwen_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
@@ -107,6 +108,11 @@ async def create_toml_file(request: Request):
     try:
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=True, toml_path=toml_path)
+        # Qwen3 joint training deliberately leaves the pinned sd-scripts
+        # submodule pristine. At Start only, materialize the reviewed trainer
+        # patch into an isolated cache tree, then validate that concrete trainer
+        # exactly like any other launch asset.
+        prepare_runtime_trainer(prepared)
         validate_prepared_config(prepared, True)
         materialize_sidecars(prepared.sidecars)
         _write_text_atomic(toml_path, toml.dumps(prepared.config))
