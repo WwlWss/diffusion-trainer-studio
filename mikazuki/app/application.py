@@ -16,7 +16,7 @@ from mikazuki.app.config import app_config
 from mikazuki.app.api import load_schemas, load_presets
 from mikazuki.app.api import router as api_router
 from mikazuki.app.proxy import router as proxy_router
-from mikazuki.app.training_pages import (
+from mikazuki.training_pages import (
     patch_frontend_app_js,
     virtual_asset,
     virtual_page_paths,
