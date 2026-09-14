@@ -127,4 +127,10 @@ def fixed_flux_family_schema(template: str, model_type: str, train_type: str, an
             'memory_mode: Schema.union(["auto", "lowram", "highvram"]).default("auto").description("模型加载模式：Auto / Low RAM / High VRAM"),',
             1,
         )
+    elif model_type == "anima" and anima_mode == "finetune":
+        source = source.replace(
+            'highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式，减少缓存阶段频繁清理 CUDA cache；仅在显存余量充足时建议开启"),',
+            'memory_mode: Schema.union(["auto", "lowram", "highvram"]).default("auto").description("模型加载模式：Auto / Low RAM / High VRAM；后端会映射为互斥的 lowram/highvram trainer 参数"),',
+            1,
+        )
     return _fixed_flux_family_schema(source, model_type, train_type, anima_mode)
