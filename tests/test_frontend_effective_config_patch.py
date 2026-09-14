@@ -26,6 +26,15 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertIn('T=()=>{let _=clone(a.value);', self.patched)
         self.assertNotIn('T=()=>{let _=a.value;', self.patched)
 
+    def test_preview_mutable_state_uses_refs_not_const_reassignment(self):
+        self.assertIn('__previewTimer=ref(null)', self.patched)
+        self.assertIn('__previewGeneration=ref(0)', self.patched)
+        self.assertIn('clearTimeout(__previewTimer.value)', self.patched)
+        self.assertIn('++__previewGeneration.value', self.patched)
+        self.assertIn('__previewTimer.value=setTimeout', self.patched)
+        self.assertNotIn('__previewTimer=null', self.patched)
+        self.assertNotIn('__previewGeneration=0', self.patched)
+
     def test_import_effective_toml_uses_backend_rehydrate_and_replaces_state(self):
         self.assertIn('/api/training/rehydrate', self.patched)
         self.assertIn('U.data&&U.data.gui_state', self.patched)
@@ -34,9 +43,9 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertNotIn('let k=TomlParse(V),U=findChangedDataBySchema(k,n.value)', self.patched)
 
     def test_preview_ignores_stale_async_responses(self):
-        self.assertIn('__previewGeneration=0', self.patched)
-        self.assertIn('const __generation=++__previewGeneration', self.patched)
-        self.assertGreaterEqual(self.patched.count('if(__generation!==__previewGeneration)return'), 2)
+        self.assertIn('__previewGeneration=ref(0)', self.patched)
+        self.assertIn('const __generation=++__previewGeneration.value', self.patched)
+        self.assertGreaterEqual(self.patched.count('if(__generation!==__previewGeneration.value)return'), 2)
         self.assertIn('return D.data||{}', self.patched)
 
     def test_preset_and_history_preview_use_effective_backend(self):
