@@ -14,6 +14,7 @@ on:
       - "mikazuki/app/application.py"
       - "mikazuki/training_config.py"
       - "mikazuki/training_request.py"
+      - "mikazuki/training_validation.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_pages.py"
@@ -80,6 +81,7 @@ jobs:
             mikazuki/app/application.py \
             mikazuki/training_config.py \
             mikazuki/training_request.py \
+            mikazuki/training_validation.py \
             mikazuki/training_launcher.py \
             mikazuki/frontend_training_patch.py \
             mikazuki/training_pages.py \
