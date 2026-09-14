@@ -1,14 +1,12 @@
 [metadata]
 name = "Anima LoRA 训练"
-version = "1.0"
+version = "1.1"
 author = "WwlWss"
-train_type = "flux-lora"
-description = "使用新版 kohya-ss/sd-scripts 的 anima_train_network.py 训练标准 28-block Anima LoRA。"
+train_type = "anima-lora"
+description = "使用 sd-scripts/anima_train_network.py 训练标准 28-block Anima LoRA。"
 
 [data]
-model_type = "anima"
 anima_model_variant = "base"
-anima_training_mode = "lora"
 network_module = "networks.lora_anima"
 network_dim = 8
 network_alpha = 1

@@ -1,35 +1,28 @@
 [metadata]
 name = "Anima 2.9B 全参微调"
-version = "1.0"
+version = "1.1"
 author = "WwlWss"
-train_type = "flux-lora"
-description = "使用支持 40-block Anima 2.9B 的 sd-scripts anima_train.py 做全参微调；Qwen3 文本编码器保持冻结。"
+train_type = "anima-finetune"
+description = "使用支持 40-block Anima 2.9B 的 sd-scripts/anima_train.py 做全参微调；默认冻结 Qwen3 文本编码器。"
 
 [data]
-model_type = "anima"
 anima_model_variant = "2.9b"
-anima_training_mode = "finetune"
-learning_rate = "1e-5"
+anima_finetune_learning_rate = "1e-5"
 optimizer_type = "AdamW8bit"
 lr_scheduler = "constant"
 timestep_sampling = "sigmoid"
 sigmoid_scale = 1.0
 discrete_flow_shift = 1.0
-mixed_precision = "bf16"
-full_bf16 = true
-gradient_checkpointing = true
-cache_latents = true
-cache_latents_to_disk = true
-cache_text_encoder_outputs = true
-cache_text_encoder_outputs_to_disk = true
+anima_precision_mode = "full_bf16"
+anima_checkpoint_mode = "standard"
+anima_latent_cache_mode = "disk"
+anima_text_encoder_cache_mode = "disk"
+save_precision = "bf16"
 vae_chunk_size = 64
 vae_disable_cache = true
 qwen_image_vae_2d = true
 attn_mode = "torch"
 split_attn = false
 blocks_to_swap = 0
-unsloth_offload_checkpointing = false
-cpu_offload_checkpointing = false
-cuda_allow_tf32 = true
 qwen3_max_token_length = 512
 t5_max_token_length = 512
