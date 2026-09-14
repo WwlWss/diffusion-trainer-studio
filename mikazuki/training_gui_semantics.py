@@ -114,6 +114,10 @@ def normalize_dataset_source(config: dict) -> None:
         config.pop("dataset_config", None)
 
 
+def _text_encoder_cache_enabled(config: dict) -> bool:
+    return _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
+
+
 def normalize_sd_lora_target(config: dict) -> None:
     target = config.pop("lora_target", None)
     if target in (None, ""):
@@ -121,6 +125,9 @@ def normalize_sd_lora_target(config: dict) -> None:
         te_only = _as_bool(config.get("network_train_text_encoder_only"))
         if unet_only and te_only:
             raise ValueError("LoRA 不能同时设置 network_train_unet_only 与 network_train_text_encoder_only。")
+        # Both false/absent means joint U-Net + TE training in sd-scripts.
+        if (te_only or not unet_only) and _text_encoder_cache_enabled(config):
+            raise ValueError("训练 Text Encoder LoRA 时不能启用 Text Encoder output cache。")
         return
 
     target = str(target)
@@ -136,10 +143,7 @@ def normalize_sd_lora_target(config: dict) -> None:
     else:
         raise ValueError("lora_target 只能是 unet / text_encoder / unet_text_encoder。")
 
-    if target != "unet" and (
-        _as_bool(config.get("cache_text_encoder_outputs"))
-        or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
-    ):
+    if target != "unet" and _text_encoder_cache_enabled(config):
         raise ValueError("训练 Text Encoder LoRA 时不能启用 Text Encoder output cache。")
 
 
@@ -151,6 +155,9 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
             "dit_clip_l_t5xxl" if legacy_train_t5 else None
         )
     if target is None:
+        # Effective legacy/raw trainer state: false means at least CLIP-L is trainable.
+        if not _as_bool(config.get("network_train_unet_only")) and _text_encoder_cache_enabled(config):
+            raise ValueError("训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。")
         return
 
     target = str(target)
@@ -167,10 +174,7 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
         train_t5 = target == "dit_clip_l_t5xxl"
         config["network_train_unet_only"] = target == "dit"
 
-    if train_t5 and (
-        _as_bool(config.get("cache_text_encoder_outputs"))
-        or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
-    ):
+    if train_t5 and _text_encoder_cache_enabled(config):
         raise ValueError("训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。")
 
     args = [item for item in _items(config.get("network_args")) if _arg_key(item) != "train_t5xxl"]
@@ -191,8 +195,7 @@ def validate_legacy_common_conflicts(config: dict, effective_train_type: str) ->
     if latent_cache and (_as_bool(config.get("color_aug")) or _as_bool(config.get("random_crop"))):
         raise ValueError("latent cache 不能与 color_aug / random_crop 同时启用。")
 
-    te_cache = _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
-    if te_cache and _as_bool(config.get("shuffle_caption")):
+    if _text_encoder_cache_enabled(config) and _as_bool(config.get("shuffle_caption")):
         raise ValueError("Text Encoder output cache 不能与 shuffle_caption 同时启用。")
 
     if str(config.get("network_module") or "") == "networks.oft" and effective_train_type != "sdxl-lora":
