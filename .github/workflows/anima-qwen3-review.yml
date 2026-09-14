@@ -30,6 +30,7 @@ on:
       - "tests/test_anima_process_advanced.py"
       - "tests/test_anima_gui_trainer_contract.py"
       - "tests/test_training_page_routing.py"
+      - "tests/test_training_schema_factory.py"
       - "tests/test_training_data_contract.py"
       - "tests/test_training_api_overlay_contract.py"
       - "tests/test_full_trainer_contract.py"
@@ -78,6 +79,7 @@ jobs:
             tests/test_anima_process_advanced.py \
             tests/test_anima_gui_trainer_contract.py \
             tests/test_training_page_routing.py \
+            tests/test_training_schema_factory.py \
             tests/test_training_data_contract.py \
             tests/test_training_api_overlay_contract.py \
             tests/test_full_trainer_contract.py \
@@ -94,6 +96,9 @@ jobs:
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
+
+      - name: Contract - runtime schema specialization
+        run: python -m unittest tests.test_training_schema_factory -v
 
       - name: Contract - dataset sources
         run: python -m unittest tests.test_training_data_contract -v
