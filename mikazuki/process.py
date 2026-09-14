@@ -7,6 +7,10 @@ from typing import Optional
 
 import toml
 
+from mikazuki.anima_finetune_config import (
+    normalize_anima_finetune_config,
+    validate_anima_finetune_config,
+)
 from mikazuki.anima_qwen_config import (
     normalize_qwen_training_config,
     text_encoder_cache_enabled,
@@ -112,9 +116,15 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
         log.warning(f"Unknown Anima training mode '{mode}', falling back to {default_mode}")
         mode = default_mode
 
+    # Convert the GUI's mutually-exclusive semantic controls first. Qwen3
+    # validation must see the resulting effective cache/LR state rather than
+    # the pre-normalized form values.
+    normalize_anima_finetune_config(config, mode)
+
     # New Qwen3 fields are strictly opt-in. When disabled (or when LoRA is
     # selected) they are removed completely before sd-scripts sees the config.
     train_qwen3 = normalize_qwen_training_config(config, mode)
+    validate_anima_finetune_config(config, mode)
     _validate_effective_text_encoder_cache(config)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
