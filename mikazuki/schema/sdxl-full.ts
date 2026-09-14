@@ -9,8 +9,8 @@ Schema.intersect([
     Schema.object({
         train_data_dir: Schema.string().role("filepicker", { type: "folder" }).default("./train/aki").description("普通目录数据集；dataset_config 存在时由其覆盖"),
         reg_data_dir: Schema.string().role("filepicker", { type: "folder" }).description("可选正则化数据集"),
-        dataset_config: Schema.string().role("filepicker", { type: "file" }).description("可选：kohya dataset config TOML/JSON"),
-        in_json: Schema.string().role("filepicker", { type: "file" }).description("可选：fine-tuning metadata JSON；dataset_config 存在时会被忽略"),
+        dataset_config: Schema.string().role("filepicker", { type: "file" }).description("可选：kohya dataset config TOML/JSON；设置后忽略 train_data_dir 与 in_json"),
+        in_json: Schema.string().role("filepicker", { type: "file" }).description("可选：fine-tuning metadata JSON；仍需 train_data_dir；dataset_config 存在时会被忽略"),
         prior_loss_weight: Schema.number().step(0.1).default(1.0).description("正则化 prior loss 权重"),
         resolution: Schema.string().default("1024,1024").description("训练分辨率"),
         enable_bucket: Schema.boolean().default(true).description("启用 aspect-ratio bucket"),
@@ -41,7 +41,7 @@ Schema.intersect([
         save_precision: Schema.union(["fp16", "float", "bf16"]).default("bf16").description("保存精度"),
         save_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 保存"),
         save_every_n_steps: Schema.number().min(1).description("可选：每 N step 保存"),
-        save_n_epoch_ratio: Schema.number().min(1).description("整个训练划分为 N 个 epoch 保存区间"),
+        save_n_epoch_ratio: Schema.number().min(1).description("整个训练划分为 N 个 epoch 保存区间；设置后覆盖 save_every_n_epochs"),
         save_last_n_epochs: Schema.number().min(1).description("保留最近 N epoch checkpoint"),
         save_last_n_steps: Schema.number().min(1).description("保留最近 N step checkpoint"),
         save_state: Schema.boolean().default(false).description("保存 optimizer/scheduler state"),
@@ -51,10 +51,10 @@ Schema.intersect([
     }).description("保存设置"),
 
     Schema.object({
-        max_train_steps: Schema.number().min(1).description("最大 optimizer steps；填写后优先使用 step"),
-        max_train_epochs: Schema.number().min(1).default(1).description("最大 epoch"),
+        max_train_steps: Schema.number().min(1).description("最大 optimizer steps；填写后后端会移除默认 max_train_epochs"),
+        max_train_epochs: Schema.number().min(1).default(1).description("最大 epoch；未填写 max_train_steps 时使用"),
         train_batch_size: Schema.number().min(1).default(1).description("batch size"),
-        gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累积"),
+        gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累积；fused 模式要求 1"),
         gradient_checkpointing: Schema.boolean().default(true).description("梯度检查点"),
         max_grad_norm: Schema.number().min(0).step(0.1).default(1.0).description("梯度裁剪；0 关闭"),
         max_data_loader_n_workers: Schema.number().min(0).step(1).default(8).description("DataLoader workers"),
@@ -64,8 +64,8 @@ Schema.intersect([
     Schema.intersect([
         Schema.object({
             learning_rate: Schema.string().default("1e-6").description("SDXL U-Net 总学习率；0 可冻结 U-Net"),
-            train_text_encoder: Schema.boolean().default(false).description("训练两个 SDXL 文本编码器；启用后不能缓存文本编码器输出"),
-            block_lr: Schema.string().description("可选：23 个逗号分隔 U-Net block 学习率；替代统一 U-Net LR"),
+            train_text_encoder: Schema.boolean().default(false).description("训练两个 SDXL 文本编码器；启用后必须保持 TE output cache 关闭"),
+            block_lr: Schema.string().description("可选：必须恰好 23 个逗号分隔 U-Net block 学习率；替代统一 U-Net LR"),
             optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "AdaFactor", "Prodigy", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD"]).default("AdamW8bit").description("优化器"),
             optimizer_args_custom: Schema.array(String).role("table").description("自定义 optimizer_args，一行一个"),
             lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]).default("constant").description("LR scheduler"),
@@ -73,8 +73,8 @@ Schema.intersect([
             lr_decay_steps: Schema.number().min(0).description("decay steps"),
             lr_scheduler_num_cycles: Schema.number().min(1).default(1).description("cosine restart cycles"),
             lr_scheduler_power: Schema.number().step(0.1).default(1.0).description("polynomial power"),
-            fused_backward_pass: Schema.boolean().default(false).description("AdaFactor fused backward；要求 accumulation=1"),
-            fused_optimizer_groups: Schema.number().min(1).step(1).description("将参数拆成多个 optimizer group，在 backward hook 中 step；不要与 fused_backward_pass 同时用"),
+            fused_backward_pass: Schema.boolean().default(false).description("AdaFactor fused backward；要求 accumulation=1，不能与 DeepSpeed/fused_optimizer_groups 同时使用"),
+            fused_optimizer_groups: Schema.number().min(1).step(1).description("多个 optimizer group 的 backward-hook step；要求 accumulation=1，不能与 DeepSpeed/fused_backward_pass 同时使用"),
         }),
         Schema.union([
             Schema.object({
@@ -104,17 +104,17 @@ Schema.intersect([
 
     Schema.object({
         mixed_precision: Schema.union(["no", "fp16", "bf16"]).default("bf16").description("训练精度"),
-        full_fp16: Schema.boolean().default(false).description("full FP16"),
-        full_bf16: Schema.boolean().default(false).description("full BF16"),
+        full_fp16: Schema.boolean().default(false).description("full FP16；要求 mixed_precision=fp16"),
+        full_bf16: Schema.boolean().default(false).description("full BF16；要求 mixed_precision=bf16"),
         no_half_vae: Schema.boolean().default(false).description("VAE 固定 FP32"),
-        xformers: Schema.boolean().default(true).description("xformers attention"),
-        sdpa: Schema.boolean().default(false).description("PyTorch SDPA；不要与 xformers 同时开"),
-        diffusers_xformers: Schema.boolean().default(false).description("仅 VAE 使用 Diffusers xformers 路径"),
+        xformers: Schema.boolean().default(true).description("U-Net xformers attention；与 sdpa/diffusers_xformers 二选一"),
+        sdpa: Schema.boolean().default(false).description("U-Net PyTorch SDPA；与 xformers/diffusers_xformers 二选一"),
+        diffusers_xformers: Schema.boolean().default(false).description("走 Diffusers VAE xformers 独立分支；启用时关闭 U-Net xformers/sdpa"),
         cache_latents: Schema.boolean().default(true).description("缓存 VAE latents"),
-        cache_latents_to_disk: Schema.boolean().default(true).description("latents 写盘"),
+        cache_latents_to_disk: Schema.boolean().default(true).description("latents 写盘；启用会隐含 cache_latents"),
         vae_batch_size: Schema.number().min(1).default(1).description("VAE cache batch"),
-        cache_text_encoder_outputs: Schema.boolean().default(true).description("缓存两个 SDXL 文本编码器输出；训练 TE 时必须关闭"),
-        cache_text_encoder_outputs_to_disk: Schema.boolean().default(true).description("TE outputs 写盘"),
+        cache_text_encoder_outputs: Schema.boolean().default(false).description("可选：缓存两个 SDXL 文本编码器输出；训练 TE 时必须关闭"),
+        cache_text_encoder_outputs_to_disk: Schema.boolean().default(false).description("TE outputs 写盘；启用会隐含 TE output cache"),
         highvram: Schema.boolean().default(false).description("高显存加载路径"),
     }).description("精度、Attention 与缓存"),
 
@@ -127,8 +127,8 @@ Schema.intersect([
                 enable_preview: Schema.const(true).required(),
                 sample_prompts: Schema.string().role("textarea").default("masterpiece, best quality, 1girl, solo --w 1024 --h 1024 --l 7 --s 24 --d 1337").description("sample prompt 参数"),
                 sample_sampler: Schema.union(["ddim", "pndm", "lms", "euler", "euler_a", "heun", "dpm_2", "dpm_2_a", "dpmsolver", "dpmsolver++", "dpmsingle", "k_lms", "k_euler", "k_euler_a", "k_dpm_2", "k_dpm_2_a"]).default("euler_a").description("采样器"),
-                sample_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 预览"),
-                sample_every_n_steps: Schema.number().min(1).description("或每 N step 预览；不要同时设置两个 cadence"),
+                sample_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 预览；若填写 step cadence，后端会移除此默认值"),
+                sample_every_n_steps: Schema.number().min(1).description("每 N step 预览；填写后优先于 epoch cadence"),
                 sample_at_first: Schema.boolean().default(false).description("训练前先预览"),
             }),
             Schema.object({}),
@@ -139,7 +139,7 @@ Schema.intersect([
 
     Schema.intersect([
         Schema.object({
-            deepspeed: Schema.boolean().default(false).description("启用 DeepSpeed；高级多卡训练"),
+            deepspeed: Schema.boolean().default(false).description("启用 DeepSpeed；不能与 fused backward 模式组合"),
             ddp_timeout: Schema.number().min(0).description("DDP timeout"),
             ddp_gradient_as_bucket_view: Schema.boolean().default(false).description("DDP gradient_as_bucket_view"),
             ddp_static_graph: Schema.boolean().default(false).description("DDP static graph"),
