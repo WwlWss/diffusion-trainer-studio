@@ -38,8 +38,11 @@ def normalize_common_full_config(config: dict) -> None:
         # Trainer derives this value from the ratio later.
         config.pop("save_every_n_epochs", None)
 
-    if config.get("sample_every_n_epochs") not in (None, "") and config.get("sample_every_n_steps") not in (None, ""):
-        raise ValueError("sample_every_n_epochs 与 sample_every_n_steps 只能设置一个。")
+    # The GUI provides an epoch default when preview is enabled. If the user
+    # explicitly supplies a step cadence, make that choice authoritative rather
+    # than serializing two competing sample schedules.
+    if config.get("sample_every_n_steps") not in (None, "", 0, "0"):
+        config.pop("sample_every_n_epochs", None)
 
 
 def _validate_precision(config: dict, label: str) -> None:
