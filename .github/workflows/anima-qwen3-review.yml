@@ -6,12 +6,14 @@ on:
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/process.py"
+      - "mikazuki/app/api.py"
       - "mikazuki/schema/flux-lora.ts"
       - "config/presets/anima-finetune.toml"
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
       - "tests/test_anima_finetune_config.py"
       - "tests/test_anima_finetune_integration.py"
+      - "tests/test_anima_finetune_trainer_coverage.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -38,11 +40,13 @@ jobs:
             mikazuki/anima_qwen_config.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/process.py \
+            mikazuki/app/api.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
-            tests/test_anima_finetune_integration.py
+            tests/test_anima_finetune_integration.py \
+            tests/test_anima_finetune_trainer_coverage.py
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
