@@ -138,15 +138,8 @@ def _materialize_flow_shift(config: dict, toml_path: str | None, launch: bool) -
             handle.writelines(rewritten)
 
 
-def prepare_anima_config(
-    config: dict,
-    train_type: str,
-    trainer_file: str,
-    *,
-    launch: bool = False,
-    toml_path: str | None = None,
-) -> None:
-    mode = "finetune" if train_type == "anima-finetune" else "lora"
+def _normalize_validate_mode(config: dict, mode: str) -> bool:
+    """Idempotent mode normalization used both before and after custom TOML."""
     if config.get("max_train_steps") not in (None, "", 0, "0"):
         config.pop("max_train_epochs", None)
     if config.get("attn_mode") == "xformers":
@@ -159,6 +152,34 @@ def prepare_anima_config(
     train_qwen3 = normalize_qwen_training_config(config, mode)
     validate_anima_finetune_config(config, mode)
     validate_effective_text_encoder_cache(config)
+    return train_qwen3
+
+
+def validate_post_override_anima_config(config: dict, train_type: str) -> None:
+    """Re-assert Anima mode boundaries after ui_custom_params last-write-wins."""
+    mode = "finetune" if train_type == "anima-finetune" else "lora"
+    _normalize_validate_mode(config, mode)
+    if mode == "finetune":
+        _pop_many(config, ANIMA_LORA_ONLY_KEYS)
+        for key in ANIMA_OPTIONAL_FINETUNE_LRS:
+            if config.get(key) in (None, ""):
+                config.pop(key, None)
+    else:
+        _pop_many(config, ANIMA_FULL_ONLY_KEYS)
+        _normalize_lora_target(config)
+        config.setdefault("network_module", "networks.lora_anima")
+
+
+def prepare_anima_config(
+    config: dict,
+    train_type: str,
+    trainer_file: str,
+    *,
+    launch: bool = False,
+    toml_path: str | None = None,
+) -> None:
+    mode = "finetune" if train_type == "anima-finetune" else "lora"
+    train_qwen3 = _normalize_validate_mode(config, mode)
 
     variant = str(config.get("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
