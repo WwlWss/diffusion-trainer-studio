@@ -22,6 +22,10 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertNotIn('O=async()=>{const _=parseParams(', self.patched)
         self.assertNotIn('stringify(parseParams(n.value(clone(m.value)),t))', self.patched)
 
+    def test_raw_gui_normalization_does_not_mutate_watched_form_state(self):
+        self.assertIn('T=()=>{let _=clone(a.value);', self.patched)
+        self.assertNotIn('T=()=>{let _=a.value;', self.patched)
+
     def test_import_effective_toml_uses_backend_rehydrate_and_replaces_state(self):
         self.assertIn('/api/training/rehydrate', self.patched)
         self.assertIn('U.data&&U.data.gui_state', self.patched)
