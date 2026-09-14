@@ -45,6 +45,15 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertNotIn("固定为仅训练 Anima DiT LoRA", fixed)
         self.assertIn("memory_mode", fixed)
 
+    def test_anima_full_uses_same_mutually_exclusive_memory_mode(self):
+        source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
+        fixed = fixed_flux_family_schema(source, "anima", "anima-finetune", "finetune")
+        self.assertIn('memory_mode: Schema.union(["auto", "lowram", "highvram"])', fixed)
+        self.assertNotIn(
+            'highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式',
+            fixed,
+        )
+
     def test_sdxl_full_removes_fake_vpred_controls_and_adds_compile(self):
         source = (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8")
         fixed = override_raw_schema("sdxl-full", source)
