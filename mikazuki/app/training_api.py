@@ -9,9 +9,9 @@ import toml
 from fastapi import Request
 
 import mikazuki.app.api as legacy_api
-import mikazuki.process as process
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.log import log
+from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_request import (
     decode_training_request,
     prepare_request_config,
@@ -64,7 +64,7 @@ async def create_toml_file(request: Request):
     with open(toml_path, "w", encoding="utf-8") as handle:
         handle.write(toml.dumps(prepared.config))
 
-    result = process.run_train(toml_path, prepared.trainer_file, prepared.gpu_ids, threads)
+    result = run_prepared_train(toml_path, prepared.trainer_file, prepared.gpu_ids, threads)
     if result.status == "success" and prepared.warnings:
         result.data = dict(result.data or {})
         result.data["warnings"] = prepared.warnings
