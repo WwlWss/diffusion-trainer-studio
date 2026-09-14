@@ -178,7 +178,10 @@ def prepare_anima_config(
         for key in ANIMA_OPTIONAL_FINETUNE_LRS:
             if config.get(key) in (None, ""):
                 config.pop(key, None)
-        if train_qwen3 and os.path.exists(trainer_file) and not trainer_supports_qwen_training(trainer_file):
+        # Capability is a launch-time requirement. Preview must remain useful
+        # while the user is filling the form or before the local sd-scripts
+        # patch has been applied.
+        if launch and train_qwen3 and os.path.exists(trainer_file) and not trainer_supports_qwen_training(trainer_file):
             raise RuntimeError("当前 sd-scripts 尚未包含完整 Anima Qwen3 联合训练补丁。")
         if launch and train_qwen3 and config.get("qwen3_output_dir"):
             os.makedirs(str(config["qwen3_output_dir"]), exist_ok=True)
