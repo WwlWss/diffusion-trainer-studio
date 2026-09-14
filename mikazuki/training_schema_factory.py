@@ -4,12 +4,19 @@ The shipped frontend is an old prebuilt VuePress/Schemastery application. Its
 form state is reused while navigating between training pages. Backend selector
 fields therefore must not remain in the rendered schema: a stale value from the
 previous page can make Schemastery reject the new page before the request ever
-reaches the Python backend (for example ``expected flux but got anima``).
+reaches the Python backend.
 
 The helpers below use fixed discriminator values only while pruning conditional
 unions. They then remove those discriminator fields entirely. The page's outer
 ``train_type`` is the routing source of truth, and the backend materializes any
 trainer values (such as Flux ``model_type``) into the final effective config.
+
+One important subtlety: a union branch can be constrained both by a page routing
+key and by a second, user-controlled guard. For example an Anima full page may
+contain a branch guarded by ``model_type=anima`` *and*
+``train_qwen3_text_encoder=true``. Specialization may reject branches that
+conflict with the page, but it must not turn that second guard into an
+unconditional requirement by discarding the union fallback.
 """
 
 from __future__ import annotations
@@ -30,10 +37,7 @@ def _runtime_specialized_schema(
     ``fixed`` keys drive union pruning and are removed from the rendered form.
     ``drop_keys`` remove page-irrelevant controls without influencing branch
     selection. ``hidden_defaults`` are also removed from the form; the backend
-    is responsible for applying those page-forced values to the effective
-    trainer config. Keeping them as hidden ``Schema.const`` fields is unsafe in
-    the pinned frontend because hidden defaults are not reliably materialized
-    before validation and stale cross-page values win over defaults.
+    applies those page-forced values to the effective trainer config.
     """
 
     hidden_defaults = hidden_defaults or {}
@@ -50,6 +54,7 @@ def _runtime_specialized_schema(
     const __dropKeys = new Set({drop_json});
     const __forcedBackendValues = {hidden_json};
     const __fixedKeys = Object.keys(__fixed);
+    const __fixedKeySet = new Set(__fixedKeys);
     const __forcedKeys = new Set(Object.keys(__forcedBackendValues));
     const __source = ({template_expression});
 
@@ -91,6 +96,27 @@ def _runtime_specialized_schema(
         return {{ constrained, matches: true }};
     }};
 
+    // A matched page branch may still be conditional on a user-controlled
+    // const/enum guard (v2=true, train_qwen3_text_encoder=true, optimizer=...).
+    // If so, the union fallback must survive specialization; otherwise removing
+    // the page routing keys would make that nested condition unconditionally
+    // required and Schemastery would throw "missing required value".
+    const __hasRuntimeGuard = (schema) => {{
+        if (!schema) return false;
+        if (schema.type === \"object\" && schema.dict) {{
+            for (const [key, field] of Object.entries(schema.dict)) {{
+                if (__fixedKeySet.has(key) || !field || !field.meta || !field.meta.required) continue;
+                if (field.type === \"const\") return true;
+                if (field.type === \"union\" && field.list && field.list.length && field.list.every((item) => item.type === \"const\")) return true;
+            }}
+            return false;
+        }}
+        if (schema.type === \"intersect\" && schema.list) {{
+            return schema.list.some(__hasRuntimeGuard);
+        }}
+        return false;
+    }};
+
     const __walk = (schema) => {{
         if (!schema) return schema;
 
@@ -98,13 +124,19 @@ def _runtime_specialized_schema(
             const states = schema.list.map(__branchState);
             if (states.some((state) => state.constrained)) {{
                 const matched = schema.list.filter((_, index) => states[index].constrained && states[index].matches);
-                if (matched.length === 1) return __walk(matched[0]);
-                if (matched.length > 1) {{
-                    schema.list = matched.map(__walk);
+                const fallback = schema.list.filter((_, index) => !states[index].constrained);
+
+                if (matched.length > 0) {{
+                    const guarded = matched.some(__hasRuntimeGuard);
+                    if (matched.length === 1 && !guarded) return __walk(matched[0]);
+
+                    // Keep unconstrained fallback branches only when the matched
+                    // branch still has a runtime guard. Matched branches remain
+                    // first so an explicitly enabled guard wins before fallback.
+                    schema.list = [...matched, ...(guarded ? fallback : [])].map(__walk);
                     return schema;
                 }}
 
-                const fallback = schema.list.filter((_, index) => !states[index].constrained);
                 if (fallback.length === 1) return __walk(fallback[0]);
                 schema.list = fallback.map(__walk);
                 return schema;
