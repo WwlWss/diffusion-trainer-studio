@@ -33,6 +33,7 @@ on:
       - "tests/test_training_data_contract.py"
       - "tests/test_training_api_overlay_contract.py"
       - "tests/test_full_trainer_contract.py"
+      - "tests/test_full_schema_contract.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -79,7 +80,8 @@ jobs:
             tests/test_training_page_routing.py \
             tests/test_training_data_contract.py \
             tests/test_training_api_overlay_contract.py \
-            tests/test_full_trainer_contract.py
+            tests/test_full_trainer_contract.py \
+            tests/test_full_schema_contract.py
 
       - name: Syntax-check expert GUI schemas
         run: |
@@ -101,6 +103,9 @@ jobs:
 
       - name: Contract - full trainers
         run: python -m unittest tests.test_full_trainer_contract -v
+
+      - name: Contract - full trainer schemas
+        run: python -m unittest tests.test_full_schema_contract -v
 
       - name: Contract - backend mapping
         run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_one_backend_key_maps_to_one_concrete_trainer -v
