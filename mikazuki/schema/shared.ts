@@ -86,7 +86,7 @@
                 down_lr_weight: Schema.string().role('folder').default("1,1,1,1,1,1,1,1,1,1,1,1").description("U-Net 的 Encoder 层分层学习率权重，共 12 层"),
                 mid_lr_weight: Schema.string().role('folder').default("1").description("U-Net 的 Mid 层分层学习率权重，共 1 层"),
                 up_lr_weight: Schema.string().role('folder').default("1,1,1,1,1,1,1,1,1,1,1,1").description("U-Net 的 Decoder 层分层学习率权重，共 12 层"),
-                block_lr_zero_threshold: Schema.number().step(0.01).default(0).description("分层学习率置 0 阈值"),
+                block_lr_zero_threshold: Schema.number().step(0.01).min(0).description("分层学习率置 0 阈值"),
             }),
             Schema.object({}),
         ]),
@@ -199,15 +199,18 @@
 
         LOG_SETTINGS: Schema.intersect([
             Schema.object({
-                log_with: Schema.union(["tensorboard", "wandb"]).default("tensorboard").description("日志模块"),
+                log_with: Schema.union(["tensorboard", "wandb", "all"]).default("tensorboard").description("日志模块；all 同时启用 TensorBoard 与 WandB"),
                 log_prefix: Schema.string().description("日志前缀"),
                 log_tracker_name: Schema.string().description("日志追踪器名称"),
                 logging_dir: Schema.string().default("./logs").description("日志保存文件夹"),
+                wandb_run_name: Schema.string().description("WandB run 名称；仅使用 WandB 时生效"),
+                log_tracker_config: Schema.string().role('filepicker', { type: "file" }).description("可选：Accelerate tracker 配置文件"),
+                log_config: Schema.boolean().default(false).description("将训练配置一并写入 tracker 日志"),
             }).description('日志设置'),
 
             Schema.union([
                 Schema.object({
-                    log_with: Schema.const("wandb").required(),
+                    log_with: Schema.union(["wandb", "all"]).required(),
                     wandb_api_key: Schema.string().required().description("wandb 的 api 密钥"),
                 }),
                 Schema.object({}),
