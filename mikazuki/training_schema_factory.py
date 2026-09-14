@@ -17,27 +17,37 @@ contains the concrete backend keys expected by the Python API.
 from __future__ import annotations
 
 import json
+from typing import Any
 
 
-def _runtime_specialized_schema(template: str, fixed: dict[str, str]) -> str:
+def _runtime_specialized_schema(
+    template: str,
+    fixed: dict[str, Any],
+    *,
+    drop_keys: tuple[str, ...] = (),
+    hidden_defaults: dict[str, Any] | None = None,
+) -> str:
     """Return a Schemastery expression specialized to ``fixed`` values.
 
-    This is intentionally structural rather than regex-based.  The Flux family
-    template contains many nested unions, including intersections whose first
-    object carries the discriminator.  A textual replacement of the outer
-    selector leaves those branches intact and is exactly what broke the real
-    GUI.  The runtime helper only treats the supplied discriminator keys as
-    special, so unrelated unions (optimizer choices, scheduler options, etc.)
-    remain fully dynamic.
+    ``fixed`` keys drive union pruning.  ``drop_keys`` remove page-irrelevant
+    controls without influencing branch selection.  ``hidden_defaults`` are
+    submitted to the backend but are also deliberately excluded from branch
+    selection; Chroma's forced T5 attention-mask flag is the main example.
     """
 
+    hidden_defaults = hidden_defaults or {}
     fixed_json = json.dumps(fixed, ensure_ascii=True, separators=(",", ":"))
+    drop_json = json.dumps(list(drop_keys), ensure_ascii=True, separators=(",", ":"))
+    hidden_json = json.dumps(hidden_defaults, ensure_ascii=True, separators=(",", ":"))
     # ``template`` is a trusted repository schema expression.  Parenthesizing
     # it lets the wrapper consume either Schema.intersect(...) or any future
     # single-expression schema without changing the source template itself.
     return f"""(() => {{
     const __fixed = {fixed_json};
+    const __dropKeys = new Set({drop_json});
+    const __hiddenDefaults = {hidden_json};
     const __fixedKeys = Object.keys(__fixed);
+    const __hiddenKeys = new Set(Object.keys(__hiddenDefaults));
     const __source = ({template});
 
     // 0 = this schema does not constrain the key, 1 = accepts the fixed value,
@@ -112,6 +122,8 @@ def _runtime_specialized_schema(template: str, fixed: dict[str, str]) -> str:
 
         if (schema.type === \"object\" && schema.dict) {{
             for (const key of __fixedKeys) delete schema.dict[key];
+            for (const key of __dropKeys) delete schema.dict[key];
+            for (const key of __hiddenKeys) delete schema.dict[key];
             for (const key of Object.keys(schema.dict)) schema.dict[key] = __walk(schema.dict[key]);
             return schema;
         }}
@@ -124,7 +136,7 @@ def _runtime_specialized_schema(template: str, fixed: dict[str, str]) -> str:
     }};
 
     const __fixedFields = {{}};
-    for (const [key, value] of Object.entries(__fixed)) {{
+    for (const [key, value] of Object.entries({{ ...__fixed, ...__hiddenDefaults }})) {{
         __fixedFields[key] = Schema.const(value).default(value).hidden();
     }}
 
@@ -152,7 +164,7 @@ def fixed_flux_family_schema(
     if model_type not in {"flux", "chroma", "anima"}:
         raise ValueError(f"Unsupported Flux-family model type: {model_type}")
 
-    fixed = {
+    fixed: dict[str, Any] = {
         "model_type": model_type,
         "model_train_type": train_type,
     }
@@ -162,5 +174,17 @@ def fixed_flux_family_schema(
         fixed["anima_training_mode"] = anima_mode
     elif anima_mode is not None:
         raise ValueError("anima_mode is only valid for Anima schemas")
+
+    if model_type == "chroma":
+        # Chroma uses the shared Flux trainer but is T5-only.  CLIP-L is a real
+        # Flux control and a Chroma no-op, while the backend requires the T5
+        # attention mask enabled.  Keep the forced flag hidden so old presets
+        # and the right-side parameter preview receive the correct value.
+        return _runtime_specialized_schema(
+            template,
+            fixed,
+            drop_keys=("clip_l",),
+            hidden_defaults={"apply_t5_attn_mask": True},
+        )
 
     return _runtime_specialized_schema(template, fixed)
