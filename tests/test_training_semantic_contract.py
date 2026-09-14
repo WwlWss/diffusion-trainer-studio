@@ -12,7 +12,7 @@ def _resolve(config, requested):
 class TrainingSemanticContractTests(unittest.TestCase):
     def test_legacy_network_optimizer_and_paths_are_compiled_in_python(self):
         raw = {
-            "pretrained_model_name_or_path": r"C:\models\base.safetensors",
+            "pretrained_model_name_or_path": r"C:\\models\\base.safetensors",
             "network_module": "lycoris.kohya",
             "lycoris_algo": "lokr",
             "conv_dim": 16,
@@ -39,16 +39,50 @@ class TrainingSemanticContractTests(unittest.TestCase):
         got = apply_raw_gui_semantics({"optimizer_type": "AdamW8bit"}, page_train_type="lora-basic")
         self.assertEqual(got["network_module"], "networks.lora")
         self.assertEqual(got["save_model_as"], "safetensors")
+        self.assertEqual(got["save_precision"], "fp16")
         self.assertTrue(got["enable_bucket"])
         self.assertEqual(got["caption_extension"], ".txt")
         self.assertNotIn("max_token_length", got)
+
+    def test_legacy_float_strings_are_numeric_in_effective_config(self):
+        got = apply_raw_gui_semantics(
+            {"learning_rate": "1e-4", "guidance_scale": "3.5"},
+            page_train_type="lora-master",
+        )
+        self.assertEqual(got["learning_rate"], 1e-4)
+        self.assertEqual(got["guidance_scale"], 3.5)
+        with self.assertRaisesRegex(ValueError, "learning_rate"):
+            apply_raw_gui_semantics({"learning_rate": "not-a-number"}, page_train_type="lora-master")
+
+    def test_optional_legacy_zero_fields_are_omitted(self):
+        got = apply_raw_gui_semantics(
+            {"noise_offset": 0, "network_dropout": 0, "vae": "", "optimizer_type": "AdamW8bit"},
+            page_train_type="lora-master",
+        )
+        self.assertNotIn("noise_offset", got)
+        self.assertNotIn("network_dropout", got)
+        self.assertNotIn("vae", got)
 
     def test_workers_zero_disables_persistent(self):
         prepared = prepare_training_config(
             {
                 "optimizer_type": "AdamW8bit",
+                "lora_target": "unet",
                 "max_data_loader_n_workers": 0,
                 "persistent_data_loader_workers": True,
+            },
+            page_train_type="lora-master",
+            resolve_backend=_resolve,
+        )
+        self.assertFalse(prepared.config["persistent_data_loader_workers"])
+
+    def test_workers_zero_cannot_be_reenabled_by_custom_toml(self):
+        prepared = prepare_training_config(
+            {
+                "optimizer_type": "AdamW8bit",
+                "lora_target": "unet",
+                "max_data_loader_n_workers": 0,
+                "ui_custom_params": "persistent_data_loader_workers = true",
             },
             page_train_type="lora-master",
             resolve_backend=_resolve,
@@ -59,6 +93,7 @@ class TrainingSemanticContractTests(unittest.TestCase):
         prepared = prepare_training_config(
             {
                 "optimizer_type": "AdamW8bit",
+                "lora_target": "unet",
                 "dataset_source": "config",
                 "dataset_config": "dataset.toml",
                 "train_data_dir": "ignored",
@@ -73,17 +108,44 @@ class TrainingSemanticContractTests(unittest.TestCase):
         self.assertNotIn("reg_data_dir", prepared.config)
         self.assertNotIn("in_json", prepared.config)
 
+    def test_folder_dataset_source_discards_stale_dataset_config(self):
+        prepared = prepare_training_config(
+            {
+                "optimizer_type": "AdamW8bit",
+                "lora_target": "unet",
+                "dataset_source": "folder",
+                "dataset_config": "stale.toml",
+                "train_data_dir": "train/10_test",
+            },
+            page_train_type="lora-master",
+            resolve_backend=_resolve,
+        )
+        self.assertNotIn("dataset_config", prepared.config)
+        self.assertEqual(prepared.config["train_data_dir"], "train/10_test")
+
     def test_sd_token_75_is_omitted_and_legacy_255_migrates(self):
         first = prepare_training_config(
-            {"optimizer_type": "AdamW8bit", "sd_max_token_length_mode": "75"},
+            {"optimizer_type": "AdamW8bit", "lora_target": "unet", "sd_max_token_length_mode": "75"},
             page_train_type="lora-master", resolve_backend=_resolve,
         )
         self.assertNotIn("max_token_length", first.config)
         second = prepare_training_config(
-            {"optimizer_type": "AdamW8bit", "max_token_length": 255},
+            {"optimizer_type": "AdamW8bit", "lora_target": "unet", "max_token_length": 255},
             page_train_type="lora-master", resolve_backend=_resolve,
         )
         self.assertEqual(second.config["max_token_length"], 225)
+
+    def test_invalid_sd_token_length_is_rejected_even_from_custom_toml(self):
+        with self.assertRaisesRegex(ValueError, "max_token_length"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW8bit",
+                    "lora_target": "unet",
+                    "ui_custom_params": "max_token_length = 77",
+                },
+                page_train_type="lora-master",
+                resolve_backend=_resolve,
+            )
 
     def test_lora_target_is_single_semantic_control(self):
         prepared = prepare_training_config(
@@ -92,6 +154,21 @@ class TrainingSemanticContractTests(unittest.TestCase):
         )
         self.assertTrue(prepared.config["network_train_unet_only"])
         self.assertNotIn("network_train_text_encoder_only", prepared.config)
+
+    def test_custom_toml_cannot_make_both_sd_lora_only_flags_true(self):
+        with self.assertRaisesRegex(ValueError, "不能同时"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW8bit",
+                    "lora_target": "unet",
+                    "ui_custom_params": (
+                        "network_train_unet_only = true\n"
+                        "network_train_text_encoder_only = true\n"
+                    ),
+                },
+                page_train_type="sdxl-lora",
+                resolve_backend=_resolve,
+            )
 
     def test_flux_target_materializes_t5_network_arg(self):
         prepared = prepare_training_config(
@@ -103,6 +180,86 @@ class TrainingSemanticContractTests(unittest.TestCase):
         )
         self.assertFalse(prepared.config["network_train_unet_only"])
         self.assertIn("train_t5xxl=True", prepared.config["network_args"])
+
+    def test_dadapt_rewrites_active_lr_but_prodigy_does_not(self):
+        dadapt = prepare_training_config(
+            {
+                "optimizer_type": "DAdaptation",
+                "lora_target": "unet",
+                "learning_rate": "0.001",
+                "unet_lr": "0.002",
+                "text_encoder_lr": "0.003",
+            },
+            page_train_type="lora-master", resolve_backend=_resolve,
+        )
+        self.assertEqual(dadapt.config["learning_rate"], 1.0)
+        self.assertEqual(dadapt.config["unet_lr"], 1.0)
+        self.assertEqual(dadapt.config["text_encoder_lr"], 1.0)
+
+        prodigy = prepare_training_config(
+            {
+                "optimizer_type": "Prodigy",
+                "lora_target": "unet",
+                "learning_rate": "0.001",
+                "unet_lr": "0.002",
+                "text_encoder_lr": "0.003",
+            },
+            page_train_type="lora-master", resolve_backend=_resolve,
+        )
+        self.assertEqual(prodigy.config["learning_rate"], 0.001)
+        self.assertEqual(prodigy.config["unet_lr"], 0.002)
+        self.assertEqual(prodigy.config["text_encoder_lr"], 0.003)
+
+    def test_legacy_frontend_conflicts_are_backend_contracts(self):
+        cases = (
+            ({"cache_text_encoder_outputs": True, "shuffle_caption": True}, "shuffle_caption"),
+            ({"cache_latents": True, "color_aug": True}, "color_aug"),
+            ({"cache_latents": True, "random_crop": True}, "random_crop"),
+            ({"noise_offset": 0.1, "multires_noise_iterations": 6}, "noise_offset"),
+        )
+        for extra, expected in cases:
+            with self.subTest(extra=extra):
+                raw = {"optimizer_type": "AdamW8bit", "lora_target": "unet", **extra}
+                with self.assertRaisesRegex(ValueError, expected):
+                    prepare_training_config(raw, page_train_type="lora-master", resolve_backend=_resolve)
+
+    def test_oft_is_sdxl_only(self):
+        with self.assertRaisesRegex(ValueError, "OFT"):
+            prepare_training_config(
+                {"optimizer_type": "AdamW8bit", "network_module": "networks.oft", "lora_target": "unet"},
+                page_train_type="lora-master", resolve_backend=_resolve,
+            )
+        prepared = prepare_training_config(
+            {"optimizer_type": "AdamW8bit", "network_module": "networks.oft", "lora_target": "unet"},
+            page_train_type="sdxl-lora", resolve_backend=_resolve,
+        )
+        self.assertEqual(prepared.config["network_module"], "networks.oft")
+
+    def test_custom_toml_cannot_bypass_legacy_conflicts(self):
+        with self.assertRaisesRegex(ValueError, "color_aug"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW8bit",
+                    "lora_target": "unet",
+                    "cache_latents": True,
+                    "ui_custom_params": "color_aug = true",
+                },
+                page_train_type="lora-master",
+                resolve_backend=_resolve,
+            )
+
+    def test_full_page_custom_network_keys_are_stripped_again(self):
+        prepared = prepare_training_config(
+            {
+                "optimizer_type": "AdamW8bit",
+                "mixed_precision": "bf16",
+                "ui_custom_params": 'network_module = "networks.lora"\nnetwork_dim = 64',
+            },
+            page_train_type="sdxl-full",
+            resolve_backend=_resolve,
+        )
+        self.assertNotIn("network_module", prepared.config)
+        self.assertNotIn("network_dim", prepared.config)
 
     def test_anima_full_lowram_rejected_before_trainer(self):
         with self.assertRaisesRegex(ValueError, "Low RAM|lowram"):
