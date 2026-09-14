@@ -2,7 +2,7 @@ import unittest
 
 from mikazuki.anima_effective_config import _normalize_lora_target
 from mikazuki.training_config import PreparedTrainingConfig, prepare_training_config
-from mikazuki.training_request import validate_prepared_config
+from mikazuki.training_validation import validate_prepared_config
 
 
 def fake_resolve_backend(config, requested):
@@ -46,9 +46,6 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
                 "network_module": "networks.lora_anima",
             },
         )
-        # Preview is allowed while the user is still filling paths.  Semantic
-        # normalization happens earlier; filesystem/required-resource checks
-        # belong to the launch path only.
         validate_prepared_config(prepared, False)
         self.assertEqual(prepared.config["qwen3"], "")
         self.assertEqual(prepared.config["vae"], "")
