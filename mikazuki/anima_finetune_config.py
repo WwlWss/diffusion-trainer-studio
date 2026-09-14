@@ -24,6 +24,13 @@ ANIMA_FINETUNE_GUI_KEYS = {
     "anima_latent_cache_mode",
     "anima_text_encoder_cache_mode",
     "anima_checkpoint_mode",
+    "anima_custom_optimizer_type",
+    "anima_custom_lr_scheduler_type",
+}
+
+ANIMA_COMMON_GUI_KEYS = {
+    "anima_preview_cadence",
+    "anima_preview_interval",
 }
 
 PRECISION_MODES: Mapping[str, dict[str, object]] = {
@@ -76,6 +83,9 @@ SUPPORTED_ANIMA_WEIGHTING_SCHEMES = {
     "sigma_sqrt",
     "cosmap",
 }
+
+
+SUPPORTED_DEEPSPEED_OFFLOAD_DEVICES = {None, "", "cpu", "nvme"}
 
 
 def _as_bool(value: object) -> bool:
@@ -230,18 +240,99 @@ def _normalize_checkpoint_mode(config: dict) -> bool:
     return True
 
 
-def normalize_anima_finetune_config(config: dict, anima_training_mode: str) -> None:
-    """Convert semantic Anima full-finetune GUI fields to raw sd-scripts args.
+def _normalize_optimizer(config: dict) -> None:
+    custom_optimizer = config.pop("anima_custom_optimizer_type", None)
+    optimizer = str(config.get("optimizer_type") or "").strip()
+    if optimizer.lower() != "custom":
+        return
+    if custom_optimizer in (None, ""):
+        raise ValueError("Anima: 选择 Custom optimizer 时必须填写完整 optimizer class / type。")
+    config["optimizer_type"] = str(custom_optimizer).strip()
 
-    For LoRA jobs the full-finetune-only semantic fields are simply discarded;
-    LoRA keeps its existing low-level configuration path unchanged.
+
+def _normalize_scheduler(config: dict) -> None:
+    custom_scheduler = config.pop("anima_custom_lr_scheduler_type", None)
+    scheduler = str(config.get("lr_scheduler") or "").strip().lower()
+    if scheduler != "custom":
+        return
+    if custom_scheduler in (None, ""):
+        raise ValueError("Anima: 选择 Custom scheduler 时必须填写 lr_scheduler_type。")
+    config["lr_scheduler_type"] = str(custom_scheduler).strip()
+    # get_scheduler_fix checks lr_scheduler_type first. Keep the ordinary name
+    # valid as well so downstream logging/config inspection never sees an
+    # invented scheduler enum value.
+    config["lr_scheduler"] = "constant"
+
+
+def _normalize_preview_cadence(config: dict) -> None:
+    cadence = config.pop("anima_preview_cadence", None)
+    interval = config.pop("anima_preview_interval", None)
+    if cadence in (None, "") and interval in (None, ""):
+        return
+    if cadence in (None, "") or interval in (None, ""):
+        raise ValueError("Anima: 预览频率必须同时指定 cadence 和 interval。")
+
+    cadence = str(cadence).lower()
+    try:
+        interval = int(interval)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Anima: 预览 interval 必须是正整数。") from e
+    if interval <= 0:
+        raise ValueError("Anima: 预览 interval 必须大于 0。")
+
+    if cadence == "epoch":
+        config["sample_every_n_epochs"] = interval
+        config.pop("sample_every_n_steps", None)
+    elif cadence == "step":
+        config["sample_every_n_steps"] = interval
+        config.pop("sample_every_n_epochs", None)
+    else:
+        raise ValueError("Anima: 预览 cadence 只能是 epoch 或 step。")
+
+
+def _normalize_deepspeed_effective_state(config: dict) -> None:
+    if not _as_bool(config.get("deepspeed")):
+        # Empty optional offload values should not become argparse strings.
+        for key in (
+            "offload_optimizer_device",
+            "offload_optimizer_nvme_path",
+            "offload_param_device",
+            "offload_param_nvme_path",
+        ):
+            if config.get(key) in (None, ""):
+                config.pop(key, None)
+        return
+
+    # sd-scripts itself forces this to one in prepare_deepspeed_args(). Make the
+    # generated TOML reflect the effective value instead of hiding a coercion.
+    config["max_data_loader_n_workers"] = 1
+    for key in (
+        "offload_optimizer_device",
+        "offload_optimizer_nvme_path",
+        "offload_param_device",
+        "offload_param_nvme_path",
+    ):
+        if config.get(key) in (None, ""):
+            config.pop(key, None)
+
+
+def normalize_anima_finetune_config(config: dict, anima_training_mode: str) -> None:
+    """Convert semantic Anima GUI fields to raw sd-scripts args.
+
+    Preview cadence is common to Anima LoRA/full finetune. Full-finetune-only
+    semantic controls are discarded for LoRA so switching modes cannot leak
+    stale values into anima_train_network.py.
     """
+    _normalize_preview_cadence(config)
+
     if anima_training_mode != "finetune":
         for key in ANIMA_FINETUNE_GUI_KEYS:
             config.pop(key, None)
         return
 
     _normalize_learning_rate(config)
+    _normalize_optimizer(config)
+    _normalize_scheduler(config)
 
     _apply_semantic_mapping(
         config,
@@ -264,6 +355,7 @@ def normalize_anima_finetune_config(config: dict, anima_training_mode: str) -> N
         "Qwen3 输出",
     )
     _normalize_checkpoint_mode(config)
+    _normalize_deepspeed_effective_state(config)
 
 
 def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> None:
@@ -303,6 +395,46 @@ def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> No
         raise ValueError(
             "Anima: cpu_offload_checkpointing 与 unsloth_offload_checkpointing 不能同时启用。"
         )
+
+    if _as_bool(config.get("fused_backward_pass")):
+        optimizer = str(config.get("optimizer_type") or "AdamW").lower()
+        if optimizer != "adafactor":
+            raise ValueError("Anima: fused_backward_pass 当前仅支持 optimizer_type=AdaFactor。")
+        if int(config.get("gradient_accumulation_steps") or 1) != 1:
+            raise ValueError("Anima: fused_backward_pass 要求 gradient_accumulation_steps=1。")
+
+    if _as_bool(config.get("deepspeed")):
+        try:
+            zero_stage = int(config.get("zero_stage", 2))
+        except (TypeError, ValueError) as e:
+            raise ValueError("Anima: DeepSpeed zero_stage 必须是 0 / 1 / 2 / 3。") from e
+        if zero_stage not in {0, 1, 2, 3}:
+            raise ValueError("Anima: DeepSpeed zero_stage 必须是 0 / 1 / 2 / 3。")
+
+        optimizer_offload = config.get("offload_optimizer_device")
+        param_offload = config.get("offload_param_device")
+        if optimizer_offload not in SUPPORTED_DEEPSPEED_OFFLOAD_DEVICES:
+            raise ValueError("Anima: DeepSpeed optimizer offload 只能是 cpu / nvme / 空。")
+        if param_offload not in SUPPORTED_DEEPSPEED_OFFLOAD_DEVICES:
+            raise ValueError("Anima: DeepSpeed parameter offload 只能是 cpu / nvme / 空。")
+        if optimizer_offload and zero_stage not in {2, 3}:
+            raise ValueError("Anima: DeepSpeed optimizer offload 仅适用于 ZeRO stage 2/3。")
+        if param_offload and zero_stage != 3:
+            raise ValueError("Anima: DeepSpeed parameter offload 仅适用于 ZeRO stage 3。")
+        if config.get("offload_optimizer_nvme_path") and optimizer_offload != "nvme":
+            raise ValueError("Anima: offload_optimizer_nvme_path 要求 optimizer offload=nvme。")
+        if config.get("offload_param_nvme_path") and param_offload != "nvme":
+            raise ValueError("Anima: offload_param_nvme_path 要求 parameter offload=nvme。")
+        if (_as_bool(config.get("zero3_init_flag")) or _as_bool(config.get("zero3_save_16bit_model"))) and zero_stage != 3:
+            raise ValueError("Anima: zero3_init_flag / zero3_save_16bit_model 仅适用于 ZeRO stage 3。")
+        if _as_bool(config.get("fp16_master_weights_and_gradients")):
+            if zero_stage != 2 or optimizer_offload != "cpu" or mixed_precision != "fp16":
+                raise ValueError(
+                    "Anima: fp16_master_weights_and_gradients 要求 ZeRO-2 + optimizer CPU offload + FP16 训练。"
+                )
+
+    if _as_bool(config.get("torch_compile")) and int(config.get("blocks_to_swap") or 0) > 0:
+        raise ValueError("Anima: torch_compile 与 blocks_to_swap 的组合尚未完成 GPU 验证；当前请二选一。")
 
     # Current anima_train.py always writes safetensors. Accept and remove the
     # legacy shared-GUI default, but reject choices that would falsely imply a
