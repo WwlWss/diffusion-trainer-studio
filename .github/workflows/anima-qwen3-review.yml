@@ -8,9 +8,15 @@ on:
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
+      - "mikazuki/app/application.py"
+      - "mikazuki/app/training_pages.py"
       - "mikazuki/schema/flux-lora.ts"
+      - "mikazuki/schema/flux-finetune.ts"
+      - "mikazuki/schema/dreambooth.ts"
+      - "mikazuki/schema/lora-master.ts"
       - "mikazuki/schema/shared.ts"
-      - "config/presets/anima-finetune.toml"
+      - "config/presets/anima*.toml"
+      - "config/presets/chroma.toml"
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
       - "tests/test_anima_finetune_config.py"
@@ -18,10 +24,12 @@ on:
       - "tests/test_anima_finetune_trainer_coverage.py"
       - "tests/test_anima_process_advanced.py"
       - "tests/test_anima_gui_trainer_contract.py"
+      - "tests/test_training_page_routing.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
       - "sd-scripts"
+      - "frontend"
       - ".github/workflows/anima-qwen3-review.yml"
 
 jobs:
@@ -46,6 +54,8 @@ jobs:
             mikazuki/anima_finetune_advanced.py \
             mikazuki/process.py \
             mikazuki/app/api.py \
+            mikazuki/app/application.py \
+            mikazuki/app/training_pages.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
@@ -53,15 +63,21 @@ jobs:
             tests/test_anima_finetune_integration.py \
             tests/test_anima_finetune_trainer_coverage.py \
             tests/test_anima_process_advanced.py \
-            tests/test_anima_gui_trainer_contract.py
+            tests/test_anima_gui_trainer_contract.py \
+            tests/test_training_page_routing.py
 
-      - name: Syntax-check expert GUI schema
+      - name: Syntax-check expert GUI schemas
         run: |
           cp mikazuki/schema/flux-lora.ts /tmp/flux-lora.js
+          cp mikazuki/schema/flux-finetune.ts /tmp/flux-finetune.js
           node --check /tmp/flux-lora.js
+          node --check /tmp/flux-finetune.js
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
+
+      - name: Run training page routing contracts
+        run: python -m unittest tests.test_training_page_routing -v
 
       - name: Validate sd-scripts patch against pinned source
         run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
