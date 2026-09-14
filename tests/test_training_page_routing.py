@@ -16,6 +16,7 @@ ROOT = Path(__file__).resolve().parents[1]
 API_SOURCE = (ROOT / "mikazuki/app/api.py").read_text(encoding="utf-8")
 APP_BUNDLE = (ROOT / "frontend/dist/assets/app.547295de.js").read_text(encoding="utf-8")
 FLUX_FULL_SCHEMA = (ROOT / "mikazuki/schema/flux-finetune.ts").read_text(encoding="utf-8")
+SDXL_FULL_SCHEMA = (ROOT / "mikazuki/schema/sdxl-full.ts").read_text(encoding="utf-8")
 ANIMA_TEMPLATE = (ROOT / "mikazuki/schema/flux-lora.ts").read_text(encoding="utf-8")
 DREAMBOOTH_TEMPLATE = (ROOT / "mikazuki/schema/dreambooth.ts").read_text(encoding="utf-8")
 LORA_TEMPLATE = (ROOT / "mikazuki/schema/lora-master.ts").read_text(encoding="utf-8")
@@ -32,7 +33,7 @@ def _literal_assignment(source: str, name: str):
 
 
 class TrainingPageRoutingTests(unittest.TestCase):
-    def test_one_train_type_maps_to_one_concrete_trainer(self):
+    def test_one_backend_key_maps_to_one_concrete_trainer(self):
         mapping = _literal_assignment(API_SOURCE, "trainer_mapping")
         expected = {
             "sd-lora": "./scripts/stable/train_network.py",
@@ -48,16 +49,13 @@ class TrainingPageRoutingTests(unittest.TestCase):
         for train_type, script in expected.items():
             with self.subTest(train_type=train_type):
                 self.assertEqual(mapping[train_type], script)
-
-        # There is no Chroma full trainer in this repository. Do not expose a
-        # fictitious page merely because Chroma LoRA shares Flux network code.
         self.assertNotIn("chroma-finetune", mapping)
 
-    def test_virtual_page_train_types_match_backend_schema_names(self):
+    def test_virtual_pages_use_dedicated_schema_names(self):
         expected = {
             "/lora/chroma.html": "chroma-lora",
             "/lora/anima.html": "anima-lora",
-            "/finetune/sdxl.html": "sdxl-finetune",
+            "/finetune/sdxl.html": "sdxl-full",
             "/finetune/flux.html": "flux-finetune",
             "/finetune/anima.html": "anima-finetune",
         }
@@ -74,7 +72,6 @@ class TrainingPageRoutingTests(unittest.TestCase):
 
     def test_frontend_bundle_patch_creates_separate_sidebar_groups_and_routes(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
-
         for fragment in (
             "SD1.5 / SD2 LoRA",
             "SDXL LoRA",
@@ -93,7 +90,6 @@ class TrainingPageRoutingTests(unittest.TestCase):
 
         self.assertNotIn("Anima / Flux / Chroma", patched)
         self.assertNotIn("chroma-finetune", patched)
-
         for page in VIRTUAL_TRAINING_PAGES:
             self.assertIn(page.key, patched)
             self.assertIn(page.path, patched)
@@ -102,7 +98,7 @@ class TrainingPageRoutingTests(unittest.TestCase):
             self.assertIsNotNone(virtual_asset(page.data_asset))
             self.assertIsNotNone(virtual_asset(page.content_asset))
 
-    def test_full_finetune_schema_has_no_lora_network_hyperparameters(self):
+    def test_flux_full_schema_has_no_lora_network_hyperparameters(self):
         for field in (
             "network_module",
             "network_weights",
@@ -113,13 +109,41 @@ class TrainingPageRoutingTests(unittest.TestCase):
         ):
             with self.subTest(field=field):
                 self.assertNotIn(field, FLUX_FULL_SCHEMA)
-
         self.assertIn('model_train_type: Schema.string().default("flux-finetune")', FLUX_FULL_SCHEMA)
         self.assertIn('model_type: Schema.string().default("flux")', FLUX_FULL_SCHEMA)
 
-    def test_source_templates_still_have_real_conditional_backend_branches(self):
-        # The runtime schema builder freezes these selectors; the source remains
-        # one maintainable template with explicit conditional branches.
+    def test_sdxl_full_schema_is_not_dreambooth_or_lora_ui(self):
+        for forbidden in (
+            "network_module",
+            "network_weights",
+            "network_dim",
+            "network_alpha",
+            "network_dropout",
+            "stop_text_encoder_training",
+            "clip_skip",
+            "weighted_captions",
+        ):
+            with self.subTest(field=forbidden):
+                self.assertNotIn(forbidden, SDXL_FULL_SCHEMA)
+
+        # Page schema name is sdxl-full, but it submits the real backend key.
+        self.assertIn('model_train_type: Schema.string().default("sdxl-finetune")', SDXL_FULL_SCHEMA)
+        for required in (
+            "train_text_encoder",
+            "learning_rate_te1",
+            "learning_rate_te2",
+            "block_lr",
+            "fused_optimizer_groups",
+            "no_half_vae",
+            "cache_text_encoder_outputs",
+            "dataset_config",
+            "in_json",
+            "deepspeed",
+        ):
+            with self.subTest(field=required):
+                self.assertIn(required, SDXL_FULL_SCHEMA)
+
+    def test_source_templates_remain_for_legacy_compatibility(self):
         self.assertIn('Schema.union(["sd-lora", "sdxl-lora"])', LORA_TEMPLATE)
         self.assertIn('Schema.union(["sd-dreambooth", "sdxl-finetune"])', DREAMBOOTH_TEMPLATE)
         self.assertIn('model_type: Schema.union(["flux", "chroma", "anima"])', ANIMA_TEMPLATE)
