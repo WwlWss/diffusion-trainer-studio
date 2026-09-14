@@ -39,16 +39,25 @@ def _runtime_specialized_schema(
     fixed_json = json.dumps(fixed, ensure_ascii=True, separators=(",", ":"))
     drop_json = json.dumps(list(drop_keys), ensure_ascii=True, separators=(",", ":"))
     hidden_json = json.dumps(hidden_defaults, ensure_ascii=True, separators=(",", ":"))
-    # ``template`` is a trusted repository schema expression.  Parenthesizing
-    # it lets the wrapper consume either Schema.intersect(...) or any future
-    # single-expression schema without changing the source template itself.
+
+    # Repository .ts schema files are expression statements and normally end
+    # with a semicolon.  They are embedded below inside parentheses, where that
+    # statement terminator would produce invalid JavaScript: ``(expr;)``.
+    # Remove only the final statement terminator; do not rewrite the template.
+    template_expression = template.strip()
+    if template_expression.endswith(";"):
+        template_expression = template_expression[:-1].rstrip()
+
+    # ``template_expression`` is a trusted repository schema expression.
+    # Parenthesizing it lets the wrapper consume either Schema.intersect(...)
+    # or any future single-expression schema without changing the source file.
     return f"""(() => {{
     const __fixed = {fixed_json};
     const __dropKeys = new Set({drop_json});
     const __hiddenDefaults = {hidden_json};
     const __fixedKeys = Object.keys(__fixed);
     const __hiddenKeys = new Set(Object.keys(__hiddenDefaults));
-    const __source = ({template});
+    const __source = ({template_expression});
 
     // 0 = this schema does not constrain the key, 1 = accepts the fixed value,
     // -1 = explicitly rejects it.
