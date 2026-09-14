@@ -160,7 +160,7 @@ def prepare_anima_config(
     validate_anima_finetune_config(config, mode)
     validate_effective_text_encoder_cache(config)
 
-    variant = str(config.pop("anima_model_variant", "base")).lower()
+    variant = str(config.get("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
         raise ValueError(f"Unsupported Anima model variant: {variant}")
     detected = _detect_variant(str(config.get("pretrained_model_name_or_path") or ""))
@@ -169,6 +169,8 @@ def prepare_anima_config(
     max_blocks = 38 if variant == "2.9b" else 26
     if int(config.get("blocks_to_swap") or 0) > max_blocks:
         raise ValueError(f"Anima {variant} 最多允许 blocks_to_swap={max_blocks}。")
+    if not launch:
+        config.pop("anima_model_variant", None)
 
     _materialize_flow_shift(config, toml_path, launch)
 
