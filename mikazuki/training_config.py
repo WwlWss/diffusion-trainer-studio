@@ -60,8 +60,8 @@ def _resolve_requested_backend(config: dict, page_train_type: str | None, warnin
     embedded = config.pop("model_train_type", None)
     requested = PAGE_BACKEND_MAP.get(page_train_type or "", page_train_type)
     if requested:
-        if embedded not in (None, "", requested):
-            warnings.append(f"页面固定后端为 {requested}；已忽略 model_train_type={embedded!r}。")
+        # Dedicated pages own their backend. A stale embedded selector is legacy
+        # form/preset plumbing, not a user-facing training warning.
         return str(requested)
     return str(embedded or "sd-lora")
 
@@ -69,35 +69,21 @@ def _resolve_requested_backend(config: dict, page_train_type: str | None, warnin
 def _enforce_page_discriminators(config: dict, requested: str, warnings: list[str]) -> None:
     """Overwrite stale legacy selectors before the old backend resolver sees them.
 
-    The prebuilt frontend reuses form state between pages and custom TOML may
-    also contain obsolete routing keys. Page routing lives outside the trainer
-    config now, so those values are never allowed to switch a fixed page to a
-    different Python trainer.
+    The prebuilt frontend reuses form state between pages and imported legacy
+    TOML may also contain obsolete routing keys. Dedicated-page routing lives
+    outside trainer config, so stale selectors are silently normalized rather
+    than shown as warnings to the user.
     """
-    stale_model_type = config.get("model_type")
-    stale_anima_mode = config.get("anima_training_mode")
-
     if requested in {"flux-lora", "flux-finetune"}:
-        if stale_model_type not in (None, "", "flux"):
-            warnings.append(f"Flux 页面已忽略旧 model_type={stale_model_type!r}。")
         config["model_type"] = "flux"
         config.pop("anima_training_mode", None)
     elif requested == "chroma-lora":
-        if stale_model_type not in (None, "", "chroma"):
-            warnings.append(f"Chroma 页面已忽略旧 model_type={stale_model_type!r}。")
         config["model_type"] = "chroma"
         config.pop("anima_training_mode", None)
     elif requested in {"anima-lora", "anima-finetune"}:
-        expected_mode = "lora" if requested == "anima-lora" else "finetune"
-        if stale_model_type not in (None, "", "anima"):
-            warnings.append(f"Anima 页面已忽略旧 model_type={stale_model_type!r}。")
-        if stale_anima_mode not in (None, "", expected_mode):
-            warnings.append(f"Anima 页面已忽略旧 anima_training_mode={stale_anima_mode!r}。")
         config["model_type"] = "anima"
-        config["anima_training_mode"] = expected_mode
+        config["anima_training_mode"] = "lora" if requested == "anima-lora" else "finetune"
     else:
-        if stale_model_type not in (None, ""):
-            warnings.append(f"当前页面已忽略旧 model_type={stale_model_type!r}。")
         config.pop("model_type", None)
         config.pop("anima_training_mode", None)
 
@@ -186,8 +172,6 @@ def prepare_training_config(
             launch=launch,
             toml_path=toml_path,
         )
-        # Anima trainers do not consume the shared Flux-family selector. Do not
-        # depend on the legacy resolver to remove it as a side effect.
         config.pop("model_type", None)
 
     config.pop("model_train_type", None)
