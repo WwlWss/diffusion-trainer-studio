@@ -120,6 +120,7 @@ jobs:
       - name: Contract - unified effective config
         run: python -m unittest tests.test_effective_training_config -v
 
+      # This test also asks Node to compile every transformed runtime training schema.
       - name: Contract - runtime schema overrides
         run: python -m unittest tests.test_training_schema_overrides -v
 
