@@ -66,8 +66,7 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
         self.assertEqual(prepared.config["model_type"], "flux")
         self.assertNotIn("model_train_type", prepared.config)
         self.assertNotIn("anima_training_mode", prepared.config)
-        self.assertTrue(any("页面固定后端" in warning for warning in prepared.warnings))
-        self.assertTrue(any("旧 model_type" in warning for warning in prepared.warnings))
+        self.assertEqual(prepared.warnings, [])
 
     def test_sd_page_drops_stale_flux_family_selectors(self):
         prepared = self.prepare(
@@ -83,6 +82,7 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
         self.assertNotIn("model_type", prepared.config)
         self.assertNotIn("anima_training_mode", prepared.config)
         self.assertNotIn("model_train_type", prepared.config)
+        self.assertEqual(prepared.warnings, [])
 
     def test_anima_page_overwrites_stale_flux_and_wrong_mode(self):
         prepared = self.prepare(
@@ -104,6 +104,7 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
         self.assertEqual(prepared.train_type, "anima-finetune")
         self.assertNotIn("model_type", prepared.config)
         self.assertNotIn("anima_training_mode", prepared.config)
+        self.assertEqual(prepared.warnings, [])
 
     def test_flux_t5xxl_semantic_control_becomes_network_arg(self):
         prepared = self.prepare(
