@@ -9,6 +9,7 @@ on:
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
       - "mikazuki/schema/flux-lora.ts"
+      - "mikazuki/schema/shared.ts"
       - "config/presets/anima-finetune.toml"
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
