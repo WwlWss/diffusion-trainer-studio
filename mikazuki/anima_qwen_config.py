@@ -15,9 +15,9 @@ ANIMA_QWEN_TRAINING_KEYS = {
     "qwen3_output_dir",
 }
 
-# First implementation deliberately supports optimizers whose per-parameter-
-# group learning rates are well-defined in sd-scripts. Qwen3 must be able to
-# use a much smaller LR than the DiT.
+# Qwen3 needs a reliable independent parameter-group LR. AdaFactor is supported
+# only in the proven fused-backward mode below; relative-step mode is disabled so
+# both the DiT LR and qwen3_lr remain explicit.
 SUPPORTED_QWEN_OPTIMIZERS = {
     "adamw",
     "adamw8bit",
@@ -27,6 +27,7 @@ SUPPORTED_QWEN_OPTIMIZERS = {
     "pagedlion8bit",
     "sgdnesterov",
     "sgdnesterov8bit",
+    "adafactor",
 }
 
 
@@ -41,6 +42,34 @@ def text_encoder_cache_enabled(config: dict) -> bool:
         config.get("cache_text_encoder_outputs")
         or config.get("cache_text_encoder_outputs_to_disk")
     )
+
+
+def _arg_key(item: object) -> str:
+    return str(item).split("=", 1)[0].strip().lower()
+
+
+def _ensure_fixed_adafactor_args(config: dict) -> None:
+    """Keep explicit per-group LRs when Qwen3 joint uses fused AdaFactor."""
+    raw = config.get("optimizer_args")
+    if raw is None:
+        args: list[str] = []
+    elif isinstance(raw, (list, tuple)):
+        args = [str(item) for item in raw]
+    else:
+        args = [str(raw)]
+
+    required = {
+        "relative_step": "relative_step=False",
+        "scale_parameter": "scale_parameter=False",
+        "warmup_init": "warmup_init=False",
+    }
+    existing = {_arg_key(item): index for index, item in enumerate(args)}
+    for key, value in required.items():
+        if key in existing:
+            args[existing[key]] = value
+        else:
+            args.append(value)
+    config["optimizer_args"] = args
 
 
 def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bool:
@@ -68,7 +97,7 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
     except (TypeError, ValueError):
         raise ValueError("Anima: Qwen3 联合训练要求有效的主 DiT learning_rate。")
     if dit_lr <= 0:
-        raise ValueError("Anima: Qwen3 联合训练第一版要求主 DiT learning_rate 大于 0；暂不支持仅训练 Qwen3。")
+        raise ValueError("Anima: Qwen3 联合训练要求主 DiT learning_rate 大于 0；暂不支持仅训练 Qwen3。")
 
     try:
         qwen3_lr = float(config.get("qwen3_lr"))
@@ -82,15 +111,26 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
         raise ValueError(
             "Anima: 当前 Qwen3 联合训练仅支持具有可靠独立参数组学习率的优化器："
             "AdamW / AdamW8bit / PagedAdamW8bit / Lion / Lion8bit / "
-            "PagedLion8bit / SGDNesterov / SGDNesterov8bit。"
-            "D-Adaptation、Prodigy 与 Adafactor 第一版不支持。"
+            "PagedLion8bit / SGDNesterov / SGDNesterov8bit，或 fused AdaFactor。"
         )
+
+    blocks_to_swap = int(config.get("blocks_to_swap") or 0)
+    fused_backward = bool(config.get("fused_backward_pass"))
+    if blocks_to_swap > 0:
+        if optimizer != "adafactor" or not fused_backward:
+            raise ValueError(
+                "Anima: Qwen3 联合训练启用 blocks_to_swap 时必须使用 AdaFactor + fused_backward_pass。"
+            )
+    elif fused_backward and optimizer != "adafactor":
+        raise ValueError("Anima: Qwen3 联合训练的 fused_backward_pass 当前仅支持 AdaFactor。")
+
+    if optimizer == "adafactor":
+        if not fused_backward:
+            raise ValueError("Anima: Qwen3 联合训练的 AdaFactor 当前要求 fused_backward_pass=true。")
+        _ensure_fixed_adafactor_args(config)
 
     if config.get("deepspeed"):
         raise ValueError("Anima: Qwen3 联合训练第一版暂不支持 DeepSpeed；普通 Anima DeepSpeed 不受影响。")
-
-    if config.get("fused_backward_pass"):
-        raise ValueError("Anima: Qwen3 联合训练第一版暂不支持 fused_backward_pass。")
 
     if config.get("torch_compile"):
         raise ValueError("Anima: Qwen3 联合训练第一版暂不支持 torch_compile；请先关闭后进行联合训练。")
