@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from mikazuki.anima_effective_config import prepare_anima_config
+from mikazuki.anima_effective_config import prepare_anima_config, validate_post_override_anima_config
 from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
 from mikazuki.training_gui_semantics import (
     apply_raw_gui_semantics,
@@ -16,6 +16,7 @@ from mikazuki.training_gui_semantics import (
     normalize_flux_lora_target,
     normalize_sd_lora_target,
     normalize_sd_token_length,
+    validate_legacy_common_conflicts,
 )
 
 PAGE_BACKEND_MAP = {
@@ -100,6 +101,39 @@ def _validate_final_effective_config(config: dict, effective_train_type: str) ->
         config["persistent_data_loader_workers"] = False
 
 
+def _post_override_normalize(
+    config: dict,
+    effective_train_type: str,
+    warnings: list[str],
+) -> None:
+    """Re-assert all trainer invariants after ui_custom_params has overwritten values."""
+    normalize_dataset_source(config)
+    normalize_common_dataloader(config)
+    _normalize_memory_mode(config, effective_train_type)
+
+    if effective_train_type in {"sd-lora", "sdxl-lora"}:
+        normalize_sd_token_length(config, warnings)
+        normalize_sd_lora_target(config)
+    elif effective_train_type == "sd-dreambooth":
+        normalize_sd_token_length(config, warnings)
+        if str(config.get("save_model_as") or "").lower() == "pt":
+            raise ValueError("SD DreamBooth: 当前 trainer 不支持 save_model_as=pt。")
+    elif effective_train_type in {"flux-lora", "chroma-lora"}:
+        normalize_flux_lora_target(config, chroma=effective_train_type == "chroma-lora")
+    elif effective_train_type == "sdxl-finetune":
+        _strip_network_training_keys(config)
+        normalize_validate_sdxl_full(config)
+    elif effective_train_type == "flux-finetune":
+        _strip_network_training_keys(config)
+        normalize_validate_flux_full(config)
+    elif effective_train_type in {"anima-lora", "anima-finetune"}:
+        validate_post_override_anima_config(config, effective_train_type)
+
+    normalize_adaptive_optimizer_learning_rates(config, warnings)
+    validate_legacy_common_conflicts(config, effective_train_type)
+    _validate_final_effective_config(config, effective_train_type)
+
+
 def prepare_training_config(
     raw_config: dict, *, page_train_type: str | None, resolve_backend,
     launch: bool = False, toml_path: str | None = None,
@@ -145,13 +179,10 @@ def prepare_training_config(
         normalize_adaptive_optimizer_learning_rates(config, warnings)
         config.pop("model_type", None)
 
-    # Historical ui_custom_params behavior is intentionally last, but routing
-    # cannot be overridden and parser-level invariants are still enforced.
+    # Historical ui_custom_params behavior is intentionally last-write-wins for
+    # trainer values, but it may not bypass page routing or trainer invariants.
     apply_ui_custom_overrides(config)
-    normalize_dataset_source(config)
-    normalize_common_dataloader(config)
-    normalize_adaptive_optimizer_learning_rates(config, warnings)
-    _validate_final_effective_config(config, effective_train_type)
+    _post_override_normalize(config, effective_train_type, warnings)
 
     config.pop("model_train_type", None)
     config.pop("anima_training_mode", None)
@@ -162,6 +193,8 @@ def prepare_training_config(
         config["model_type"] = "chroma"
     else:
         config.pop("model_type", None)
+    # Two normalization passes may discover the same informational warning.
+    warnings[:] = list(dict.fromkeys(warnings))
     return PreparedTrainingConfig(effective_train_type, trainer_file, config, gpu_ids, warnings)
 
 
