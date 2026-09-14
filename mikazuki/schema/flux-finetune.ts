@@ -1,0 +1,137 @@
+Schema.intersect([
+    Schema.object({
+        model_train_type: Schema.string().default("flux-finetune").disabled().description("固定训练后端：scripts/dev/flux_train.py"),
+        model_type: Schema.string().default("flux").disabled().description("固定模型 backend：Flux"),
+        pretrained_model_name_or_path: Schema.string().role('filepicker', { type: "model-file" }).default("./sd-models/model.safetensors").description("Flux DiT 底模路径"),
+        ae: Schema.string().role('filepicker', { type: "model-file" }).description("Flux AE 模型路径"),
+        clip_l: Schema.string().role('filepicker', { type: "model-file" }).description("CLIP-L 模型路径"),
+        t5xxl: Schema.string().role('filepicker', { type: "model-file" }).description("T5-XXL 模型路径"),
+        resume: Schema.string().role('filepicker', { type: "folder" }).description("从 save_state 恢复训练"),
+    }).description("Flux 全参微调模型"),
+
+    Schema.object({
+        train_data_dir: Schema.string().role('filepicker', { type: "folder" }).default("./train/aki").description("普通目录数据集；使用 dataset_config 时会被其覆盖"),
+        dataset_config: Schema.string().role('filepicker', { type: "file" }).description("可选：kohya dataset config TOML/JSON"),
+        in_json: Schema.string().role('filepicker', { type: "file" }).description("可选：fine-tuning metadata JSON；不能与 dataset_config 同时作为数据源"),
+        reg_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("可选：正则化数据集"),
+        resolution: Schema.string().default("1024,1024").description("训练分辨率"),
+        enable_bucket: Schema.boolean().default(true).description("启用 aspect-ratio bucket"),
+        min_bucket_reso: Schema.number().default(256).description("最小 bucket 分辨率"),
+        max_bucket_reso: Schema.number().default(2048).description("最大 bucket 分辨率"),
+        bucket_reso_steps: Schema.number().default(64).description("bucket 分辨率步长"),
+        bucket_no_upscale: Schema.boolean().default(false).description("禁止 bucket 放大图片"),
+        flip_aug: Schema.boolean().default(false).description("水平翻转增强；latent cache 支持"),
+        color_aug: Schema.boolean().default(false).description("颜色增强；与 latent cache 冲突"),
+        random_crop: Schema.boolean().default(false).description("随机裁剪；与 latent cache 冲突"),
+    }).description("数据集设置"),
+
+    Schema.object({
+        output_name: Schema.string().default("flux-finetune").description("输出模型名"),
+        output_dir: Schema.string().role('filepicker', { type: "folder" }).default("./output").description("输出目录"),
+        save_precision: Schema.union(["fp16", "float", "bf16"]).default("bf16").description("模型保存精度"),
+        save_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 保存"),
+        save_every_n_steps: Schema.number().min(1).description("可选：每 N step 保存"),
+        save_n_epoch_ratio: Schema.number().min(1).description("将整个训练划分为 N 个 epoch 保存区间；设置后 trainer 会计算 save_every_n_epochs"),
+        save_last_n_epochs: Schema.number().min(1).description("保留最近 N 个 epoch checkpoint"),
+        save_last_n_steps: Schema.number().min(1).description("保留最近 N step 范围 checkpoint"),
+        save_state: Schema.boolean().default(false).description("保存训练状态"),
+        save_state_on_train_end: Schema.boolean().default(false).description("训练结束保存 state"),
+        save_last_n_epochs_state: Schema.number().min(1).description("保留最近 N 个 epoch state"),
+        save_last_n_steps_state: Schema.number().min(1).description("保留最近 N step state"),
+        mem_eff_save: Schema.boolean().default(false).description("实验性 memory-efficient Flux 保存路径"),
+    }).description("保存设置"),
+
+    Schema.object({
+        max_train_steps: Schema.number().min(1).description("最大 optimizer step；填写后建议不再设置 epoch"),
+        max_train_epochs: Schema.number().min(1).default(1).description("最大 epoch"),
+        train_batch_size: Schema.number().min(1).default(1).description("训练 batch size"),
+        gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累积"),
+        gradient_checkpointing: Schema.boolean().default(true).description("梯度检查点"),
+        cpu_offload_checkpointing: Schema.boolean().default(false).description("实验性 activation CPU offload；要求 gradient checkpointing"),
+        max_grad_norm: Schema.number().min(0).step(0.1).default(1.0).description("梯度裁剪；0 关闭"),
+        max_data_loader_n_workers: Schema.number().min(0).step(1).default(8).description("DataLoader workers"),
+        persistent_data_loader_workers: Schema.boolean().default(true).description("保留 DataLoader worker"),
+    }).description("训练控制"),
+
+    Schema.object({
+        learning_rate: Schema.string().default("1e-5").description("Flux 全参学习率"),
+        optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "AdaFactor", "Prodigy", "RAdamScheduleFree"]).default("AdamW8bit").description("优化器"),
+        optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
+        lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]).default("constant").description("学习率调度器"),
+        lr_warmup_steps: Schema.number().min(0).default(0).description("warmup steps"),
+        lr_decay_steps: Schema.number().min(0).description("decay steps"),
+        lr_scheduler_num_cycles: Schema.number().min(1).default(1).description("cosine restart cycles"),
+        lr_scheduler_power: Schema.number().step(0.1).default(1.0).description("polynomial power"),
+        weighting_scheme: Schema.union(["sigma_sqrt", "logit_normal", "mode", "cosmap", "none"]).default("none").description("Flux loss weighting"),
+        loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数"),
+        huber_schedule: Schema.union(["constant", "exponential", "snr"]).default("snr").description("Huber schedule"),
+        huber_c: Schema.number().step(0.01).default(0.1).description("Huber c"),
+        huber_scale: Schema.number().step(0.1).default(1.0).description("Huber scale"),
+    }).description("优化器与损失"),
+
+    Schema.object({
+        timestep_sampling: Schema.union(["sigma", "uniform", "sigmoid", "shift", "flux_shift"]).default("sigmoid").description("Flux timestep sampling"),
+        sigmoid_scale: Schema.number().step(0.001).default(1.0).description("sigmoid/shift scale"),
+        discrete_flow_shift: Schema.number().step(0.001).default(1.0).description("离散 flow shift"),
+        model_prediction_type: Schema.union(["raw", "additive", "sigma_scaled"]).default("raw").description("预测类型"),
+        guidance_scale: Schema.number().step(0.1).default(1.0).description("Flux guidance scale"),
+        t5xxl_max_token_length: Schema.number().min(1).step(1).description("T5-XXL 最大 token 长度"),
+        apply_t5_attn_mask: Schema.boolean().default(false).description("对 T5/Flux block 使用 attention mask"),
+    }).description("Flux 专用训练参数"),
+
+    Schema.object({
+        cache_latents: Schema.boolean().default(true).description("缓存 latent"),
+        cache_latents_to_disk: Schema.boolean().default(true).description("latent cache 写盘"),
+        vae_batch_size: Schema.number().min(1).default(1).description("VAE cache batch"),
+        cache_text_encoder_outputs: Schema.boolean().default(true).description("缓存 CLIP-L/T5 输出；开启时不能训练文本编码器"),
+        cache_text_encoder_outputs_to_disk: Schema.boolean().default(true).description("文本编码器输出写盘"),
+        text_encoder_batch_size: Schema.number().min(1).description("文本编码器 cache batch"),
+        skip_cache_check: Schema.boolean().default(false).description("跳过 cache 有效性检查"),
+        mixed_precision: Schema.union(["no", "fp16", "bf16"]).default("bf16").description("混合精度"),
+        full_fp16: Schema.boolean().default(false).description("full FP16"),
+        full_bf16: Schema.boolean().default(false).description("full BF16"),
+        fp8_base: Schema.boolean().default(false).description("FP8 Flux base model"),
+        fp8_base_unet: Schema.boolean().default(false).description("仅 Flux DiT 使用 FP8"),
+        blocks_to_swap: Schema.number().min(0).step(1).default(0).description("block swap 到 CPU；与 checkpoint CPU offload 不应同时使用"),
+        highvram: Schema.boolean().default(false).description("高显存优化路径"),
+        xformers: Schema.boolean().default(false).description("使用 xformers attention"),
+        sdpa: Schema.boolean().default(true).description("使用 PyTorch SDPA"),
+    }).description("显存与缓存"),
+
+    Schema.intersect([
+        Schema.object({
+            enable_preview: Schema.boolean().default(false).description("训练中生成预览图"),
+        }),
+        Schema.union([
+            Schema.object({
+                enable_preview: Schema.const(true).required(),
+                sample_prompts: Schema.string().role('textarea').default('(masterpiece, best quality:1.2), 1girl, solo --w 1024 --h 1024 --l 3.5 --s 24 --d 1337').description("Flux sample prompt 参数"),
+                sample_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 采样"),
+                sample_every_n_steps: Schema.number().min(1).description("或每 N step 采样；不要同时设置两个频率"),
+                sample_at_first: Schema.boolean().default(false).description("训练开始前先采样"),
+            }),
+            Schema.object({}),
+        ]),
+    ]).description("预览"),
+
+    SHARED_SCHEMAS.LOG_SETTINGS,
+
+    Schema.object({
+        caption_extension: Schema.string().default(".txt").description("caption 扩展名"),
+        shuffle_caption: Schema.boolean().default(false).description("随机打乱 caption token；文本输出 cache 时应关闭"),
+        keep_tokens: Schema.number().min(0).step(1).default(0).description("shuffle 时固定前 N token"),
+        caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout"),
+        caption_dropout_every_n_epochs: Schema.number().min(0).step(1).description("每 N epoch caption dropout"),
+        caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；文本输出 cache 时应关闭"),
+    }).description("Caption"),
+
+    Schema.object({
+        masked_loss: Schema.boolean().default(false).description("启用 mask loss"),
+        conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("mask/conditioning 数据目录"),
+        seed: Schema.number().default(1337).description("随机种子"),
+        ddp_timeout: Schema.number().min(0).description("DDP timeout"),
+        ddp_gradient_as_bucket_view: Schema.boolean().default(false).description("DDP gradient_as_bucket_view"),
+        ddp_static_graph: Schema.boolean().default(false).description("DDP static graph"),
+        ui_custom_params: Schema.string().role('textarea').description("高级自定义 TOML；仅用于 trainer 已支持但 GUI 未显式暴露的参数"),
+    }).description("高级设置")
+]);
