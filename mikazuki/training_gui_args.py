@@ -1,7 +1,7 @@
 """Raw Schemastery GUI argument compilation owned by the Python backend.
 
 This module contains the former parseParams() conversions for network, optimizer,
-base-weight, custom TOML, path and Basic-page compatibility controls.
+base-weight, numeric/path cleanup, custom TOML and Basic-page compatibility.
 """
 
 from __future__ import annotations
@@ -20,10 +20,11 @@ except ModuleNotFoundError:  # pragma: no cover - compatibility with older app P
 PRODIGY_TYPES = {"prodigy", "prodigyplus.prodigyplusschedulefree"}
 _BASIC_LORA_DEFAULTS = {
     "save_model_as": "safetensors",
+    "save_precision": "fp16",
     "enable_bucket": True,
     "min_bucket_reso": 256,
     "max_bucket_reso": 1024,
-    "learning_rate": "1e-4",
+    "learning_rate": 1e-4,
     "lr_scheduler_num_cycles": 1,
     "network_module": "networks.lora",
     "logging_dir": "./logs",
@@ -36,7 +37,16 @@ _BASIC_LORA_DEFAULTS = {
 _PATH_FIELDS = {
     "pretrained_model_name_or_path", "train_data_dir", "reg_data_dir", "output_dir",
     "network_weights", "dataset_config", "in_json", "vae", "ae", "t5xxl", "clip_l",
-    "qwen3", "prompt_file", "llm_adapter_path", "t5_tokenizer_path",
+    "qwen3", "prompt_file", "llm_adapter_path", "t5_tokenizer_path", "conditioning_data_dir",
+}
+_FLOAT_FIELDS = {
+    "learning_rate", "unet_lr", "text_encoder_lr", "learning_rate_te",
+    "learning_rate_te1", "learning_rate_te2", "sigmoid_scale", "guidance_scale",
+}
+_OPTIONAL_EMPTY_FIELDS = {
+    "vae", "reg_data_dir", "network_weights", "noise_offset", "multires_noise_iterations",
+    "multires_noise_discount", "caption_dropout_rate", "network_dropout", "scale_weight_norms",
+    "gpu_ids",
 }
 
 
@@ -92,6 +102,27 @@ def _normalize_paths_and_gpu(config: dict) -> None:
             match = re.search(r"GPU\s+(\d+):", str(value))
             normalized.append(match.group(1) if match else str(value))
         config["gpu_ids"] = normalized
+
+
+def _normalize_numeric_fields(config: dict) -> None:
+    """Preserve parseParams' numeric TOML contract without silently turning typos into zero."""
+    for field in _FLOAT_FIELDS:
+        value = config.get(field)
+        if value in (None, "") or isinstance(value, (int, float)):
+            continue
+        try:
+            config[field] = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{field} 必须是有效数字。") from exc
+
+
+def _drop_empty_optional_fields(config: dict) -> None:
+    for field in _OPTIONAL_EMPTY_FIELDS:
+        if field not in config:
+            continue
+        value = config[field]
+        if value in (None, "", 0, 0.0) or value == []:
+            config.pop(field, None)
 
 
 def _parse_ui_custom_params(config: dict) -> None:
@@ -184,9 +215,8 @@ def _normalize_optimizer_args(config: dict) -> None:
     generated: list[str] = []
     optimizer = str(config.get("optimizer_type") or "")
     lower = optimizer.lower()
-    if lower.startswith("dadapt"):
-        if lower in {"dadaptation", "dadaptadam"}:
-            generated.extend(("decouple=True", "weight_decay=0.01"))
+    if lower.startswith("dadapt") and lower in {"dadaptation", "dadaptadam"}:
+        generated.extend(("decouple=True", "weight_decay=0.01"))
     if lower in PRODIGY_TYPES:
         generated.extend(("decouple=True", "weight_decay=0.01", "use_bias_correction=True"))
         d0 = config.pop("prodigy_d0", None)
@@ -213,6 +243,8 @@ def apply_raw_gui_semantics(raw_config: dict, *, page_train_type: str | None = N
     if page_train_type == "lora-basic":
         config = {**_BASIC_LORA_DEFAULTS, **config}
     _normalize_paths_and_gpu(config)
+    _normalize_numeric_fields(config)
+    _drop_empty_optional_fields(config)
     _parse_ui_custom_params(config)
     _normalize_network_args(config)
     _normalize_base_weights(config)
