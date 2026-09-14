@@ -7,7 +7,7 @@ import os
 
 import mikazuki.app.api as legacy_api
 from mikazuki.training_config import prepare_training_config
-from mikazuki.training_data_contract import normalize_optional_dataset_paths, validate_dataset_source
+from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
 
 
@@ -64,49 +64,9 @@ def prepare_request_config(config: dict, page_type: str | None, stamp: str, laun
     return prepared
 
 
-def validate_prepared_config(prepared, check_paths: bool) -> None:
-    """Validate launch assets only when a training process will actually start.
-
-    Preview is an effective-config inspection tool. Empty model/Qwen/VAE/dataset
-    fields are legitimate while a user is still filling the form and must not
-    prevent the right-hand TOML from rendering. Semantic contradictions are
-    already checked during ``prepare_training_config``; filesystem existence and
-    required launch resources belong exclusively to the launch path.
-    """
-    config = prepared.config
-
-    if not check_paths:
-        # Keep preview clean by removing only empty optional dataset paths. Do
-        # not require train_data_dir, model, Qwen3, VAE, or any file to exist.
-        normalize_optional_dataset_paths(config)
-        for key in ("llm_adapter_path", "t5_tokenizer_path"):
-            if not config.get(key):
-                config.pop(key, None)
-        return
-
-    validate_dataset_source(
-        config,
-        prepared.train_type,
-        is_file=os.path.isfile,
-        validate_data_dir=train_utils.validate_data_dir,
-    )
-
-    if prepared.train_type in {"anima-lora", "anima-finetune"}:
-        if not os.path.exists(prepared.trainer_file):
-            raise ValueError("Anima 训练脚本不存在，请初始化 sd-scripts 子模块。")
-        for key, label in (("qwen3", "Qwen3-0.6B"), ("vae", "Qwen-Image VAE")):
-            value = config.get(key)
-            if not value:
-                raise ValueError(f"Anima 训练需要指定 {label} 路径。")
-            if not os.path.exists(value):
-                raise ValueError(f"{label} 路径不存在: {value}")
-        for key in ("llm_adapter_path", "t5_tokenizer_path"):
-            if not config.get(key):
-                config.pop(key, None)
-
-    model = config.get("pretrained_model_name_or_path")
-    if not model:
-        raise ValueError("必须指定 pretrained_model_name_or_path。")
-    ok, message = train_utils.validate_model(model, prepared.train_type)
-    if not ok:
-        raise ValueError(message)
+__all__ = [
+    "decode_training_request",
+    "prepare_prompt_fields",
+    "prepare_request_config",
+    "validate_prepared_config",
+]
