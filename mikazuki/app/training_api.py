@@ -10,6 +10,7 @@ from fastapi import Request
 
 import mikazuki.app.api as legacy_api
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
+from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
 from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_request import (
@@ -24,6 +25,7 @@ from mikazuki.training_schema_overrides import (
 )
 from mikazuki.utils import train_utils
 
+install_frontend_training_patch()
 legacy_api._fixed_sd_schema = fixed_sd_schema
 legacy_api._fixed_flux_family_schema = fixed_flux_family_schema
 _original_append_schema = legacy_api._append_schema
