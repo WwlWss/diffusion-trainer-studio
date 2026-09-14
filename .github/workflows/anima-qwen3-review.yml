@@ -11,6 +11,7 @@ on:
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
       - "tests/test_anima_finetune_config.py"
+      - "tests/test_anima_finetune_integration.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -40,7 +41,8 @@ jobs:
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
-            tests/test_anima_finetune_config.py
+            tests/test_anima_finetune_config.py \
+            tests/test_anima_finetune_integration.py
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
