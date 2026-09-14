@@ -41,6 +41,39 @@ function collectKeys(schema, out = []) {
   if (schema.inner) collectKeys(schema.inner, out);
   return out;
 }
+
+function isEmptyObject(schema) {
+  return schema && schema.type === "object" && schema.dict && Object.keys(schema.dict).length === 0;
+}
+
+function hasRequiredConstGuard(schema, key) {
+  if (!schema) return false;
+  if (schema.type === "object" && schema.dict && schema.dict[key]) {
+    const field = schema.dict[key];
+    return !!(field.meta && field.meta.required && field.type === "const");
+  }
+  if (schema.type === "intersect" && schema.list) {
+    return schema.list.some((child) => hasRequiredConstGuard(child, key));
+  }
+  return false;
+}
+
+function hasGuardedFallbackUnion(schema, key) {
+  if (!schema) return false;
+  if (schema.type === "union" && schema.list) {
+    const guarded = schema.list.some((child) => hasRequiredConstGuard(child, key));
+    const fallback = schema.list.some(isEmptyObject);
+    if (guarded && fallback) return true;
+  }
+  if ((schema.type === "intersect" || schema.type === "union" || schema.type === "tuple") && schema.list) {
+    return schema.list.some((child) => hasGuardedFallbackUnion(child, key));
+  }
+  if (schema.type === "object" && schema.dict) {
+    return Object.values(schema.dict).some((child) => hasGuardedFallbackUnion(child, key));
+  }
+  if (schema.inner) return hasGuardedFallbackUnion(schema.inner, key);
+  return false;
+}
 '''
 
 
@@ -75,7 +108,16 @@ Schema.intersect([
       model_type: Schema.const("anima").required(),
       anima_training_mode: Schema.const("finetune").required(),
       self_attn_lr: Schema.number(),
-      train_qwen3_text_encoder: Schema.boolean(),
+      train_qwen3_text_encoder: Schema.boolean().default(false),
+    }),
+    Schema.object({}),
+  ]),
+  Schema.union([
+    Schema.object({
+      model_type: Schema.const("anima").required(),
+      anima_training_mode: Schema.const("finetune").required(),
+      train_qwen3_text_encoder: Schema.const(true).required(),
+      qwen3_lr: Schema.string().default("5e-7"),
     }),
     Schema.object({}),
   ]),
@@ -92,6 +134,7 @@ Schema.intersect([
     Schema.object({}),
   ]),
   Schema.object({
+    model_train_type: Schema.string().default("flux-lora"),
     optimizer_type: Schema.union(["AdamW", "AdamW8bit"]).default("AdamW8bit"),
     lr_scheduler: Schema.union(["constant", "cosine"]).default("constant"),
   }),
@@ -108,13 +151,21 @@ Schema.intersect([
   Schema.union([
     Schema.object({
       model_train_type: Schema.const("sd-dreambooth").required(),
-      v2: Schema.boolean(),
+      v2: Schema.boolean().default(false),
       learning_rate_te: Schema.number(),
     }),
     Schema.object({
       model_train_type: Schema.const("sdxl-finetune").required(),
       learning_rate_te1: Schema.number(),
       learning_rate_te2: Schema.number(),
+    }),
+    Schema.object({}),
+  ]),
+  Schema.union([
+    Schema.object({
+      model_train_type: Schema.const("sd-dreambooth").required(),
+      v2: Schema.const(true).required(),
+      v_parameterization: Schema.boolean().default(false),
     }),
     Schema.object({}),
   ]),
@@ -132,13 +183,11 @@ def execute_schema(source: str) -> dict:
         raise unittest.SkipTest("node is required for Schemastery runtime contract")
     script = SCHEMA_STUB + "\nconst result = " + source + ";\n" + r'''
 const keys = collectKeys(result);
-const hidden = {};
-if (result.type === "intersect" && result.list[0] && result.list[0].type === "object") {
-  for (const [key, value] of Object.entries(result.list[0].dict)) {
-    hidden[key] = {value: value.value, default: value.meta.default, hidden: value.meta.hidden};
-  }
-}
-process.stdout.write(JSON.stringify({keys, hidden}));
+process.stdout.write(JSON.stringify({
+  keys,
+  hasV2Fallback: hasGuardedFallbackUnion(result, "v2"),
+  hasQwenFallback: hasGuardedFallbackUnion(result, "train_qwen3_text_encoder"),
+}));
 '''
     completed = subprocess.run(
         [node, "-e", script],
@@ -150,7 +199,12 @@ process.stdout.write(JSON.stringify({keys, hidden}));
 
 
 class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
-    def test_anima_finetune_prunes_flux_and_lora_branches(self):
+    def assert_no_routing_fields(self, keys):
+        self.assertNotIn("model_type", keys)
+        self.assertNotIn("model_train_type", keys)
+        self.assertNotIn("anima_training_mode", keys)
+
+    def test_anima_finetune_prunes_foreign_branches_but_preserves_qwen_guard(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="anima",
@@ -165,42 +219,37 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertIn("vae", keys)
         self.assertIn("self_attn_lr", keys)
         self.assertIn("train_qwen3_text_encoder", keys)
+        self.assertIn("qwen3_lr", keys)
         self.assertIn("anima_only", keys)
         self.assertIn("optimizer_type", keys)
         self.assertIn("lr_scheduler", keys)
-
         self.assertNotIn("ae", keys)
         self.assertNotIn("clip_l", keys)
         self.assertNotIn("t5xxl", keys)
         self.assertNotIn("network_dim", keys)
         self.assertNotIn("flux_only", keys)
+        self.assertTrue(result["hasQwenFallback"])
+        self.assert_no_routing_fields(keys)
 
-        self.assertEqual(result["hidden"]["model_type"], {"value": "anima", "default": "anima", "hidden": True})
-        self.assertEqual(result["hidden"]["model_train_type"]["default"], "anima-finetune")
-        self.assertEqual(result["hidden"]["anima_training_mode"]["default"], "finetune")
-
-        # The fixed discriminators exist once, in the hidden prefix only.  They
-        # must not reappear as visible duplicate selectors inside the old tree.
-        self.assertEqual(keys.count("model_type"), 1)
-        self.assertEqual(keys.count("model_train_type"), 1)
-        self.assertEqual(keys.count("anima_training_mode"), 1)
-
-    def test_anima_lora_prunes_full_branch(self):
+    def test_anima_lora_prunes_full_branch_and_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="anima",
             train_type="anima-lora",
             anima_mode="lora",
         )
-        keys = execute_schema(source)["keys"]
+        result = execute_schema(source)
+        keys = result["keys"]
         self.assertIn("anima_model_variant", keys)
         self.assertIn("network_dim", keys)
         self.assertIn("optimizer_type", keys)
         self.assertNotIn("self_attn_lr", keys)
-        self.assertNotIn("train_qwen3_text_encoder", keys)
+        self.assertNotIn("qwen3_lr", keys)
+        self.assertFalse(result["hasQwenFallback"])
         self.assertNotIn("flux_only", keys)
+        self.assert_no_routing_fields(keys)
 
-    def test_flux_page_prunes_anima_fields(self):
+    def test_flux_page_prunes_anima_fields_and_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="flux",
@@ -215,38 +264,37 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertNotIn("anima_model_variant", keys)
         self.assertNotIn("qwen3", keys)
         self.assertNotIn("anima_only", keys)
+        self.assert_no_routing_fields(keys)
 
-    def test_chroma_page_is_t5_only_and_forces_attention_mask(self):
+    def test_chroma_page_is_t5_only_without_hidden_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="chroma",
             train_type="chroma-lora",
         )
-        result = execute_schema(source)
-        keys = result["keys"]
+        keys = execute_schema(source)["keys"]
         self.assertIn("ae", keys)
         self.assertIn("t5xxl", keys)
         self.assertIn("flux_only", keys)
         self.assertIn("optimizer_type", keys)
         self.assertNotIn("clip_l", keys)
+        self.assertNotIn("apply_t5_attn_mask", keys)
         self.assertNotIn("anima_model_variant", keys)
-        self.assertEqual(
-            result["hidden"]["apply_t5_attn_mask"],
-            {"value": True, "default": True, "hidden": True},
-        )
+        self.assert_no_routing_fields(keys)
 
-    def test_sd_dreambooth_does_not_inherit_sdxl_branch(self):
+    def test_sd_dreambooth_preserves_v2_runtime_guard_and_fallback(self):
         source = fixed_sd_schema(SD_SYNTHETIC, "sd-dreambooth")
         result = execute_schema(source)
         keys = result["keys"]
         self.assertIn("v2", keys)
+        self.assertIn("v_parameterization", keys)
         self.assertIn("learning_rate_te", keys)
         self.assertIn("optimizer_type", keys)
         self.assertIn("lr_scheduler", keys)
         self.assertNotIn("learning_rate_te1", keys)
         self.assertNotIn("learning_rate_te2", keys)
-        self.assertEqual(keys.count("model_train_type"), 1)
-        self.assertEqual(result["hidden"]["model_train_type"]["default"], "sd-dreambooth")
+        self.assertTrue(result["hasV2Fallback"])
+        self.assert_no_routing_fields(keys)
 
 
 if __name__ == "__main__":
