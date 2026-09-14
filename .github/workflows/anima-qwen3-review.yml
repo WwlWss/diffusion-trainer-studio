@@ -131,8 +131,24 @@ jobs:
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
 
-      - name: Contract - backend-owned GUI semantics and rehydrate
-        run: python -m unittest tests.test_training_semantic_contract -v
+      - name: Semantic - legacy compiler
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_legacy_network_optimizer_and_paths_are_compiled_in_python -v
+      - name: Semantic - basic defaults
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_basic_hidden_defaults_moved_out_of_frontend -v
+      - name: Semantic - workers invariant
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_workers_zero_disables_persistent -v
+      - name: Semantic - dataset config
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_dataset_config_excludes_folder_fields -v
+      - name: Semantic - SD token length
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_sd_token_75_is_omitted_and_legacy_255_migrates -v
+      - name: Semantic - SD LoRA target
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_lora_target_is_single_semantic_control -v
+      - name: Semantic - Flux target
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_flux_target_materializes_t5_network_arg -v
+      - name: Semantic - Anima lowram
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_anima_full_lowram_rejected_before_trainer -v
+      - name: Semantic - rehydrate roundtrip
+        run: python -m unittest tests.test_training_semantic_contract.TrainingSemanticContractTests.test_rehydrate_consumes_network_args_and_recompiles_equivalently -v
 
       - name: Contract - unified effective config
         run: python -m unittest tests.test_effective_training_config -v
