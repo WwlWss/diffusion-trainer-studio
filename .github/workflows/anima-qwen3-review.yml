@@ -9,7 +9,7 @@ on:
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
       - "mikazuki/app/application.py"
-      - "mikazuki/app/training_pages.py"
+      - "mikazuki/training_pages.py"
       - "mikazuki/schema/flux-lora.ts"
       - "mikazuki/schema/flux-finetune.ts"
       - "mikazuki/schema/sdxl-full.ts"
@@ -56,7 +56,7 @@ jobs:
             mikazuki/process.py \
             mikazuki/app/api.py \
             mikazuki/app/application.py \
-            mikazuki/app/training_pages.py \
+            mikazuki/training_pages.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
