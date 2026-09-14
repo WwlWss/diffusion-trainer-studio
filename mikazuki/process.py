@@ -47,6 +47,26 @@ ANIMA_OPTIONAL_FINETUNE_LRS = {
     "llm_adapter_lr",
 }
 
+ANIMA_FINETUNE_ONLY_KEYS = {
+    "fused_backward_pass",
+    "deepspeed",
+    "zero_stage",
+    "offload_optimizer_device",
+    "offload_optimizer_nvme_path",
+    "offload_param_device",
+    "offload_param_nvme_path",
+    "zero3_init_flag",
+    "zero3_save_16bit_model",
+    "fp16_master_weights_and_gradients",
+    "torch_compile",
+    "dynamo_backend",
+    "ddp_static_graph",
+    "dataset_config",
+    "in_json",
+    "masked_loss",
+    "conditioning_data_dir",
+}
+
 ANIMA_VARIANTS = {"base", "2.9b"}
 
 
@@ -89,14 +109,16 @@ def _validate_effective_text_encoder_cache(config: dict) -> None:
         raise ValueError("Anima: 缓存 Qwen3 输出时必须关闭 shuffle_caption")
     if float(config.get("caption_tag_dropout_rate") or 0) > 0:
         raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 caption_tag_dropout_rate")
+    if float(config.get("token_warmup_step") or 0) > 0:
+        raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 token_warmup_step")
 
 
 def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
     """Apply the GUI preview flow shift to text prompt files safely.
 
     Anima's sampler reads ``--fs`` from each prompt entry; there is no global
-    trainer argument for it.  The GUI therefore sends ``sample_flow_shift`` as
-    a host-only field.  We create an autosave-side copy of a text prompt file
+    trainer argument for it. The GUI therefore sends ``sample_flow_shift`` as
+    a host-only field. We create an autosave-side copy of a text prompt file
     and append ``--fs`` only to lines that do not already provide one, leaving
     user-owned prompt files untouched. TOML/JSON prompt files keep their own
     per-prompt flow_shift values and simply ignore the GUI-only default.
@@ -150,6 +172,38 @@ def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
     config["sample_prompts"] = derived_path
 
 
+def _normalize_anima_save_schedule(config: dict) -> None:
+    """Make mutually-overriding save cadence fields explicit before sd-scripts."""
+    ratio = config.get("save_n_epoch_ratio")
+    if ratio in (None, "", 0):
+        return
+    try:
+        ratio_value = int(ratio)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Anima: save_n_epoch_ratio 必须是正整数。") from e
+    if ratio_value <= 0:
+        raise ValueError("Anima: save_n_epoch_ratio 必须大于 0。")
+    # sd-scripts recalculates save_every_n_epochs from the ratio. Do not leave a
+    # second GUI value in the final TOML that appears to compete with it.
+    config["save_n_epoch_ratio"] = ratio_value
+    config.pop("save_every_n_epochs", None)
+
+
+def _validate_anima_finetune_advanced_combinations(config: dict) -> None:
+    if config.get("dataset_config") and config.get("in_json"):
+        raise ValueError("Anima: dataset_config 与 in_json 不能同时使用；请选择一种数据集来源。")
+    if config.get("masked_loss") and not (config.get("conditioning_data_dir") or config.get("dataset_config")):
+        raise ValueError("Anima: masked_loss 需要 conditioning_data_dir，或在 dataset_config 中提供 conditioning 数据。")
+
+    deepspeed = bool(config.get("deepspeed"))
+    if deepspeed and config.get("fused_backward_pass"):
+        raise ValueError("Anima: DeepSpeed 与 fused_backward_pass 当前不能组合使用。")
+    if deepspeed and int(config.get("blocks_to_swap") or 0) > 0:
+        raise ValueError("Anima: DeepSpeed 路径当前不支持 blocks_to_swap；请二选一。")
+    if deepspeed and config.get("torch_compile"):
+        raise ValueError("Anima: DeepSpeed + torch_compile 尚未完成 GPU 验证；当前请二选一。")
+
+
 def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     """Prepare Anima jobs and switch between LoRA and full finetune.
 
@@ -179,6 +233,10 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     # validation must see the resulting effective cache/LR state rather than
     # the pre-normalized form values.
     normalize_anima_finetune_config(config, mode)
+    _normalize_anima_save_schedule(config)
+
+    if mode == "finetune":
+        _validate_anima_finetune_advanced_combinations(config)
 
     # New Qwen3 fields are strictly opt-in. When disabled (or when LoRA is
     # selected) they are removed completely before sd-scripts sees the config.
@@ -238,9 +296,9 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
                 raise ValueError(f"Anima: 无法创建 Qwen3 输出目录 {config['qwen3_output_dir']}: {e}") from e
         log.info("Anima full finetune selected; using sd-scripts/anima_train.py")
     else:
-        # Component LRs belong to full finetune only. Remove stale values when a
-        # finetune preset was loaded and the user switched the form back to LoRA.
-        for key in ANIMA_OPTIONAL_FINETUNE_LRS | {"cpu_offload_checkpointing"}:
+        # Full-finetune settings must not leak into anima_train_network.py when
+        # the user loads a finetune preset and then switches back to LoRA.
+        for key in ANIMA_OPTIONAL_FINETUNE_LRS | ANIMA_FINETUNE_ONLY_KEYS | {"cpu_offload_checkpointing"}:
             config.pop(key, None)
         trainer_file = "./sd-scripts/anima_train_network.py"
         log.info("Anima LoRA selected; using sd-scripts/anima_train_network.py")
