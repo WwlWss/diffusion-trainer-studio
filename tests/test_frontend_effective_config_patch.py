@@ -22,10 +22,18 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertNotIn('O=async()=>{const _=parseParams(', self.patched)
         self.assertNotIn('stringify(parseParams(n.value(clone(m.value)),t))', self.patched)
 
-    def test_import_effective_toml_uses_backend_rehydrate(self):
+    def test_import_effective_toml_uses_backend_rehydrate_and_replaces_state(self):
         self.assertIn('/api/training/rehydrate', self.patched)
         self.assertIn('U.data&&U.data.gui_state', self.patched)
+        self.assertIn('a.value=clone(B)', self.patched)
+        self.assertNotIn('a.value=Object.assign({},n.value(),B)', self.patched)
         self.assertNotIn('let k=TomlParse(V),U=findChangedDataBySchema(k,n.value)', self.patched)
+
+    def test_preview_ignores_stale_async_responses(self):
+        self.assertIn('__previewGeneration=0', self.patched)
+        self.assertIn('const __generation=++__previewGeneration', self.patched)
+        self.assertGreaterEqual(self.patched.count('if(__generation!==__previewGeneration)return'), 2)
+        self.assertIn('return D.data||{}', self.patched)
 
     def test_preset_and_history_preview_use_effective_backend(self):
         self.assertIn('q=async _=>', self.patched)
