@@ -113,6 +113,9 @@ class AnimaGuiTrainerContractTests(unittest.TestCase):
             "zero3_init_flag",
             "zero3_save_16bit_model",
             "fp16_master_weights_and_gradients",
+            "wandb_run_name",
+            "log_tracker_config",
+            "log_config",
         )
         for field in gui_fields:
             with self.subTest(field=field):
@@ -126,6 +129,18 @@ class AnimaGuiTrainerContractTests(unittest.TestCase):
         self.assertIn("args.highvram", ACCELERATOR)
         self.assertIn("args.torch_compile", ACCELERATOR)
         self.assertIn("static_graph=args.ddp_static_graph", ACCELERATOR)
+
+    def test_logging_gui_matches_common_trainer_parser(self):
+        for field in (
+            "wandb_run_name",
+            "log_tracker_config",
+            "log_config",
+        ):
+            with self.subTest(field=field):
+                self.assertIn(field, SCHEMA)
+                self.assertIn(f"--{field}", ARGS)
+        self.assertIn('Schema.union(["tensorboard", "wandb", "all"])', SCHEMA)
+        self.assertIn('choices=["tensorboard", "wandb", "all"]', ARGS)
 
     def test_anima_specific_model_controls_are_backed_by_parser(self):
         for field in (
