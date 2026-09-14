@@ -14,7 +14,7 @@ from starlette.exceptions import HTTPException
 
 from mikazuki.app.config import app_config
 from mikazuki.app.api import load_schemas, load_presets
-from mikazuki.app.api import router as api_router
+from mikazuki.app.api_overlay import router as api_router
 from mikazuki.app.proxy import router as proxy_router
 from mikazuki.training_pages import (
     patch_frontend_app_js,
@@ -130,8 +130,6 @@ def _virtual_training_shell():
     return FileResponse(index_path)
 
 
-# Direct browser navigation to generated .html routes must reach the VuePress
-# shell before the fallback StaticFiles mount handles the request.
 @app.get("/lora/chroma.html")
 @app.get("/lora/anima.html")
 @app.get("/finetune/sdxl.html")
@@ -141,9 +139,6 @@ async def virtual_training_page():
     return _virtual_training_shell()
 
 
-# Keep the path list imported and checked at startup/module import so adding a
-# new virtual page without adding a direct .html route is caught by tests and
-# is visible to maintainers here.
 VIRTUAL_PAGE_PATHS = virtual_page_paths()
 
 
