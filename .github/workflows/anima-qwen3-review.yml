@@ -4,10 +4,13 @@ on:
   pull_request:
     paths:
       - "mikazuki/anima_qwen_config.py"
+      - "mikazuki/anima_finetune_config.py"
       - "mikazuki/process.py"
       - "mikazuki/schema/flux-lora.ts"
+      - "config/presets/anima-finetune.toml"
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
+      - "tests/test_anima_finetune_config.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -32,13 +35,15 @@ jobs:
         run: |
           python -m py_compile \
             mikazuki/anima_qwen_config.py \
+            mikazuki/anima_finetune_config.py \
             mikazuki/process.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
-            tests/test_anima_qwen_off_compat.py
+            tests/test_anima_qwen_off_compat.py \
+            tests/test_anima_finetune_config.py
 
-      - name: Run Qwen3 configuration regression tests
-        run: python -m unittest discover -s tests -p 'test_anima_qwen*.py' -v
+      - name: Run Anima configuration regression tests
+        run: python -m unittest discover -s tests -p 'test_anima*.py' -v
 
       - name: Validate sd-scripts patch against pinned source
         run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
