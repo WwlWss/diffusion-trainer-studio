@@ -12,6 +12,7 @@ on:
       - "mikazuki/app/training_pages.py"
       - "mikazuki/schema/flux-lora.ts"
       - "mikazuki/schema/flux-finetune.ts"
+      - "mikazuki/schema/sdxl-full.ts"
       - "mikazuki/schema/dreambooth.ts"
       - "mikazuki/schema/lora-master.ts"
       - "mikazuki/schema/shared.ts"
@@ -70,8 +71,10 @@ jobs:
         run: |
           cp mikazuki/schema/flux-lora.ts /tmp/flux-lora.js
           cp mikazuki/schema/flux-finetune.ts /tmp/flux-finetune.js
+          cp mikazuki/schema/sdxl-full.ts /tmp/sdxl-full.js
           node --check /tmp/flux-lora.js
           node --check /tmp/flux-finetune.js
+          node --check /tmp/sdxl-full.js
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
