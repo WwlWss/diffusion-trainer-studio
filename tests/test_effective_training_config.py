@@ -1,7 +1,8 @@
 import unittest
 
 from mikazuki.anima_effective_config import _normalize_lora_target
-from mikazuki.training_config import prepare_training_config
+from mikazuki.training_config import PreparedTrainingConfig, prepare_training_config
+from mikazuki.training_request import validate_prepared_config
 
 
 def fake_resolve_backend(config, requested):
@@ -32,6 +33,25 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
             page_train_type=page_type,
             resolve_backend=resolver,
         )
+
+    def test_preview_does_not_require_runtime_assets(self):
+        prepared = PreparedTrainingConfig(
+            train_type="anima-lora",
+            trainer_file="./missing/anima_train_network.py",
+            config={
+                "pretrained_model_name_or_path": "",
+                "train_data_dir": "",
+                "qwen3": "",
+                "vae": "",
+                "network_module": "networks.lora_anima",
+            },
+        )
+        # Preview is allowed while the user is still filling paths.  Semantic
+        # normalization happens earlier; filesystem/required-resource checks
+        # belong to the launch path only.
+        validate_prepared_config(prepared, False)
+        self.assertEqual(prepared.config["qwen3"], "")
+        self.assertEqual(prepared.config["vae"], "")
 
     def test_outer_page_backend_wins_over_embedded_routing(self):
         prepared = self.prepare(
@@ -68,8 +88,6 @@ class EffectiveTrainingConfigTests(unittest.TestCase):
         self.assertNotIn("model_train_type", prepared.config)
 
     def test_anima_page_overwrites_stale_flux_and_wrong_mode(self):
-        # The resolver only succeeds if page-level routing has already replaced
-        # both stale discriminators before it is called.
         prepared = self.prepare(
             {
                 "model_type": "flux",
