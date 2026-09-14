@@ -5,6 +5,7 @@ on:
     paths:
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_finetune_config.py"
+      - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
       - "mikazuki/schema/flux-lora.ts"
@@ -40,6 +41,7 @@ jobs:
           python -m py_compile \
             mikazuki/anima_qwen_config.py \
             mikazuki/anima_finetune_config.py \
+            mikazuki/anima_finetune_advanced.py \
             mikazuki/process.py \
             mikazuki/app/api.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
