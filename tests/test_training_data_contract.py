@@ -14,13 +14,19 @@ class DatasetSourceContractTests(unittest.TestCase):
             {"sdxl-finetune", "flux-finetune", "anima-finetune"},
         )
         for train_type in DATASET_CONFIG_TRAIN_TYPES:
-            config = {"dataset_config": "config.toml"}
+            config = {
+                "dataset_config": "config.toml",
+                "train_data_dir": "stale-images",
+                "in_json": "stale-meta.json",
+            }
             validate_dataset_source(
                 config,
                 train_type,
                 is_file=lambda path: path == "config.toml",
                 validate_data_dir=lambda path: False,
             )
+            self.assertNotIn("train_data_dir", config)
+            self.assertNotIn("in_json", config)
 
     def test_dataset_config_rejected_elsewhere(self):
         for train_type in ("sd-lora", "sdxl-lora", "sd-dreambooth", "flux-lora", "chroma-lora", "anima-lora"):
