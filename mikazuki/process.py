@@ -91,6 +91,65 @@ def _validate_effective_text_encoder_cache(config: dict) -> None:
         raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 caption_tag_dropout_rate")
 
 
+def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
+    """Apply the GUI preview flow shift to text prompt files safely.
+
+    Anima's sampler reads ``--fs`` from each prompt entry; there is no global
+    trainer argument for it.  The GUI therefore sends ``sample_flow_shift`` as
+    a host-only field.  We create an autosave-side copy of a text prompt file
+    and append ``--fs`` only to lines that do not already provide one, leaving
+    user-owned prompt files untouched. TOML/JSON prompt files keep their own
+    per-prompt flow_shift values and simply ignore the GUI-only default.
+    """
+    flow_shift = config.pop("sample_flow_shift", None)
+    if flow_shift in (None, ""):
+        return
+
+    try:
+        flow_shift_value = float(flow_shift)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Anima: 预览 sample_flow_shift 必须是有效数字。") from e
+
+    prompt_path = config.get("sample_prompts")
+    if not prompt_path:
+        return
+
+    prompt_path = str(prompt_path)
+    if not prompt_path.lower().endswith(".txt"):
+        # Structured prompt files already support their own flow_shift key.
+        return
+    if not os.path.isfile(prompt_path):
+        return
+
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError as e:
+        raise ValueError(f"Anima: 无法读取预览 Prompt 文件 {prompt_path}: {e}") from e
+
+    changed = False
+    rewritten = []
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        newline = line[len(stripped):]
+        if stripped and not stripped.lstrip().startswith("#") and " --fs " not in stripped:
+            stripped = f"{stripped} --fs {flow_shift_value:g}"
+            changed = True
+        rewritten.append(stripped + newline)
+
+    if not changed:
+        return
+
+    derived_path = os.path.splitext(toml_path)[0] + "-anima-prompts.txt"
+    try:
+        with open(derived_path, "w", encoding="utf-8") as f:
+            f.writelines(rewritten)
+    except OSError as e:
+        raise ValueError(f"Anima: 无法写入预览 Prompt 临时文件 {derived_path}: {e}") from e
+
+    config["sample_prompts"] = derived_path
+
+
 def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     """Prepare Anima jobs and switch between LoRA and full finetune.
 
@@ -126,6 +185,7 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     train_qwen3 = normalize_qwen_training_config(config, mode)
     validate_anima_finetune_config(config, mode)
     _validate_effective_text_encoder_cache(config)
+    _prepare_anima_preview_flow_shift(config, toml_path)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
