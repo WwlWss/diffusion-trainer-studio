@@ -32,6 +32,11 @@ def _literal_assignment(source: str, name: str):
     raise AssertionError(f"assignment {name} not found")
 
 
+def _schema_field_names(source: str) -> set[str]:
+    """Return actual object keys from the schema source, not words in descriptions/comments."""
+    return set(re.findall(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Schema\.", source, re.MULTILINE))
+
+
 class TrainingPageRoutingTests(unittest.TestCase):
     def test_one_backend_key_maps_to_one_concrete_trainer(self):
         mapping = _literal_assignment(API_SOURCE, "trainer_mapping")
@@ -99,21 +104,24 @@ class TrainingPageRoutingTests(unittest.TestCase):
             self.assertIsNotNone(virtual_asset(page.content_asset))
 
     def test_flux_full_schema_has_no_lora_network_hyperparameters(self):
-        for field in (
+        fields = _schema_field_names(FLUX_FULL_SCHEMA)
+        forbidden = {
             "network_module",
             "network_weights",
             "network_dim",
             "network_alpha",
             "network_dropout",
             "network_args",
-        ):
-            with self.subTest(field=field):
-                self.assertNotIn(field, FLUX_FULL_SCHEMA)
+        }
+        self.assertFalse(fields & forbidden, f"Flux full contains LoRA-only fields: {sorted(fields & forbidden)}")
+        self.assertIn("model_train_type", fields)
+        self.assertIn("model_type", fields)
         self.assertIn('model_train_type: Schema.string().default("flux-finetune")', FLUX_FULL_SCHEMA)
         self.assertIn('model_type: Schema.string().default("flux")', FLUX_FULL_SCHEMA)
 
     def test_sdxl_full_schema_is_not_dreambooth_or_lora_ui(self):
-        for forbidden in (
+        fields = _schema_field_names(SDXL_FULL_SCHEMA)
+        forbidden = {
             "network_module",
             "network_weights",
             "network_dim",
@@ -122,12 +130,11 @@ class TrainingPageRoutingTests(unittest.TestCase):
             "stop_text_encoder_training",
             "clip_skip",
             "weighted_captions",
-        ):
-            with self.subTest(field=forbidden):
-                self.assertNotIn(forbidden, SDXL_FULL_SCHEMA)
+        }
+        self.assertFalse(fields & forbidden, f"SDXL full contains foreign fields: {sorted(fields & forbidden)}")
 
         self.assertIn('model_train_type: Schema.string().default("sdxl-finetune")', SDXL_FULL_SCHEMA)
-        for required in (
+        required = {
             "train_text_encoder",
             "learning_rate_te1",
             "learning_rate_te2",
@@ -138,9 +145,9 @@ class TrainingPageRoutingTests(unittest.TestCase):
             "dataset_config",
             "in_json",
             "deepspeed",
-        ):
-            with self.subTest(field=required):
-                self.assertIn(field, SDXL_FULL_SCHEMA)
+        }
+        missing = required - fields
+        self.assertFalse(missing, f"SDXL full is missing trainer-backed fields: {sorted(missing)}")
 
     def test_source_templates_remain_for_legacy_compatibility(self):
         self.assertIn('Schema.union(["sd-lora", "sdxl-lora"])', LORA_TEMPLATE)
