@@ -7,9 +7,17 @@ from typing import Optional
 
 import toml
 
+from mikazuki.anima_finetune_advanced import (
+    normalize_anima_save_schedule,
+    validate_anima_finetune_advanced_combinations,
+    validate_effective_text_encoder_cache,
+)
+from mikazuki.anima_finetune_config import (
+    normalize_anima_finetune_config,
+    validate_anima_finetune_config,
+)
 from mikazuki.anima_qwen_config import (
     normalize_qwen_training_config,
-    text_encoder_cache_enabled,
     trainer_supports_qwen_training,
 )
 from mikazuki.app.models import APIResponse
@@ -43,6 +51,26 @@ ANIMA_OPTIONAL_FINETUNE_LRS = {
     "llm_adapter_lr",
 }
 
+ANIMA_FINETUNE_ONLY_KEYS = {
+    "fused_backward_pass",
+    "deepspeed",
+    "zero_stage",
+    "offload_optimizer_device",
+    "offload_optimizer_nvme_path",
+    "offload_param_device",
+    "offload_param_nvme_path",
+    "zero3_init_flag",
+    "zero3_save_16bit_model",
+    "fp16_master_weights_and_gradients",
+    "torch_compile",
+    "dynamo_backend",
+    "ddp_static_graph",
+    "dataset_config",
+    "in_json",
+    "masked_loss",
+    "conditioning_data_dir",
+}
+
 ANIMA_VARIANTS = {"base", "2.9b"}
 
 
@@ -72,19 +100,63 @@ def _detect_anima_variant(model_path: str) -> Optional[str]:
     return None
 
 
-def _validate_effective_text_encoder_cache(config: dict) -> None:
-    """Mirror sd-scripts semantics before launching the subprocess.
+def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
+    """Apply the GUI preview flow shift to text prompt files safely.
 
-    sd-scripts treats cache_text_encoder_outputs_to_disk as implicitly enabling
-    the text-encoder cache. Validate the effective state here so disk-only cache
-    configurations cannot bypass the GUI-side compatibility checks.
+    Anima's sampler reads ``--fs`` from each prompt entry; there is no global
+    trainer argument for it. The GUI therefore sends ``sample_flow_shift`` as
+    a host-only field. We create an autosave-side copy of a text prompt file
+    and append ``--fs`` only to lines that do not already provide one, leaving
+    user-owned prompt files untouched. TOML/JSON prompt files keep their own
+    per-prompt flow_shift values and simply ignore the GUI-only default.
     """
-    if not text_encoder_cache_enabled(config):
+    flow_shift = config.pop("sample_flow_shift", None)
+    if flow_shift in (None, ""):
         return
-    if config.get("shuffle_caption"):
-        raise ValueError("Anima: 缓存 Qwen3 输出时必须关闭 shuffle_caption")
-    if float(config.get("caption_tag_dropout_rate") or 0) > 0:
-        raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 caption_tag_dropout_rate")
+
+    try:
+        flow_shift_value = float(flow_shift)
+    except (TypeError, ValueError) as e:
+        raise ValueError("Anima: 预览 sample_flow_shift 必须是有效数字。") from e
+
+    prompt_path = config.get("sample_prompts")
+    if not prompt_path:
+        return
+
+    prompt_path = str(prompt_path)
+    if not prompt_path.lower().endswith(".txt"):
+        # Structured prompt files already support their own flow_shift key.
+        return
+    if not os.path.isfile(prompt_path):
+        return
+
+    try:
+        with open(prompt_path, "r", encoding="utf-8") as f:
+            lines = f.readlines()
+    except OSError as e:
+        raise ValueError(f"Anima: 无法读取预览 Prompt 文件 {prompt_path}: {e}") from e
+
+    changed = False
+    rewritten = []
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        newline = line[len(stripped):]
+        if stripped and not stripped.lstrip().startswith("#") and " --fs " not in stripped:
+            stripped = f"{stripped} --fs {flow_shift_value:g}"
+            changed = True
+        rewritten.append(stripped + newline)
+
+    if not changed:
+        return
+
+    derived_path = os.path.splitext(toml_path)[0] + "-anima-prompts.txt"
+    try:
+        with open(derived_path, "w", encoding="utf-8") as f:
+            f.writelines(rewritten)
+    except OSError as e:
+        raise ValueError(f"Anima: 无法写入预览 Prompt 临时文件 {derived_path}: {e}") from e
+
+    config["sample_prompts"] = derived_path
 
 
 def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
@@ -112,10 +184,21 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
         log.warning(f"Unknown Anima training mode '{mode}', falling back to {default_mode}")
         mode = default_mode
 
+    # Convert the GUI's mutually-exclusive semantic controls first. Qwen3
+    # validation must see the resulting effective cache/LR state rather than
+    # the pre-normalized form values.
+    normalize_anima_finetune_config(config, mode)
+    normalize_anima_save_schedule(config)
+
+    if mode == "finetune":
+        validate_anima_finetune_advanced_combinations(config)
+
     # New Qwen3 fields are strictly opt-in. When disabled (or when LoRA is
     # selected) they are removed completely before sd-scripts sees the config.
     train_qwen3 = normalize_qwen_training_config(config, mode)
-    _validate_effective_text_encoder_cache(config)
+    validate_anima_finetune_config(config, mode)
+    validate_effective_text_encoder_cache(config)
+    _prepare_anima_preview_flow_shift(config, toml_path)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
     if variant not in ANIMA_VARIANTS:
@@ -168,9 +251,9 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
                 raise ValueError(f"Anima: 无法创建 Qwen3 输出目录 {config['qwen3_output_dir']}: {e}") from e
         log.info("Anima full finetune selected; using sd-scripts/anima_train.py")
     else:
-        # Component LRs belong to full finetune only. Remove stale values when a
-        # finetune preset was loaded and the user switched the form back to LoRA.
-        for key in ANIMA_OPTIONAL_FINETUNE_LRS | {"cpu_offload_checkpointing"}:
+        # Full-finetune settings must not leak into anima_train_network.py when
+        # the user loads a finetune preset and then switches back to LoRA.
+        for key in ANIMA_OPTIONAL_FINETUNE_LRS | ANIMA_FINETUNE_ONLY_KEYS | {"cpu_offload_checkpointing"}:
             config.pop(key, None)
         trainer_file = "./sd-scripts/anima_train_network.py"
         log.info("Anima LoRA selected; using sd-scripts/anima_train_network.py")

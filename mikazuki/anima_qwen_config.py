@@ -92,6 +92,9 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
     if config.get("fused_backward_pass"):
         raise ValueError("Anima: Qwen3 联合训练第一版暂不支持 fused_backward_pass。")
 
+    if config.get("torch_compile"):
+        raise ValueError("Anima: Qwen3 联合训练第一版暂不支持 torch_compile；请先关闭后进行联合训练。")
+
     # Empty output dir means: save Qwen sidecars beside the main checkpoint.
     if not config.get("qwen3_output_dir"):
         config.pop("qwen3_output_dir", None)
