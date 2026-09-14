@@ -1,13 +1,9 @@
-"""Fail-closed runtime patch for the pinned legacy training layout bundle.
-
-The vendored frontend is intentionally kept at its pinned submodule revision.
-Modern training pages are patched at serve time so they behave as a renderer of
-raw Schemastery state only: every training semantic decision belongs to Python.
-"""
+"""Fail-closed runtime patch for the pinned legacy training layout bundle."""
 
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import mikazuki.training_pages as training_pages
 
@@ -21,8 +17,15 @@ def _replace_once(content: str, old: str, new: str, label: str) -> str:
     return content.replace(old, new, 1)
 
 
+def _replace_span_once(content: str, start: str, end: str, new: str, label: str) -> str:
+    pattern = re.escape(start) + r".*?" + re.escape(end)
+    replaced, count = re.subn(pattern, lambda _: new + end, content, count=1, flags=re.S)
+    if count != 1:
+        raise RuntimeError(f"Legacy frontend patch span {label!r} expected once, found {count}")
+    return replaced
+
+
 def patch_training_layout_js(content: str) -> str:
-    # Schema hot-update must refresh the shared closure as well as this.schemas.
     content = _replace_once(
         content,
         'async loadServerSchema(){let t=await(await get("/api/schemas/all")).json();t.status=="success"&&(localStorage.setItem("schemas",JSON.stringify(t.data.schemas)),this.schemas=t.data.schemas)}',
@@ -30,18 +33,16 @@ def patch_training_layout_js(content: str) -> str:
         "schema hot reload",
     )
 
+    # This is part of the bundle's existing const declaration chain. Mutable
+    # preview state therefore lives inside refs instead of being reassigned.
     content = _replace_once(
         content,
         'C=ref([]),d=ref([]),w=["network_args_custom","optimizer_args_custom"]',
-        'C=ref([]),d=ref([]),__effectiveToml=ref("Loading..."),__previewTimer=null,__previewGeneration=0,__startPending=ref(!1),w=["network_args_custom","optimizer_args_custom"]',
+        'C=ref([]),d=ref([]),__effectiveToml=ref("Loading..."),__previewTimer=ref(null),__previewGeneration=ref(0),__startPending=ref(!1),w=["network_args_custom","optimizer_args_custom"]',
         "effective preview state",
     )
 
-    # T() feeds every backend training request. The pinned frontend normalizes
-    # custom argument arrays by assigning them back into its input object. Once
-    # live Preview became a deep-watched async request, doing that directly on
-    # a.value retriggered the watcher and invalidated every in-flight generation,
-    # leaving the panel permanently at "Loading...". Normalize a clone instead.
+    # Never mutate the deep-watched form while compiling a backend request.
     content = _replace_once(
         content,
         'T=()=>{let _=a.value;w.forEach(g=>{_&&_.hasOwnProperty(g)&&_[g]!=null&&(_[g]=_[g].map(N=>N||""))});let m=n.value(_);return w.forEach(g=>{m.hasOwnProperty(g)&&m[g].length==0&&delete m[g]}),m}',
@@ -56,23 +57,30 @@ def patch_training_layout_js(content: str) -> str:
         "initial effective preview",
     )
 
-    # T() is the only input to the backend: schema-normalized raw GUI state.
-    # Backend requests return data without mutating preview state. The generation
-    # guard means an older/slower request cannot overwrite a newer form preview.
     content = _replace_once(
         content,
         'const x=()=>{if(n.value==null)return"Loading...";let _=T(),m=parseParams(_,t),g=checkParams(m);return C.value=g.warnings,d.value=g.errors,stringify(m)},L=computed(()=>{try{return x()}catch(_){console.log(_)}}),I=()=>',
-        'const __trainingRequest=async(endpoint,raw)=>{let N=await post(endpoint,JSON.stringify({train_type:t,config:raw}),{"Content-Type":"application/json"});let D=await N.json();if(!N.ok||D.status!="success")throw new Error(D.message||"配置校验失败");return D},__requestEffective=async(raw=T(),endpoint="/api/training/preview")=>{if(n.value==null)return{toml:"Loading...",warnings:[]};let D=await __trainingRequest(endpoint,raw);return D.data||{}},__refreshPreview=()=>{clearTimeout(__previewTimer);const __generation=++__previewGeneration;__previewTimer=setTimeout(async()=>{try{let R=await __requestEffective();if(__generation!==__previewGeneration)return;C.value=R.warnings||[],d.value=[],__effectiveToml.value=R.toml||""}catch(_){if(__generation!==__previewGeneration)return;d.value=[_.message||String(_)],C.value=[],__effectiveToml.value="# 配置解析失败\\n# "+(_.message||String(_))}},300)},x=()=>__effectiveToml.value,L=computed(()=>x());watch(a,__refreshPreview,{deep:!0});const I=()=>',
+        'const __trainingRequest=async(endpoint,raw)=>{let N=await post(endpoint,JSON.stringify({train_type:t,config:raw}),{"Content-Type":"application/json"});let D=await N.json();if(!N.ok||D.status!="success")throw new Error(D.message||"配置校验失败");return D},__requestEffective=async(raw=T(),endpoint="/api/training/preview")=>{if(n.value==null)return{toml:"Loading...",warnings:[]};let D=await __trainingRequest(endpoint,raw);return D.data||{}},__refreshPreview=()=>{clearTimeout(__previewTimer.value);const __generation=++__previewGeneration.value;__previewTimer.value=setTimeout(async()=>{try{let R=await __requestEffective();if(__generation!==__previewGeneration.value)return;C.value=R.warnings||[],d.value=[],__effectiveToml.value=R.toml||""}catch(_){if(__generation!==__previewGeneration.value)return;d.value=[_.message||String(_)],C.value=[],__effectiveToml.value="# 配置解析失败\\n# "+(_.message||String(_))}},300)},x=()=>__effectiveToml.value,L=computed(()=>x());watch(a,__refreshPreview,{deep:!0});const I=()=>',
         "backend-only effective preview",
     )
 
-    old_start = 'O=async()=>{const _=parseParams(n.value(a.value),t);_.optimizer_type=="DAdaptation"&&ElMessage.warning({message:"DAdaptation \\u8BAD\\u7EC3\\u65F6\\uFF0C\\u6240\\u6709\\u5B66\\u4E60\\u7387\\u5C06\\u88AB\\u8BBE\\u7F6E\\u4E3A 1\\u3002\\u5E76\\u4E14\\u5B66\\u4E60\\u7387\\u8C03\\u5EA6\\u5668\\u5C06\\u88AB\\u8BBE\\u7F6E\\u4E3A constant\\u3002",duration:5e3});try{let m=await post("/api/run",JSON.stringify(_),{"Content-Type":"application/json"});if(!m.ok)throw new Error("Network response was not ok");let g=await m.json();g.status=="success"?ElMessage.success("\\u8BAD\\u7EC3\\u4EFB\\u52A1\\u5DF2\\u63D0\\u4EA4\\u6210\\u529F\\uFF1A"+g.message):ElMessage.error("\\u8BAD\\u7EC3\\u4EFB\\u52A1\\u63D0\\u4EA4\\u5931\\u8D25\\uFF1A"+g.message)}catch(m){ElMessage.error(v("networkError")),console.error("There was a problem with the fetch operation:",m)}}'
     new_start = 'O=async()=>{if(__startPending.value)return;__startPending.value=!0;try{let g=await __trainingRequest("/api/run",T());g.data&&g.data.task_id&&sessionStorage.setItem(`current-task:${t}`,String(g.data.task_id)),ElMessage.success("\\u8BAD\\u7EC3\\u4EFB\\u52A1\\u5DF2\\u63D0\\u4EA4\\u6210\\u529F\\uFF1A"+g.message)}catch(m){ElMessage.error(m.message||v("networkError")),console.error("There was a problem with the fetch operation:",m)}finally{__startPending.value=!1}}'
-    content = _replace_once(content, old_start, new_start, "raw start")
+    content = _replace_span_once(
+        content,
+        'O=async()=>{const _=parseParams(n.value(a.value),t);',
+        ',K=async()=>',
+        new_start,
+        "raw start",
+    )
 
-    old_stop = 'K=async()=>{let _=null;try{let V=(await(await fetch("/api/tasks")).json()).data.tasks.filter(k=>k.status=="RUNNING");if(V.length==0){ElMessage.warning("\\u5F53\\u524D\\u6CA1\\u6709\\u6B63\\u5728\\u8FD0\\u884C\\u7684\\u8BAD\\u7EC3\\u4EFB\\u52A1");return}_=V[0]}catch(g){ElMessage.error(v("networkError")),console.error("There was a problem with the fetch operation:",g);return}'
-    new_stop = 'K=async()=>{let _=null;try{const __remembered=sessionStorage.getItem(`current-task:${t}`);let V=(await(await fetch("/api/tasks")).json()).data.tasks.filter(k=>(k.status=="CREATED"||k.status=="RUNNING")&&(k.page_train_type===t||String(k.id)===String(__remembered)));if(V.length==0){ElMessage.warning("\\u5F53\\u524D\\u9875\\u9762\\u6CA1\\u6709\\u6B63\\u5728\\u542F\\u52A8\\u6216\\u8FD0\\u884C\\u7684\\u8BAD\\u7EC3\\u4EFB\\u52A1");return}_=V.find(k=>String(k.id)===String(__remembered))||V[0]}catch(g){ElMessage.error(v("networkError")),console.error("There was a problem with the fetch operation:",g);return}'
-    content = _replace_once(content, old_stop, new_stop, "backend task stop")
+    new_stop_prefix = 'K=async()=>{let _=null;try{const __remembered=sessionStorage.getItem(`current-task:${t}`);let V=(await(await fetch("/api/tasks")).json()).data.tasks.filter(k=>(k.status=="CREATED"||k.status=="RUNNING")&&(k.page_train_type===t||String(k.id)===String(__remembered)));if(V.length==0){ElMessage.warning("\\u5F53\\u524D\\u9875\\u9762\\u6CA1\\u6709\\u6B63\\u5728\\u542F\\u52A8\\u6216\\u8FD0\\u884C\\u7684\\u8BAD\\u7EC3\\u4EFB\\u52A1");return}_=V.find(k=>String(k.id)===String(__remembered))||V[0]'
+    content = _replace_span_once(
+        content,
+        'K=async()=>{let _=null;try{let V=',
+        '}catch(g){',
+        new_stop_prefix,
+        "backend task stop",
+    )
 
     content = _replace_once(
         content,
@@ -81,11 +89,14 @@ def patch_training_layout_js(content: str) -> str:
         "effective config export",
     )
 
-    # Import is replacement semantics, not merge semantics. Merging with the
-    # current/default form would retain stale raw fields omitted by rehydrate.
-    old_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=D=>{const V=D.target.result;try{let k=TomlParse(V),U=findChangedDataBySchema(k,n.value);a.value=U,ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F")}catch(k){console.log(k),ElMessage.error("\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
     new_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=async D=>{const V=D.target.result;try{let k=TomlParse(V),U=await __trainingRequest("/api/training/rehydrate",k),B=U.data&&U.data.gui_state;if(!B||typeof B!=="object")throw new Error("导入结果缺少 gui_state");a.value=clone(B),ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F"),await nextTick(),__refreshPreview()}catch(k){console.log(k),ElMessage.error(k.message||"\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
-    content = _replace_once(content, old_import, new_import, "trainer TOML rehydrate")
+    content = _replace_span_once(
+        content,
+        'S=()=>{const _=document.createElement("input");',
+        ',$=_=>',
+        new_import,
+        "trainer TOML rehydrate",
+    )
 
     content = _replace_once(
         content,
@@ -113,6 +124,10 @@ def patch_training_layout_js(content: str) -> str:
         'stringify(parseParams(n.value(clone(m.value)),t))',
         'a.value=Object.assign({},n.value(),B)',
         'T=()=>{let _=a.value;',
+        '__previewTimer=null',
+        '__previewGeneration=0',
+        '++__previewGeneration;',
+        '__previewTimer=setTimeout',
     )
     for anchor in forbidden:
         if anchor in content:
