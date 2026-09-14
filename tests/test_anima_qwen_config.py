@@ -88,11 +88,46 @@ class AnimaQwenConfigTests(unittest.TestCase):
         self.assertEqual(config["qwen3_lr"], "5e-7")
 
     def test_unsafe_multi_lr_optimizers_are_rejected(self):
-        for optimizer in ("Prodigy", "DAdaptAdam", "AdaFactor"):
+        for optimizer in ("Prodigy", "DAdaptAdam"):
             with self.subTest(optimizer=optimizer):
                 config = self._valid_config(optimizer_type=optimizer)
                 with self.assertRaisesRegex(ValueError, "联合训练仅支持"):
                     normalize_qwen_training_config(config, "finetune")
+
+    def test_adafactor_requires_fused_backward(self):
+        config = self._valid_config(optimizer_type="AdaFactor")
+        with self.assertRaisesRegex(ValueError, "fused_backward_pass"):
+            normalize_qwen_training_config(config, "finetune")
+
+    def test_fused_adafactor_is_accepted_and_forces_explicit_lr_args(self):
+        config = self._valid_config(
+            optimizer_type="AdaFactor",
+            fused_backward_pass=True,
+            optimizer_args=["relative_step=True", "clip_threshold=1.0"],
+        )
+        self.assertTrue(normalize_qwen_training_config(config, "finetune"))
+        self.assertIn("relative_step=False", config["optimizer_args"])
+        self.assertIn("scale_parameter=False", config["optimizer_args"])
+        self.assertIn("warmup_init=False", config["optimizer_args"])
+        self.assertIn("clip_threshold=1.0", config["optimizer_args"])
+
+    def test_joint_block_swap_requires_fused_adafactor(self):
+        for optimizer, fused in (("AdamW8bit", False), ("AdamW8bit", True), ("AdaFactor", False)):
+            with self.subTest(optimizer=optimizer, fused=fused):
+                config = self._valid_config(
+                    optimizer_type=optimizer,
+                    fused_backward_pass=fused,
+                    blocks_to_swap=24,
+                )
+                with self.assertRaisesRegex(ValueError, "blocks_to_swap|fused_backward_pass"):
+                    normalize_qwen_training_config(config, "finetune")
+
+        accepted = self._valid_config(
+            optimizer_type="AdaFactor",
+            fused_backward_pass=True,
+            blocks_to_swap=24,
+        )
+        self.assertTrue(normalize_qwen_training_config(accepted, "finetune"))
 
     def test_deepspeed_is_rejected_only_for_qwen_training(self):
         config = self._valid_config(deepspeed=True)
@@ -103,7 +138,7 @@ class AnimaQwenConfigTests(unittest.TestCase):
         self.assertFalse(normalize_qwen_training_config(disabled, "finetune"))
         self.assertTrue(disabled["deepspeed"])
 
-    def test_fused_backward_is_rejected_only_for_qwen_training(self):
+    def test_non_adafactor_fused_backward_is_rejected_only_for_qwen_training(self):
         config = self._valid_config(fused_backward_pass=True)
         with self.assertRaisesRegex(ValueError, "fused_backward_pass"):
             normalize_qwen_training_config(config, "finetune")
