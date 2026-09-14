@@ -1,0 +1,39 @@
+name: Training semantic diagnostic
+
+on:
+  pull_request:
+    paths:
+      - "mikazuki/training_*.py"
+      - "tests/test_training_semantic_contract.py"
+      - ".github/workflows/training-semantic-diagnostic.yml"
+
+jobs:
+  semantic-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Raw GUI compiler
+        run: |
+          python -m unittest \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_legacy_network_optimizer_and_paths_are_compiled_in_python \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_basic_hidden_defaults_moved_out_of_frontend \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_workers_zero_disables_persistent -v
+      - name: Dataset token and targets
+        if: always()
+        run: |
+          python -m unittest \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_dataset_config_excludes_folder_fields \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_sd_token_75_is_omitted_and_legacy_255_migrates \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_lora_target_is_single_semantic_control \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_flux_target_materializes_t5_network_arg -v
+      - name: Anima and rehydrate
+        if: always()
+        run: |
+          python -m unittest \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_anima_full_lowram_rejected_before_trainer \
+            tests.test_training_semantic_contract.TrainingSemanticContractTests.test_rehydrate_consumes_network_args_and_recompiles_equivalently -v
