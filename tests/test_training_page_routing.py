@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import unittest
 
-from mikazuki.app.training_pages import (
+from mikazuki.training_pages import (
     VIRTUAL_TRAINING_PAGES,
     page_data_js,
     patch_frontend_app_js,
@@ -126,7 +126,6 @@ class TrainingPageRoutingTests(unittest.TestCase):
             with self.subTest(field=forbidden):
                 self.assertNotIn(forbidden, SDXL_FULL_SCHEMA)
 
-        # Page schema name is sdxl-full, but it submits the real backend key.
         self.assertIn('model_train_type: Schema.string().default("sdxl-finetune")', SDXL_FULL_SCHEMA)
         for required in (
             "train_text_encoder",
@@ -141,7 +140,7 @@ class TrainingPageRoutingTests(unittest.TestCase):
             "deepspeed",
         ):
             with self.subTest(field=required):
-                self.assertIn(required, SDXL_FULL_SCHEMA)
+                self.assertIn(field, SDXL_FULL_SCHEMA)
 
     def test_source_templates_remain_for_legacy_compatibility(self):
         self.assertIn('Schema.union(["sd-lora", "sdxl-lora"])', LORA_TEMPLATE)
