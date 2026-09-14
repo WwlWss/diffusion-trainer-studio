@@ -12,7 +12,7 @@ def _resolve(config, requested):
 class TrainingSemanticContractTests(unittest.TestCase):
     def test_legacy_network_optimizer_and_paths_are_compiled_in_python(self):
         raw = {
-            "pretrained_model_name_or_path": r"C:\\models\\base.safetensors",
+            "pretrained_model_name_or_path": "C:\\models\\base.safetensors",
             "network_module": "lycoris.kohya",
             "lycoris_algo": "lokr",
             "conv_dim": 16,
