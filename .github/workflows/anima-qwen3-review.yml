@@ -13,6 +13,7 @@ on:
       - "mikazuki/training_pages.py"
       - "mikazuki/training_data_contract.py"
       - "mikazuki/training_schema_factory.py"
+      - "mikazuki/full_trainer_contract.py"
       - "mikazuki/schema/flux-lora.ts"
       - "mikazuki/schema/flux-finetune.ts"
       - "mikazuki/schema/sdxl-full.ts"
@@ -31,6 +32,7 @@ on:
       - "tests/test_training_page_routing.py"
       - "tests/test_training_data_contract.py"
       - "tests/test_training_api_overlay_contract.py"
+      - "tests/test_full_trainer_contract.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -65,6 +67,7 @@ jobs:
             mikazuki/training_pages.py \
             mikazuki/training_data_contract.py \
             mikazuki/training_schema_factory.py \
+            mikazuki/full_trainer_contract.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
@@ -75,7 +78,8 @@ jobs:
             tests/test_anima_gui_trainer_contract.py \
             tests/test_training_page_routing.py \
             tests/test_training_data_contract.py \
-            tests/test_training_api_overlay_contract.py
+            tests/test_training_api_overlay_contract.py \
+            tests/test_full_trainer_contract.py
 
       - name: Syntax-check expert GUI schemas
         run: |
@@ -94,6 +98,9 @@ jobs:
 
       - name: Contract - API overlay wiring
         run: python -m unittest tests.test_training_api_overlay_contract -v
+
+      - name: Contract - full trainers
+        run: python -m unittest tests.test_full_trainer_contract -v
 
       - name: Contract - backend mapping
         run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_one_backend_key_maps_to_one_concrete_trainer -v
