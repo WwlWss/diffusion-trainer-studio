@@ -14,6 +14,7 @@ on:
       - "tests/test_anima_finetune_config.py"
       - "tests/test_anima_finetune_integration.py"
       - "tests/test_anima_finetune_trainer_coverage.py"
+      - "tests/test_anima_process_advanced.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -46,7 +47,13 @@ jobs:
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
             tests/test_anima_finetune_integration.py \
-            tests/test_anima_finetune_trainer_coverage.py
+            tests/test_anima_finetune_trainer_coverage.py \
+            tests/test_anima_process_advanced.py
+
+      - name: Syntax-check expert GUI schema
+        run: |
+          cp mikazuki/schema/flux-lora.ts /tmp/flux-lora.js
+          node --check /tmp/flux-lora.js
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
