@@ -7,13 +7,17 @@ from typing import Optional
 
 import toml
 
+from mikazuki.anima_finetune_advanced import (
+    normalize_anima_save_schedule,
+    validate_anima_finetune_advanced_combinations,
+    validate_effective_text_encoder_cache,
+)
 from mikazuki.anima_finetune_config import (
     normalize_anima_finetune_config,
     validate_anima_finetune_config,
 )
 from mikazuki.anima_qwen_config import (
     normalize_qwen_training_config,
-    text_encoder_cache_enabled,
     trainer_supports_qwen_training,
 )
 from mikazuki.app.models import APIResponse
@@ -96,23 +100,6 @@ def _detect_anima_variant(model_path: str) -> Optional[str]:
     return None
 
 
-def _validate_effective_text_encoder_cache(config: dict) -> None:
-    """Mirror sd-scripts semantics before launching the subprocess.
-
-    sd-scripts treats cache_text_encoder_outputs_to_disk as implicitly enabling
-    the text-encoder cache. Validate the effective state here so disk-only cache
-    configurations cannot bypass the GUI-side compatibility checks.
-    """
-    if not text_encoder_cache_enabled(config):
-        return
-    if config.get("shuffle_caption"):
-        raise ValueError("Anima: 缓存 Qwen3 输出时必须关闭 shuffle_caption")
-    if float(config.get("caption_tag_dropout_rate") or 0) > 0:
-        raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 caption_tag_dropout_rate")
-    if float(config.get("token_warmup_step") or 0) > 0:
-        raise ValueError("Anima: 缓存 Qwen3 输出时不能启用 token_warmup_step")
-
-
 def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
     """Apply the GUI preview flow shift to text prompt files safely.
 
@@ -172,38 +159,6 @@ def _prepare_anima_preview_flow_shift(config: dict, toml_path: str) -> None:
     config["sample_prompts"] = derived_path
 
 
-def _normalize_anima_save_schedule(config: dict) -> None:
-    """Make mutually-overriding save cadence fields explicit before sd-scripts."""
-    ratio = config.get("save_n_epoch_ratio")
-    if ratio in (None, "", 0):
-        return
-    try:
-        ratio_value = int(ratio)
-    except (TypeError, ValueError) as e:
-        raise ValueError("Anima: save_n_epoch_ratio 必须是正整数。") from e
-    if ratio_value <= 0:
-        raise ValueError("Anima: save_n_epoch_ratio 必须大于 0。")
-    # sd-scripts recalculates save_every_n_epochs from the ratio. Do not leave a
-    # second GUI value in the final TOML that appears to compete with it.
-    config["save_n_epoch_ratio"] = ratio_value
-    config.pop("save_every_n_epochs", None)
-
-
-def _validate_anima_finetune_advanced_combinations(config: dict) -> None:
-    if config.get("dataset_config") and config.get("in_json"):
-        raise ValueError("Anima: dataset_config 与 in_json 不能同时使用；请选择一种数据集来源。")
-    if config.get("masked_loss") and not (config.get("conditioning_data_dir") or config.get("dataset_config")):
-        raise ValueError("Anima: masked_loss 需要 conditioning_data_dir，或在 dataset_config 中提供 conditioning 数据。")
-
-    deepspeed = bool(config.get("deepspeed"))
-    if deepspeed and config.get("fused_backward_pass"):
-        raise ValueError("Anima: DeepSpeed 与 fused_backward_pass 当前不能组合使用。")
-    if deepspeed and int(config.get("blocks_to_swap") or 0) > 0:
-        raise ValueError("Anima: DeepSpeed 路径当前不支持 blocks_to_swap；请二选一。")
-    if deepspeed and config.get("torch_compile"):
-        raise ValueError("Anima: DeepSpeed + torch_compile 尚未完成 GPU 验证；当前请二选一。")
-
-
 def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     """Prepare Anima jobs and switch between LoRA and full finetune.
 
@@ -233,16 +188,16 @@ def _resolve_anima_trainer(toml_path: str, trainer_file: str) -> str:
     # validation must see the resulting effective cache/LR state rather than
     # the pre-normalized form values.
     normalize_anima_finetune_config(config, mode)
-    _normalize_anima_save_schedule(config)
+    normalize_anima_save_schedule(config)
 
     if mode == "finetune":
-        _validate_anima_finetune_advanced_combinations(config)
+        validate_anima_finetune_advanced_combinations(config)
 
     # New Qwen3 fields are strictly opt-in. When disabled (or when LoRA is
     # selected) they are removed completely before sd-scripts sees the config.
     train_qwen3 = normalize_qwen_training_config(config, mode)
     validate_anima_finetune_config(config, mode)
-    _validate_effective_text_encoder_cache(config)
+    validate_effective_text_encoder_cache(config)
     _prepare_anima_preview_flow_shift(config, toml_path)
 
     variant = str(config.pop("anima_model_variant", "base")).lower()
