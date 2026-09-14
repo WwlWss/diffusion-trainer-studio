@@ -2,31 +2,31 @@ import asyncio
 import hashlib
 import json
 import os
-import re
 import random
-
-from glob import glob
+import re
 from datetime import datetime
+from glob import glob
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Optional, Tuple
 
 import toml
 from fastapi import APIRouter, BackgroundTasks, Request
-from starlette.requests import Request
 
 import mikazuki.process as process
 from mikazuki import launch_utils
 from mikazuki.app.config import app_config
-from mikazuki.app.models import (APIResponse, APIResponseFail,
-                                 APIResponseSuccess, TaggerInterrogateRequest)
+from mikazuki.app.models import (
+    APIResponse,
+    APIResponseFail,
+    APIResponseSuccess,
+    TaggerInterrogateRequest,
+)
 from mikazuki.log import log
-from mikazuki.tagger.interrogator import (available_interrogators,
-                                          on_interrogate)
+from mikazuki.tagger.interrogator import available_interrogators, on_interrogate
 from mikazuki.tasks import tm
 from mikazuki.utils import train_utils
 from mikazuki.utils.devices import printable_devices
-from mikazuki.utils.tk_window import (open_directory_selector,
-                                      open_file_selector)
+from mikazuki.utils.tk_window import open_directory_selector, open_file_selector
 
 router = APIRouter()
 
@@ -40,13 +40,13 @@ avaliable_scripts = [
 avaliable_schemas = []
 avaliable_presets = []
 
+# One train_type means one concrete Python trainer. Chroma intentionally has no
+# full-finetune entry because the repository has no Chroma full trainer.
 trainer_mapping = {
     "sd-lora": "./scripts/stable/train_network.py",
     "sdxl-lora": "./scripts/stable/sdxl_train_network.py",
-
     "sd-dreambooth": "./scripts/stable/train_db.py",
     "sdxl-finetune": "./scripts/stable/sdxl_train.py",
-
     "sd3-lora": "./scripts/dev/sd3_train_network.py",
     "flux-lora": "./scripts/dev/flux_train_network.py",
     "chroma-lora": "./scripts/dev/flux_train_network.py",
@@ -55,7 +55,11 @@ trainer_mapping = {
     "anima-finetune": "./sd-scripts/anima_train.py",
 }
 
-ANIMA_ONLY_KEYS = {
+# Values that are genuinely Anima-specific and must never leak into Flux or
+# Chroma jobs. Do not put generic trainer features (DeepSpeed, block swap,
+# torch_compile, DDP, dataset_config, CUDA switches...) in this set: those are
+# also real Flux trainer features.
+ANIMA_MODEL_SPECIFIC_KEYS = {
     "qwen3",
     "vae",
     "llm_adapter_path",
@@ -67,24 +71,54 @@ ANIMA_ONLY_KEYS = {
     "vae_chunk_size",
     "vae_disable_cache",
     "qwen_image_vae_2d",
-    "blocks_to_swap",
+    "self_attn_lr",
+    "cross_attn_lr",
+    "mlp_lr",
+    "mod_lr",
+    "llm_adapter_lr",
+    "train_qwen3_text_encoder",
+    "qwen3_lr",
+    "qwen3_gradient_checkpointing",
+    "qwen3_output_dir",
+    "anima_finetune_learning_rate",
+    "anima_precision_mode",
+    "anima_latent_cache_mode",
+    "anima_text_encoder_cache_mode",
+    "anima_checkpoint_mode",
+    "anima_custom_optimizer_type",
+    "anima_custom_lr_scheduler_type",
+    "anima_preview_cadence",
+    "anima_preview_interval",
+    "sample_flow_shift",
     "unsloth_offload_checkpointing",
+    # Anima's per-block compile parser is distinct from Accelerate torch_compile.
     "compile",
     "compile_backend",
     "compile_mode",
     "compile_dynamic",
     "compile_fullgraph",
     "compile_cache_size_limit",
-    "cuda_allow_tf32",
-    "cuda_cudnn_benchmark",
 }
 
-ANIMA_FINETUNE_ONLY_KEYS = {
+# Controls that belong to the dedicated Anima full page and must be discarded
+# if a stale full preset is switched back to the dedicated Anima LoRA page.
+ANIMA_FULL_PAGE_KEYS = {
     "self_attn_lr",
     "cross_attn_lr",
     "mlp_lr",
     "mod_lr",
     "llm_adapter_lr",
+    "train_qwen3_text_encoder",
+    "qwen3_lr",
+    "qwen3_gradient_checkpointing",
+    "qwen3_output_dir",
+    "anima_finetune_learning_rate",
+    "anima_precision_mode",
+    "anima_latent_cache_mode",
+    "anima_text_encoder_cache_mode",
+    "anima_checkpoint_mode",
+    "anima_custom_optimizer_type",
+    "anima_custom_lr_scheduler_type",
     "cpu_offload_checkpointing",
     "fused_backward_pass",
     "deepspeed",
@@ -116,7 +150,7 @@ ANIMA_LEGACY_KEYS = {
     "weighted_captions",
 }
 
-FLUX_ONLY_KEYS = {
+FLUX_MODEL_SPECIFIC_KEYS = {
     "ae",
     "clip_l",
     "t5xxl",
@@ -136,18 +170,21 @@ def _strip_keys(config: dict, keys) -> None:
 
 
 def _strip_network_training_keys(config: dict) -> None:
+    """Remove LoRA/network-only fields before launching a full trainer."""
     for key in list(config.keys()):
         if key.startswith("network_") or key in {
             "scale_weight_norms",
             "enable_base_weight",
             "base_weights",
             "base_weights_multiplier",
+            "unet_lr",
+            "text_encoder_lr",
         }:
             config.pop(key, None)
 
 
 def _normalize_anima_common_config(config: dict) -> None:
-    _strip_keys(config, FLUX_ONLY_KEYS | ANIMA_LEGACY_KEYS)
+    _strip_keys(config, FLUX_MODEL_SPECIFIC_KEYS | ANIMA_LEGACY_KEYS)
 
     if config.get("max_train_steps") not in (None, "", 0):
         config.pop("max_train_epochs", None)
@@ -158,7 +195,6 @@ def _normalize_anima_common_config(config: dict) -> None:
     blocks_to_swap = int(config.get("blocks_to_swap") or 0)
     unsloth_offload = bool(config.get("unsloth_offload_checkpointing"))
     cpu_offload = bool(config.get("cpu_offload_checkpointing"))
-
     if blocks_to_swap > 0 and unsloth_offload:
         raise ValueError("Anima: blocks_to_swap 不能与 unsloth_offload_checkpointing 同时启用")
     if blocks_to_swap > 0 and cpu_offload:
@@ -174,12 +210,14 @@ def _normalize_anima_common_config(config: dict) -> None:
 
 
 def resolve_training_backend(config: dict, model_train_type: str) -> Tuple[str, str]:
-    """Resolve one page/backend selection to its concrete trainer.
+    """Resolve a page's fixed backend to one concrete trainer.
 
-    New pages submit a fixed ``model_train_type``. Legacy configs that still
-    carry the old Flux/Chroma/Anima selectors remain accepted so existing
-    exported TOMLs do not break after the navigation split.
+    Legacy exported configs from the old shared Flux/Chroma/Anima page are
+    still accepted, but new pages cannot switch Python trainers internally.
     """
+    if model_train_type not in trainer_mapping:
+        raise ValueError(f"Unsupported training backend: {model_train_type}")
+
     model_type = config.get("model_type")
     anima_training_mode = config.pop("anima_training_mode", None)
 
@@ -187,27 +225,36 @@ def resolve_training_backend(config: dict, model_train_type: str) -> Tuple[str, 
         if model_type not in (None, "chroma"):
             raise ValueError("Chroma LoRA 页面不能切换到其他模型 backend")
         config["model_type"] = "chroma"
-        _strip_keys(config, ANIMA_ONLY_KEYS | ANIMA_FINETUNE_ONLY_KEYS)
-        return "chroma-lora", trainer_mapping["chroma-lora"]
+        _strip_keys(config, ANIMA_MODEL_SPECIFIC_KEYS)
+        # Chroma does not load CLIP-L.
+        config.pop("clip_l", None)
+        config["apply_t5_attn_mask"] = True
+        return model_train_type, trainer_mapping[model_train_type]
 
     if model_train_type == "flux-lora":
-        if model_type not in (None, "flux", "chroma", "anima"):
-            raise ValueError(f"Unsupported Flux-family model type: {model_type}")
-        # Legacy shared-page exports are still routed by model_type below.
-        if model_type in {"chroma", "anima"}:
-            pass
-        else:
-            config["model_type"] = "flux"
-            _strip_keys(config, ANIMA_ONLY_KEYS | ANIMA_FINETUNE_ONLY_KEYS)
+        # Backward compatibility: an old shared-page export may still carry a
+        # Chroma or Anima selector while its train_type says flux-lora.
+        if model_type == "anima":
+            anima_training_mode = anima_training_mode or "lora"
+        elif model_type == "chroma":
+            _strip_keys(config, ANIMA_MODEL_SPECIFIC_KEYS)
+            config.pop("clip_l", None)
+            config["apply_t5_attn_mask"] = True
             return "flux-lora", trainer_mapping["flux-lora"]
+        elif model_type in (None, "flux"):
+            config["model_type"] = "flux"
+            _strip_keys(config, ANIMA_MODEL_SPECIFIC_KEYS)
+            return "flux-lora", trainer_mapping["flux-lora"]
+        else:
+            raise ValueError(f"Unsupported Flux-family model type: {model_type}")
 
     if model_train_type == "flux-finetune":
         if model_type not in (None, "flux"):
             raise ValueError("Flux full-finetune 页面只支持 Flux backend")
         config["model_type"] = "flux"
         _strip_network_training_keys(config)
-        _strip_keys(config, ANIMA_ONLY_KEYS | ANIMA_FINETUNE_ONLY_KEYS)
-        return "flux-finetune", trainer_mapping["flux-finetune"]
+        _strip_keys(config, ANIMA_MODEL_SPECIFIC_KEYS)
+        return model_train_type, trainer_mapping[model_train_type]
 
     if model_train_type in {"anima-lora", "anima-finetune"}:
         model_type = "anima"
@@ -222,22 +269,19 @@ def resolve_training_backend(config: dict, model_train_type: str) -> Tuple[str, 
 
         config.pop("model_type", None)
         _normalize_anima_common_config(config)
-
         if anima_training_mode == "finetune":
             _strip_network_training_keys(config)
-            for key in ANIMA_FINETUNE_ONLY_KEYS:
-                if config.get(key) in (None, ""):
-                    config.pop(key, None)
             effective_train_type = "anima-finetune"
         else:
-            _strip_keys(config, ANIMA_FINETUNE_ONLY_KEYS)
+            _strip_keys(config, ANIMA_FULL_PAGE_KEYS)
             config["network_train_unet_only"] = True
             config.pop("network_train_text_encoder_only", None)
             effective_train_type = "anima-lora"
-
         return effective_train_type, trainer_mapping[effective_train_type]
 
-    _strip_keys(config, ANIMA_ONLY_KEYS | ANIMA_FINETUNE_ONLY_KEYS)
+    # SD/SDXL/SD3 and other non-Anima pages should not inherit stale Anima
+    # values from a copied GUI state.
+    _strip_keys(config, ANIMA_MODEL_SPECIFIC_KEYS)
     return model_train_type, trainer_mapping[model_train_type]
 
 
@@ -248,7 +292,7 @@ def _replace_once(content: str, old: str, new: str, label: str) -> str:
 
 
 def _fixed_sd_schema(template: str, train_type: str) -> str:
-    """Turn the legacy SD/SDXL switch schema into one fixed backend page."""
+    """Turn the historical SD/SDXL selector into one fixed-backend page."""
     if train_type in {"sd-lora", "sdxl-lora"}:
         old = 'model_train_type: Schema.union(["sd-lora", "sdxl-lora"]).default("sd-lora").description("训练种类"),'
     else:
@@ -257,61 +301,66 @@ def _fixed_sd_schema(template: str, train_type: str) -> str:
     return _replace_once(template, old, new, f"{train_type} model_train_type")
 
 
-def _fixed_flux_family_schema(template: str, model_type: str, train_type: str, anima_mode: str | None = None) -> str:
-    """Freeze the old shared Flux/Chroma/Anima schema to one backend.
-
-    The conditional branches remain in the source template, but because the
-    selector itself is now a disabled constant only the matching branch is
-    materialized by k-schema. This keeps one source of truth while preventing
-    users from changing Python trainers from inside a page.
-    """
+def _fixed_flux_family_schema(
+    template: str,
+    model_type: str,
+    train_type: str,
+    anima_mode: str | None = None,
+) -> str:
+    """Freeze the shared Flux/Chroma/Anima template to one LoRA/backend page."""
     old_model = 'model_type: Schema.union(["flux", "chroma", "anima"]).default("flux").description("模型架构：FLUX / Chroma / Anima"),'
-    new_model = (
-        f'model_type: Schema.string().default("{model_type}").disabled().description("固定模型 backend：{model_type}"),\n'
-        f'        model_train_type: Schema.string().default("{train_type}").disabled().description("固定训练后端：{train_type}"),'
-    )
-    content = _replace_once(template, old_model, "".join(new_model), f"{train_type} model_type")
+    new_model = f'model_type: Schema.string().default("{model_type}").disabled().description("固定模型 backend：{model_type}"),'
+    content = _replace_once(template, old_model, new_model, f"{train_type} model_type")
 
     if model_type == "anima":
         old_mode = 'anima_training_mode: Schema.union(["lora", "finetune"]).description("Anima 训练方式：请选择 LoRA 或全参微调；显式选择可确保旧版 GUI 正确切换条件设置"),'
         new_mode = (
             f'anima_training_mode: Schema.string().default("{anima_mode}").disabled()'
-            f'.description("固定 Anima 训练后端：{anima_mode}"),'
+            f'.description("固定 Anima 训练后端：{anima_mode}"),\n'
+            f'            model_train_type: Schema.string().default("{train_type}").disabled()'
+            f'.description("固定训练后端：{train_type}"),'
         )
-        content = _replace_once(content, old_mode, "".join(new_mode), f"{train_type} Anima mode")
+        content = _replace_once(content, old_mode, new_mode, f"{train_type} Anima mode")
     else:
-        # The old shared Flux/Chroma branch itself contains a model_train_type
-        # field. Replace its value so Chroma has a distinct preset/history key.
         old_type = 'model_train_type: Schema.string().default("flux-lora").disabled().description("实际训练种类"),'
         new_type = f'model_train_type: Schema.string().default("{train_type}").disabled().description("固定训练后端：{train_type}"),'
         content = _replace_once(content, old_type, new_type, f"{train_type} inner train type")
+
+    if model_type == "chroma":
+        # The Chroma loader is T5-only. Keeping the old Flux CLIP-L picker on a
+        # dedicated Chroma page would be a misleading no-op.
+        content = re.sub(
+            r'^\s*clip_l: Schema\.string\(\)\.role\([^\n]+\n',
+            "",
+            content,
+            count=1,
+            flags=re.MULTILINE,
+        )
+        content = content.replace(
+            'apply_t5_attn_mask: Schema.boolean().default(true).description("对 T5-XXL 编码器和 FLUX double block 应用注意力掩码"),',
+            'apply_t5_attn_mask: Schema.boolean().default(true).disabled().description("Chroma 固定启用 T5 attention mask"),',
+        )
     return content
 
 
 def _append_schema(name: str, content: str, lambda_hash) -> None:
-    avaliable_schemas.append({
-        "name": name,
-        "schema": content,
-        "hash": lambda_hash(content),
-    })
+    avaliable_schemas.append({"name": name, "schema": content, "hash": lambda_hash(content)})
 
 
 async def load_schemas():
     avaliable_schemas.clear()
-
     schema_dir = os.path.join(os.getcwd(), "mikazuki", "schema")
-    schemas = os.listdir(schema_dir)
 
-    def lambda_hash(x):
-        return hashlib.md5(x.encode()).hexdigest()
+    def lambda_hash(value: str) -> str:
+        return hashlib.md5(value.encode()).hexdigest()
 
     raw = {}
-    for schema_name in schemas:
+    for schema_name in os.listdir(schema_dir):
         with open(os.path.join(schema_dir, schema_name), encoding="utf-8") as f:
             raw[schema_name.rstrip(".ts")] = f.read()
 
-    # Ordinary schemas are loaded unchanged. Three historical switch schemas
-    # are replaced below by fixed-backend variants.
+    # These three files are source templates for multiple fixed pages. Loading
+    # the raw switchable versions as pages would reintroduce cross-script UI.
     for name, content in raw.items():
         if name not in {"lora-master", "dreambooth", "flux-lora"}:
             _append_schema(name, content, lambda_hash)
@@ -330,61 +379,56 @@ async def load_schemas():
 
 async def load_presets():
     avaliable_presets.clear()
-
     preset_dir = os.path.join(os.getcwd(), "config", "presets")
-    presets = os.listdir(preset_dir)
-
-    for preset_name in presets:
+    for preset_name in os.listdir(preset_dir):
         with open(os.path.join(preset_dir, preset_name), encoding="utf-8") as f:
-            content = f.read()
-            avaliable_presets.append(toml.loads(content))
+            avaliable_presets.append(toml.loads(f.read()))
 
 
 def get_sample_prompts(config: dict) -> Tuple[Optional[str], str]:
     if "sample_prompts" in config and "positive_prompts" not in config:
         return None, config["sample_prompts"]
 
-    positive_prompts = config.pop('positive_prompts', None)
-    negative_prompts = config.pop('negative_prompts', '')
-    sample_width = config.pop('sample_width', 512)
-    sample_height = config.pop('sample_height', 512)
-    sample_cfg = config.pop('sample_cfg', 7)
-    sample_seed = config.pop('sample_seed', 2333)
-    sample_steps = config.pop('sample_steps', 24)
-    randomly_choice_prompt = config.pop('randomly_choice_prompt', False)
+    positive_prompts = config.pop("positive_prompts", None)
+    negative_prompts = config.pop("negative_prompts", "")
+    sample_width = config.pop("sample_width", 512)
+    sample_height = config.pop("sample_height", 512)
+    sample_cfg = config.pop("sample_cfg", 7)
+    sample_seed = config.pop("sample_seed", 2333)
+    sample_steps = config.pop("sample_steps", 24)
+    randomly_choice_prompt = config.pop("randomly_choice_prompt", False)
 
     if randomly_choice_prompt:
         train_data_dir = config.get("train_data_dir")
         if not train_data_dir:
-            raise ValueError('随机选取 Prompt 需要 train_data_dir；dataset_config 模式请指定 Prompt 文件或固定 Prompt')
-        sub_dir = [dir for dir in glob(os.path.join(train_data_dir, '*')) if os.path.isdir(dir)]
+            raise ValueError("随机选取 Prompt 需要 train_data_dir；dataset_config 模式请指定 Prompt 文件或固定 Prompt")
+        sub_dir = [path for path in glob(os.path.join(train_data_dir, "*")) if os.path.isdir(path)]
         if len(sub_dir) != 1:
-            raise ValueError('训练数据集下有多个子文件夹，无法启用随机选取 Prompt 功能')
-
-        txt_files = glob(os.path.join(sub_dir[0], '*.txt'))
+            raise ValueError("训练数据集下有多个子文件夹，无法启用随机选取 Prompt 功能")
+        txt_files = glob(os.path.join(sub_dir[0], "*.txt"))
         if not txt_files:
-            raise ValueError('训练数据集路径没有 txt 文件')
+            raise ValueError("训练数据集路径没有 txt 文件")
+        sample_prompt_file = random.choice(txt_files)
         try:
-            sample_prompt_file = random.choice(txt_files)
-            with open(sample_prompt_file, 'r', encoding='utf-8') as f:
+            with open(sample_prompt_file, "r", encoding="utf-8") as f:
                 positive_prompts = f.read()
         except IOError:
             log.error(f"读取 {sample_prompt_file} 文件失败")
 
-    return positive_prompts, f'{positive_prompts} --n {negative_prompts}  --w {sample_width} --h {sample_height} --l {sample_cfg}  --s {sample_steps}  --d {sample_seed}'
+    return positive_prompts, (
+        f"{positive_prompts} --n {negative_prompts}  --w {sample_width} --h {sample_height} "
+        f"--l {sample_cfg}  --s {sample_steps}  --d {sample_seed}"
+    )
 
 
 @router.post("/run")
 async def create_toml_file(request: Request):
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    toml_file = os.path.join(os.getcwd(), f"config", "autosave", f"{timestamp}.toml")
-    json_data = await request.body()
-
-    config: dict = json.loads(json_data.decode("utf-8"))
+    toml_file = os.path.join(os.getcwd(), "config", "autosave", f"{timestamp}.toml")
+    config: dict = json.loads((await request.body()).decode("utf-8"))
     train_utils.fix_config_types(config)
 
     gpu_ids = config.pop("gpu_ids", None)
-
     train_data_dir = config.get("train_data_dir")
     suggest_cpu_threads = 8 if train_data_dir and len(train_utils.get_total_images(train_data_dir)) > 200 else 2
     model_train_type = config.pop("model_train_type", "sd-lora")
@@ -399,7 +443,7 @@ async def create_toml_file(request: Request):
             return APIResponseFail(message="当前页面不支持 dataset_config。")
         if not os.path.isfile(dataset_config):
             return APIResponseFail(message=f"dataset_config 文件不存在: {dataset_config}")
-    elif effective_train_type != "sdxl-finetune":
+    elif effective_train_type not in {"sdxl-finetune"}:
         if not train_data_dir or not train_utils.validate_data_dir(train_data_dir):
             return APIResponseFail(message="训练数据集路径不存在或没有图片，请检查目录。")
 
@@ -409,10 +453,8 @@ async def create_toml_file(request: Request):
 
     if effective_train_type in {"anima-lora", "anima-finetune"}:
         if not os.path.exists(trainer_file):
-            return APIResponseFail(
-                message="Anima 训练脚本不存在。请运行 `git submodule update --init --recursive` 后重启 GUI。"
-            )
-        for key, label in [("qwen3", "Qwen3-0.6B"), ("vae", "Qwen-Image VAE")]:
+            return APIResponseFail(message="Anima 训练脚本不存在。请运行 `git submodule update --init --recursive` 后重启 GUI。")
+        for key, label in (("qwen3", "Qwen3-0.6B"), ("vae", "Qwen-Image VAE")):
             value = config.get(key)
             if not value:
                 return APIResponseFail(message=f"Anima 训练需要指定 {label} 路径。")
@@ -422,7 +464,6 @@ async def create_toml_file(request: Request):
         for key in ("llm_adapter_path", "t5_tokenizer_path", "dataset_config", "in_json", "conditioning_data_dir"):
             if not config.get(key):
                 config.pop(key, None)
-
         if effective_train_type == "anima-lora":
             config.setdefault("network_module", "networks.lora_anima")
 
@@ -430,54 +471,44 @@ async def create_toml_file(request: Request):
     if not validated:
         return APIResponseFail(message=message)
 
-    if "prompt_file" in config and config["prompt_file"].strip() != "":
-        prompt_file = config["prompt_file"].strip()
+    if config.get("prompt_file", "").strip():
+        prompt_file = config.pop("prompt_file").strip()
         if not os.path.exists(prompt_file):
             return APIResponseFail(message=f"Prompt 文件 {prompt_file} 不存在，请检查路径。")
         config["sample_prompts"] = prompt_file
     else:
+        config.pop("prompt_file", None)
         try:
-            positive_prompt, sample_prompts_arg = get_sample_prompts(config=config)
-
+            positive_prompt, sample_prompts_arg = get_sample_prompts(config)
             if positive_prompt is not None and train_utils.is_promopt_like(sample_prompts_arg):
-                sample_prompts_file = os.path.join(os.getcwd(), f"config", "autosave", f"{timestamp}-promopt.txt")
+                sample_prompts_file = os.path.join(os.getcwd(), "config", "autosave", f"{timestamp}-promopt.txt")
                 with open(sample_prompts_file, "w", encoding="utf-8") as f:
                     f.write(sample_prompts_arg)
                 config["sample_prompts"] = sample_prompts_file
                 log.info(f"Wrote prompts to file {sample_prompts_file}")
-
         except ValueError as e:
             log.error(f"Error while processing prompts: {e}")
             return APIResponseFail(message=str(e))
 
     with open(toml_file, "w", encoding="utf-8") as f:
         f.write(toml.dumps(config))
-
-    result = process.run_train(toml_file, trainer_file, gpu_ids, suggest_cpu_threads)
-
-    return result
+    return process.run_train(toml_file, trainer_file, gpu_ids, suggest_cpu_threads)
 
 
 @router.post("/run_script")
 async def run_script(request: Request, background_tasks: BackgroundTasks):
-    paras = await request.body()
-    j = json.loads(paras.decode("utf-8"))
-    script_name = j["script_name"]
+    values = json.loads((await request.body()).decode("utf-8"))
+    script_name = values.pop("script_name")
     if script_name not in avaliable_scripts:
         return APIResponseFail(message="Script not found")
-    del j["script_name"]
-    result = []
-    for k, v in j.items():
-        result.append(f"--{k}")
-        if not isinstance(v, bool):
-            value = str(v)
-            if " " in value:
-                value = f'"{v}"'
-            result.append(value)
-    script_args = " ".join(result)
+    args = []
+    for key, value in values.items():
+        args.append(f"--{key}")
+        if not isinstance(value, bool):
+            string_value = str(value)
+            args.append(f'"{value}"' if " " in string_value else string_value)
     script_path = Path(os.getcwd()) / "scripts" / script_name
-    cmd = f"{launch_utils.python_bin} {script_path} {script_args}"
-    background_tasks.add_task(launch_utils.run, cmd)
+    background_tasks.add_task(launch_utils.run, f"{launch_utils.python_bin} {script_path} {' '.join(args)}")
     return APIResponseSuccess()
 
 
@@ -506,7 +537,7 @@ async def run_interrogate(req: TaggerInterrogateRequest, background_tasks: Backg
         replace_underscore=req.replace_underscore,
         replace_underscore_excludes=req.replace_underscore_excludes,
         escape_tag=req.escape_tag,
-        unload_model_after_running=True
+        unload_model_after_running=True,
     )
     return APIResponseSuccess()
 
@@ -526,7 +557,6 @@ async def pick_file(picker_type: str):
     result = await coro
     if result == "":
         return APIResponseFail(message="用户取消选择")
-
     return APIResponseSuccess(data={"path": result})
 
 
@@ -537,45 +567,30 @@ async def get_files(pick_type) -> APIResponse:
         "model-saved-file": {"type": "file", "path": "./output", "filter": "(.safetensors|.ckpt|.pt)"},
         "train-dir": {"type": "folder", "path": "./train", "filter": None},
     }
-
-    folder_blacklist = [".ipynb_checkpoints", ".DS_Store"]
-
-    def list_path_or_files(preset_info):
-        path = Path(preset_info["path"])
-        file_type = preset_info["type"]
-        regex_filter = preset_info["filter"]
-        result_list = []
-
-        if file_type == "file":
-            if regex_filter:
-                pattern = re.compile(regex_filter)
-                files = [f for f in path.glob("**/*") if f.is_file() and pattern.search(f.name)]
-            else:
-                files = [f for f in path.glob("**/*") if f.is_file()]
-            for file in files:
-                result_list.append({
-                    "path": str(file.resolve().absolute()).replace("\\", "/"),
-                    "name": file.name,
-                    "size": f"{round(file.stat().st_size / (1024**3),2)} GB"
-                })
-        elif file_type == "folder":
-            folders = [f for f in path.iterdir() if f.is_dir()]
-            for folder in folders:
-                if folder.name in folder_blacklist:
-                    continue
-                result_list.append({
-                    "path": str(folder.resolve().absolute()).replace("\\", "/"),
-                    "name": folder.name,
-                    "size": 0
-                })
-
-        return result_list
-
     if pick_type not in pick_preset:
         return APIResponseFail(message="Invalid request")
 
-    dirs = list_path_or_files(pick_preset[pick_type])
-    return APIResponseSuccess(data={"files": dirs})
+    preset_info = pick_preset[pick_type]
+    path = Path(preset_info["path"])
+    result_list = []
+    if preset_info["type"] == "file":
+        pattern = re.compile(preset_info["filter"]) if preset_info["filter"] else None
+        files = [item for item in path.glob("**/*") if item.is_file() and (pattern is None or pattern.search(item.name))]
+        for file in files:
+            result_list.append({
+                "path": str(file.resolve().absolute()).replace("\\", "/"),
+                "name": file.name,
+                "size": f"{round(file.stat().st_size / (1024 ** 3), 2)} GB",
+            })
+    else:
+        for folder in path.iterdir():
+            if folder.is_dir() and folder.name not in {".ipynb_checkpoints", ".DS_Store"}:
+                result_list.append({
+                    "path": str(folder.resolve().absolute()).replace("\\", "/"),
+                    "name": folder.name,
+                    "size": 0,
+                })
+    return APIResponseSuccess(data={"files": result_list})
 
 
 @router.get("/tasks", response_model_exclude_none=True)
@@ -621,5 +636,4 @@ async def get_presets() -> APIResponse:
 
 @router.get("/config/saved_params")
 async def get_saved_params() -> APIResponse:
-    saved_params = app_config["saved_params"]
-    return APIResponseSuccess(data=saved_params)
+    return APIResponseSuccess(data=app_config["saved_params"])
