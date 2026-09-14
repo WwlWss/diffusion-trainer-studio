@@ -17,6 +17,7 @@ from fastapi import Request
 import mikazuki.app.api as legacy_api
 import mikazuki.process as process
 from mikazuki.app.models import APIResponseFail
+from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
 from mikazuki.log import log
 from mikazuki.training_data_contract import validate_dataset_source
 from mikazuki.training_schema_factory import fixed_flux_family_schema, fixed_sd_schema
@@ -49,7 +50,11 @@ async def create_toml_file(request: Request):
     model_train_type = config.pop("model_train_type", "sd-lora")
     try:
         effective_train_type, trainer_file = legacy_api.resolve_training_backend(config, model_train_type)
-    except (KeyError, ValueError) as e:
+        if effective_train_type == "sdxl-finetune":
+            normalize_validate_sdxl_full(config)
+        elif effective_train_type == "flux-finetune":
+            normalize_validate_flux_full(config)
+    except (KeyError, TypeError, ValueError) as e:
         return APIResponseFail(message=f"训练类型配置无效: {e}")
 
     try:
