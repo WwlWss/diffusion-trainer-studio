@@ -15,7 +15,7 @@ from mikazuki.anima_finetune_config import (
     normalize_anima_finetune_config,
     validate_anima_finetune_config,
 )
-from mikazuki.anima_qwen_config import normalize_qwen_training_config, trainer_supports_qwen_training
+from mikazuki.anima_qwen_config import normalize_qwen_training_config
 
 
 ANIMA_VARIANTS = {"base", "2.9b"}
@@ -199,11 +199,9 @@ def prepare_anima_config(
         for key in ANIMA_OPTIONAL_FINETUNE_LRS:
             if config.get(key) in (None, ""):
                 config.pop(key, None)
-        # Capability is a launch-time requirement. Preview must remain useful
-        # while the user is filling the form or before the local sd-scripts
-        # patch has been applied.
-        if launch and train_qwen3 and os.path.exists(trainer_file) and not trainer_supports_qwen_training(trainer_file):
-            raise RuntimeError("当前 sd-scripts 尚未包含完整 Anima Qwen3 联合训练补丁。")
+        # The pinned upstream trainer intentionally stays clean. Qwen3 joint
+        # capability is materialized into an isolated trainer copy only at
+        # Start time; Preview/Export remain side-effect-free.
         if launch and train_qwen3 and config.get("qwen3_output_dir"):
             os.makedirs(str(config["qwen3_output_dir"]), exist_ok=True)
     else:
