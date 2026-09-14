@@ -11,7 +11,7 @@ from mikazuki.training_schema_factory import (
 
 _MEMORY_MODE = (
     'memory_mode: Schema.union(["auto", "lowram", "highvram"]).default("auto")'
-    '.description("模型加载模式：Auto=默认；Low RAM=优先降低主机内存；High VRAM=减少 CPU/GPU 搬运"),'
+    '.description("模型加载模式：Auto=默认；Low RAM=优先降低主机内存；High VRAM=减少 CPU/GPU 搬运")'
 )
 
 
