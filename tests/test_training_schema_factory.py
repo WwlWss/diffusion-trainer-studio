@@ -92,6 +92,7 @@ Schema.intersect([
     Schema.object({}),
   ]),
   Schema.object({
+    model_train_type: Schema.string().default("flux-lora"),
     optimizer_type: Schema.union(["AdamW", "AdamW8bit"]).default("AdamW8bit"),
     lr_scheduler: Schema.union(["constant", "cosine"]).default("constant"),
   }),
@@ -132,13 +133,7 @@ def execute_schema(source: str) -> dict:
         raise unittest.SkipTest("node is required for Schemastery runtime contract")
     script = SCHEMA_STUB + "\nconst result = " + source + ";\n" + r'''
 const keys = collectKeys(result);
-const hidden = {};
-if (result.type === "intersect" && result.list[0] && result.list[0].type === "object") {
-  for (const [key, value] of Object.entries(result.list[0].dict)) {
-    hidden[key] = {value: value.value, default: value.meta.default, hidden: value.meta.hidden};
-  }
-}
-process.stdout.write(JSON.stringify({keys, hidden}));
+process.stdout.write(JSON.stringify({keys}));
 '''
     completed = subprocess.run(
         [node, "-e", script],
@@ -150,15 +145,19 @@ process.stdout.write(JSON.stringify({keys, hidden}));
 
 
 class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
-    def test_anima_finetune_prunes_flux_and_lora_branches(self):
+    def assert_no_routing_fields(self, keys):
+        self.assertNotIn("model_type", keys)
+        self.assertNotIn("model_train_type", keys)
+        self.assertNotIn("anima_training_mode", keys)
+
+    def test_anima_finetune_prunes_flux_lora_and_all_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="anima",
             train_type="anima-finetune",
             anima_mode="finetune",
         )
-        result = execute_schema(source)
-        keys = result["keys"]
+        keys = execute_schema(source)["keys"]
 
         self.assertIn("anima_model_variant", keys)
         self.assertIn("qwen3", keys)
@@ -168,24 +167,14 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertIn("anima_only", keys)
         self.assertIn("optimizer_type", keys)
         self.assertIn("lr_scheduler", keys)
-
         self.assertNotIn("ae", keys)
         self.assertNotIn("clip_l", keys)
         self.assertNotIn("t5xxl", keys)
         self.assertNotIn("network_dim", keys)
         self.assertNotIn("flux_only", keys)
+        self.assert_no_routing_fields(keys)
 
-        self.assertEqual(result["hidden"]["model_type"], {"value": "anima", "default": "anima", "hidden": True})
-        self.assertEqual(result["hidden"]["model_train_type"]["default"], "anima-finetune")
-        self.assertEqual(result["hidden"]["anima_training_mode"]["default"], "finetune")
-
-        # The fixed discriminators exist once, in the hidden prefix only.  They
-        # must not reappear as visible duplicate selectors inside the old tree.
-        self.assertEqual(keys.count("model_type"), 1)
-        self.assertEqual(keys.count("model_train_type"), 1)
-        self.assertEqual(keys.count("anima_training_mode"), 1)
-
-    def test_anima_lora_prunes_full_branch(self):
+    def test_anima_lora_prunes_full_branch_and_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="anima",
@@ -199,8 +188,9 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertNotIn("self_attn_lr", keys)
         self.assertNotIn("train_qwen3_text_encoder", keys)
         self.assertNotIn("flux_only", keys)
+        self.assert_no_routing_fields(keys)
 
-    def test_flux_page_prunes_anima_fields(self):
+    def test_flux_page_prunes_anima_fields_and_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="flux",
@@ -215,38 +205,34 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertNotIn("anima_model_variant", keys)
         self.assertNotIn("qwen3", keys)
         self.assertNotIn("anima_only", keys)
+        self.assert_no_routing_fields(keys)
 
-    def test_chroma_page_is_t5_only_and_forces_attention_mask(self):
+    def test_chroma_page_is_t5_only_without_hidden_routing_fields(self):
         source = fixed_flux_family_schema(
             FLUX_FAMILY_SYNTHETIC,
             model_type="chroma",
             train_type="chroma-lora",
         )
-        result = execute_schema(source)
-        keys = result["keys"]
+        keys = execute_schema(source)["keys"]
         self.assertIn("ae", keys)
         self.assertIn("t5xxl", keys)
         self.assertIn("flux_only", keys)
         self.assertIn("optimizer_type", keys)
         self.assertNotIn("clip_l", keys)
+        self.assertNotIn("apply_t5_attn_mask", keys)
         self.assertNotIn("anima_model_variant", keys)
-        self.assertEqual(
-            result["hidden"]["apply_t5_attn_mask"],
-            {"value": True, "default": True, "hidden": True},
-        )
+        self.assert_no_routing_fields(keys)
 
-    def test_sd_dreambooth_does_not_inherit_sdxl_branch(self):
+    def test_sd_dreambooth_does_not_inherit_sdxl_or_routing_field(self):
         source = fixed_sd_schema(SD_SYNTHETIC, "sd-dreambooth")
-        result = execute_schema(source)
-        keys = result["keys"]
+        keys = execute_schema(source)["keys"]
         self.assertIn("v2", keys)
         self.assertIn("learning_rate_te", keys)
         self.assertIn("optimizer_type", keys)
         self.assertIn("lr_scheduler", keys)
         self.assertNotIn("learning_rate_te1", keys)
         self.assertNotIn("learning_rate_te2", keys)
-        self.assertEqual(keys.count("model_train_type"), 1)
-        self.assertEqual(result["hidden"]["model_train_type"]["default"], "sd-dreambooth")
+        self.assert_no_routing_fields(keys)
 
 
 if __name__ == "__main__":
