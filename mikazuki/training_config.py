@@ -6,6 +6,7 @@ from copy import deepcopy
 from dataclasses import dataclass, field
 from typing import Optional
 
+from mikazuki.anima_effective_config import prepare_anima_config
 from mikazuki.full_trainer_contract import (
     normalize_validate_flux_full,
     normalize_validate_sdxl_full,
@@ -110,13 +111,15 @@ def normalize_sd_dreambooth(config: dict, warnings: list[str]) -> None:
         raise ValueError("SD DreamBooth: 当前 trainer 不支持 save_model_as=pt。")
 
 
-def prepare_non_anima_config(
+def prepare_training_config(
     raw_config: dict,
     *,
     page_train_type: str | None,
     resolve_backend,
+    launch: bool = False,
+    toml_path: str | None = None,
 ) -> PreparedTrainingConfig:
-    """Prepare all non-Anima jobs; Anima is delegated to its existing contract."""
+    """Return the effective trainer config used by both preview and launch."""
     config = deepcopy(raw_config)
     warnings: list[str] = []
     gpu_ids = config.pop("gpu_ids", None)
@@ -138,7 +141,25 @@ def prepare_non_anima_config(
             warnings.append("Flux: 同时设置 step 与 epoch；按页面语义采用 max_train_steps。")
         _strip_network_training_keys(config)
         normalize_validate_flux_full(config)
+    elif effective_train_type in {"anima-lora", "anima-finetune"}:
+        prepare_anima_config(
+            config,
+            effective_train_type,
+            trainer_file,
+            launch=launch,
+            toml_path=toml_path,
+        )
 
     config.pop("model_train_type", None)
     config.pop("anima_training_mode", None)
     return PreparedTrainingConfig(effective_train_type, trainer_file, config, gpu_ids, warnings)
+
+
+# Compatibility alias for older tests/imports added during the page-isolation work.
+def prepare_non_anima_config(raw_config: dict, *, page_train_type: str | None, resolve_backend) -> PreparedTrainingConfig:
+    return prepare_training_config(
+        raw_config,
+        page_train_type=page_train_type,
+        resolve_backend=resolve_backend,
+        launch=False,
+    )
