@@ -60,9 +60,9 @@ VIRTUAL_TRAINING_PAGES = (
         path="/finetune/sdxl.html",
         aliases=("/finetune/sdxl", "/finetune/sdxl.md"),
         title="SDXL 全参微调",
-        train_type="sdxl-finetune",
+        train_type="sdxl-full",
         file_path="finetune/sdxl.md",
-        description="SDXL 全参微调：固定使用 scripts/stable/sdxl_train.py，不是 DreamBooth trainer。",
+        description="SDXL 全参微调：页面使用独立 sdxl-full schema，后端固定 scripts/stable/sdxl_train.py，不是 DreamBooth trainer。",
     ),
     TrainingPage(
         key="v-train-flux-finetune",
@@ -104,8 +104,6 @@ def page_data_js(page: TrainingPage) -> str:
         "headers": [],
         "filePathRelative": page.file_path,
     }
-    # JSON is serialized again as a JS string literal so parsing behavior is the
-    # same as VuePress' generated page-data assets.
     return f"const e=JSON.parse({_json_string(_json_string(payload))});export{{e as data}};\n"
 
 
@@ -140,10 +138,7 @@ def _route_tuple(page: TrainingPage) -> str:
 
 
 def _data_loader(page: TrainingPage) -> str:
-    return (
-        f'{_json_string(page.key)}:()=>wt(()=>import("./{page.data_asset}"),[])'
-        '.then(({data:e})=>e)'
-    )
+    return f'{_json_string(page.key)}:()=>wt(()=>import("./{page.data_asset}"),[]).then(({{data:e}})=>e)'
 
 
 def _content_loader(page: TrainingPage) -> str:
@@ -188,8 +183,6 @@ def patch_frontend_app_js(content: str) -> str:
         raise RuntimeError("Frontend sidebar anchor not found; pinned frontend layout changed")
     content = content.replace(old_lora_children, new_lora_children, 1)
 
-    # Existing page titles are also corrected so browser/router metadata agrees
-    # with the new sidebar grouping.
     content = content.replace("Dreambooth \\u8BAD\\u7EC3 \\u4E13\\u5BB6\\u6A21\\u5F0F", "SD1.5 / SD2 DreamBooth \\u5168\\u53C2\\u5FAE\\u8C03")
     content = content.replace("Flux LoRA \\u8BAD\\u7EC3 \\u4E13\\u5BB6\\u6A21\\u5F0F", "Flux LoRA \\u8BAD\\u7EC3")
     content = content.replace("LoRA \\u8BAD\\u7EC3 \\u4E13\\u5BB6\\u6A21\\u5F0F", "SD1.5 / SD2 LoRA \\u8BAD\\u7EC3")
