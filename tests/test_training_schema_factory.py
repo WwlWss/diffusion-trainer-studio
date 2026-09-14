@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import unittest
@@ -84,6 +83,7 @@ Schema.intersect([
     Schema.object({
       model_type: Schema.union(["flux", "chroma"]).required(),
       flux_only: Schema.boolean(),
+      apply_t5_attn_mask: Schema.boolean().default(true),
     }),
     Schema.object({
       model_type: Schema.const("anima").required(),
@@ -91,6 +91,10 @@ Schema.intersect([
     }),
     Schema.object({}),
   ]),
+  Schema.object({
+    optimizer_type: Schema.union(["AdamW", "AdamW8bit"]).default("AdamW8bit"),
+    lr_scheduler: Schema.union(["constant", "cosine"]).default("constant"),
+  }),
 ])
 '''
 
@@ -114,6 +118,10 @@ Schema.intersect([
     }),
     Schema.object({}),
   ]),
+  Schema.object({
+    optimizer_type: Schema.union(["AdamW", "AdamW8bit"]).default("AdamW8bit"),
+    lr_scheduler: Schema.union(["constant", "cosine"]).default("constant"),
+  }),
 ])
 '''
 
@@ -158,6 +166,8 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertIn("self_attn_lr", keys)
         self.assertIn("train_qwen3_text_encoder", keys)
         self.assertIn("anima_only", keys)
+        self.assertIn("optimizer_type", keys)
+        self.assertIn("lr_scheduler", keys)
 
         self.assertNotIn("ae", keys)
         self.assertNotIn("clip_l", keys)
@@ -185,6 +195,7 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         keys = execute_schema(source)["keys"]
         self.assertIn("anima_model_variant", keys)
         self.assertIn("network_dim", keys)
+        self.assertIn("optimizer_type", keys)
         self.assertNotIn("self_attn_lr", keys)
         self.assertNotIn("train_qwen3_text_encoder", keys)
         self.assertNotIn("flux_only", keys)
@@ -200,9 +211,29 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         self.assertIn("clip_l", keys)
         self.assertIn("t5xxl", keys)
         self.assertIn("flux_only", keys)
+        self.assertIn("optimizer_type", keys)
         self.assertNotIn("anima_model_variant", keys)
         self.assertNotIn("qwen3", keys)
         self.assertNotIn("anima_only", keys)
+
+    def test_chroma_page_is_t5_only_and_forces_attention_mask(self):
+        source = fixed_flux_family_schema(
+            FLUX_FAMILY_SYNTHETIC,
+            model_type="chroma",
+            train_type="chroma-lora",
+        )
+        result = execute_schema(source)
+        keys = result["keys"]
+        self.assertIn("ae", keys)
+        self.assertIn("t5xxl", keys)
+        self.assertIn("flux_only", keys)
+        self.assertIn("optimizer_type", keys)
+        self.assertNotIn("clip_l", keys)
+        self.assertNotIn("anima_model_variant", keys)
+        self.assertEqual(
+            result["hidden"]["apply_t5_attn_mask"],
+            {"value": True, "default": True, "hidden": True},
+        )
 
     def test_sd_dreambooth_does_not_inherit_sdxl_branch(self):
         source = fixed_sd_schema(SD_SYNTHETIC, "sd-dreambooth")
@@ -210,6 +241,8 @@ class TrainingSchemaFactoryRuntimeTests(unittest.TestCase):
         keys = result["keys"]
         self.assertIn("v2", keys)
         self.assertIn("learning_rate_te", keys)
+        self.assertIn("optimizer_type", keys)
+        self.assertIn("lr_scheduler", keys)
         self.assertNotIn("learning_rate_te1", keys)
         self.assertNotIn("learning_rate_te2", keys)
         self.assertEqual(keys.count("model_train_type"), 1)
