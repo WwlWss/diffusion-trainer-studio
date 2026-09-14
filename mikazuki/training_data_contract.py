@@ -32,13 +32,11 @@ def validate_dataset_source(
     is_file: Callable[[str], bool],
     validate_data_dir: Callable[[str], bool],
 ) -> None:
-    """Validate the effective dataset source exactly once before trainer launch.
+    """Validate and normalize the effective dataset source before launch.
 
-    Full SDXL/Flux/Anima trainers can use a dataset config. When no dataset
-    config is present, every supported GUI backend still needs a valid
-    train_data_dir. SDXL's in_json metadata mode also requires train_data_dir;
-    the metadata file changes subset construction rather than replacing the
-    image directory.
+    SDXL, Flux and Anima full trainers all give dataset_config precedence over
+    train_data_dir and in_json. In directory/metadata mode, train_data_dir is
+    still required because in_json only changes subset metadata construction.
     """
     normalize_optional_dataset_paths(config)
 
@@ -48,10 +46,16 @@ def validate_dataset_source(
             raise ValueError("当前页面不支持 dataset_config。")
         if not is_file(dataset_config):
             raise ValueError(f"dataset_config 文件不存在: {dataset_config}")
-    else:
-        train_data_dir = config.get("train_data_dir")
-        if not train_data_dir or not validate_data_dir(train_data_dir):
-            raise ValueError("训练数据集路径不存在或没有图片，请检查目录。")
+        # These are explicitly ignored by all three full trainers when a dataset
+        # config is present. Remove them so the final TOML reflects reality and
+        # callers do not scan stale/default image directories unnecessarily.
+        config.pop("train_data_dir", None)
+        config.pop("in_json", None)
+        return
+
+    train_data_dir = config.get("train_data_dir")
+    if not train_data_dir or not validate_data_dir(train_data_dir):
+        raise ValueError("训练数据集路径不存在或没有图片，请检查目录。")
 
     in_json = config.get("in_json")
     if in_json and not is_file(in_json):
