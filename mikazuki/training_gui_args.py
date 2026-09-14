@@ -10,7 +10,11 @@ from copy import deepcopy
 from typing import Iterable
 
 import re
-import toml
+
+try:  # Python 3.11+
+    import tomllib as _toml_reader
+except ModuleNotFoundError:  # pragma: no cover - compatibility with older app Python
+    import toml as _toml_reader
 
 
 PRODIGY_TYPES = {"prodigy", "prodigyplus.prodigyplusschedulefree"}
@@ -97,7 +101,7 @@ def _parse_ui_custom_params(config: dict) -> None:
     if not isinstance(payload, str):
         raise ValueError("ui_custom_params 必须是 TOML 文本。")
     try:
-        parsed = toml.loads(payload)
+        parsed = _toml_reader.loads(payload)
     except Exception as exc:
         raise ValueError(f"ui_custom_params TOML 解析失败: {exc}") from exc
     if not isinstance(parsed, dict):
