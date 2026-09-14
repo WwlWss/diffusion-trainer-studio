@@ -8,26 +8,87 @@ def fake_resolve_backend(config, requested):
     return requested, f"./{requested}.py"
 
 
+def discriminator_sensitive_resolver(config, requested):
+    """Mimic the old shared resolver closely enough to catch stale selectors."""
+    model_type = config.get("model_type")
+    anima_mode = config.get("anima_training_mode")
+    if requested in {"flux-lora", "flux-finetune"} and model_type != "flux":
+        raise ValueError(f"expected flux but got {model_type}")
+    if requested == "chroma-lora" and model_type != "chroma":
+        raise ValueError(f"expected chroma but got {model_type}")
+    if requested == "anima-lora" and (model_type != "anima" or anima_mode != "lora"):
+        raise ValueError("stale Anima LoRA discriminator")
+    if requested == "anima-finetune" and (model_type != "anima" or anima_mode != "finetune"):
+        raise ValueError("stale Anima finetune discriminator")
+    if requested.startswith("sd") and model_type not in (None, ""):
+        raise ValueError(f"SD page inherited model_type={model_type}")
+    return requested, f"./{requested}.py"
+
+
 class EffectiveTrainingConfigTests(unittest.TestCase):
-    def prepare(self, config, page_type):
+    def prepare(self, config, page_type, resolver=fake_resolve_backend):
         return prepare_training_config(
             config,
             page_train_type=page_type,
-            resolve_backend=fake_resolve_backend,
+            resolve_backend=resolver,
         )
 
     def test_outer_page_backend_wins_over_embedded_routing(self):
         prepared = self.prepare(
             {
                 "model_train_type": "sd-lora",
-                "model_type": "flux",
+                "model_type": "anima",
+                "anima_training_mode": "lora",
                 "learning_rate": "1e-5",
+                "mixed_precision": "bf16",
             },
             "flux-finetune",
+            discriminator_sensitive_resolver,
         )
         self.assertEqual(prepared.train_type, "flux-finetune")
+        self.assertEqual(prepared.config["model_type"], "flux")
         self.assertNotIn("model_train_type", prepared.config)
+        self.assertNotIn("anima_training_mode", prepared.config)
         self.assertTrue(any("页面固定后端" in warning for warning in prepared.warnings))
+        self.assertTrue(any("旧 model_type" in warning for warning in prepared.warnings))
+
+    def test_sd_page_drops_stale_flux_family_selectors(self):
+        prepared = self.prepare(
+            {
+                "model_type": "anima",
+                "anima_training_mode": "finetune",
+                "model_train_type": "sdxl-lora",
+            },
+            "lora-master",
+            discriminator_sensitive_resolver,
+        )
+        self.assertEqual(prepared.train_type, "sd-lora")
+        self.assertNotIn("model_type", prepared.config)
+        self.assertNotIn("anima_training_mode", prepared.config)
+        self.assertNotIn("model_train_type", prepared.config)
+
+    def test_anima_page_overwrites_stale_flux_and_wrong_mode(self):
+        # The resolver only succeeds if page-level routing has already replaced
+        # both stale discriminators before it is called.
+        prepared = self.prepare(
+            {
+                "model_type": "flux",
+                "anima_training_mode": "lora",
+                "anima_model_variant": "base",
+                "anima_finetune_learning_rate": "1e-5",
+                "anima_precision_mode": "mixed_bf16",
+                "anima_latent_cache_mode": "off",
+                "anima_text_encoder_cache_mode": "off",
+                "anima_checkpoint_mode": "off",
+                "optimizer_type": "AdamW8bit",
+                "lr_scheduler": "constant",
+            },
+            "anima-finetune",
+            discriminator_sensitive_resolver,
+        )
+        self.assertEqual(prepared.train_type, "anima-finetune")
+        self.assertNotIn("model_type", prepared.config)
+        self.assertNotIn("anima_training_mode", prepared.config)
 
     def test_flux_t5xxl_semantic_control_becomes_network_arg(self):
         prepared = self.prepare(
