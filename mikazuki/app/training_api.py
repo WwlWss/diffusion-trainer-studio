@@ -17,11 +17,23 @@ from mikazuki.training_request import (
     prepare_request_config,
     validate_prepared_config,
 )
-from mikazuki.training_schema_overrides import fixed_flux_family_schema, fixed_sd_schema
+from mikazuki.training_schema_overrides import (
+    fixed_flux_family_schema,
+    fixed_sd_schema,
+    override_raw_schema,
+)
 from mikazuki.utils import train_utils
 
 legacy_api._fixed_sd_schema = fixed_sd_schema
 legacy_api._fixed_flux_family_schema = fixed_flux_family_schema
+_original_append_schema = legacy_api._append_schema
+
+
+def _append_overridden_schema(name, content, lambda_hash):
+    return _original_append_schema(name, override_raw_schema(name, content), lambda_hash)
+
+
+legacy_api._append_schema = _append_overridden_schema
 router = legacy_api.router
 router.routes[:] = [
     route for route in router.routes
