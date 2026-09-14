@@ -15,16 +15,27 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertNotIn("from mikazuki.app.api import router as api_router", APPLICATION)
         self.assertIn("from mikazuki.app.training_api import router", OVERLAY)
 
-    def test_preview_and_run_live_in_one_api_module(self):
-        self.assertIn('@router.post("/training/preview")', TRAINING_API)
-        self.assertIn('@router.post("/run")', TRAINING_API)
-        self.assertGreaterEqual(TRAINING_API.count("prepare_request_config("), 2)
+    def test_preview_export_rehydrate_and_run_live_in_one_api_module(self):
+        for route in (
+            '@router.post("/training/preview")',
+            '@router.post("/training/export")',
+            '@router.post("/training/rehydrate")',
+            '@router.post("/run")',
+        ):
+            with self.subTest(route=route):
+                self.assertIn(route, TRAINING_API)
+        self.assertGreaterEqual(TRAINING_API.count("prepare_request_config("), 3)
+        self.assertIn("rehydrate_trainer_config", TRAINING_API)
         self.assertIn("validate_prepared_config", TRAINING_API)
+        self.assertIn("materialize_sidecars", TRAINING_API)
 
     def test_launch_does_not_reenter_process_normalization(self):
         self.assertIn("run_prepared_train", TRAINING_API)
         self.assertNotIn("process.run_train", TRAINING_API)
-        self.assertIn('data={"task_id": task.task_id}', LAUNCHER)
+        self.assertIn('"task_id": task.task_id', LAUNCHER)
+        self.assertIn('"page_train_type": page_train_type', LAUNCHER)
+        self.assertIn('"run_id": run_id', LAUNCHER)
+        self.assertIn('"toml_path": toml_path', LAUNCHER)
 
     def test_runtime_schema_and_frontend_patches_are_wired(self):
         self.assertIn("legacy_api._fixed_sd_schema = fixed_sd_schema", TRAINING_API)
