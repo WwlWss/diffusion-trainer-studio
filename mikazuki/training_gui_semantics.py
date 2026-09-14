@@ -1,13 +1,12 @@
 """Trainer semantic normalization owned by the Python backend.
 
 This module is the single semantic layer between raw GUI state and trainer
-arguments.  The legacy frontend must never run parseParams() first.
+arguments. The legacy frontend must never run parseParams()/checkParams() first.
 """
 
 from __future__ import annotations
 
 from mikazuki.training_gui_args import (
-    PRODIGY_TYPES,
     _arg_key,
     _as_bool,
     _is_empty,
@@ -27,15 +26,16 @@ def apply_ui_custom_overrides(config: dict) -> None:
 
 
 def normalize_adaptive_optimizer_learning_rates(config: dict, warnings: list[str]) -> None:
-    """Materialize the LR convention expected by D-Adaptation/Prodigy.
+    """Materialize only the LR rewrite the legacy GUI actually performed.
 
-    The old frontend rewrote these values to 1.0. Doing it here prevents a raw
-    semantic LR (for example Anima full's 1e-5 control) from conflicting with a
-    second frontend-generated ``learning_rate=1`` value.
+    D-Adaptation rewrote all active learning rates to 1.0. Prodigy did not: the
+    old UI merely warned when component LRs were not 1 and generated optimizer
+    args. Keeping those behaviors distinct avoids silently changing existing
+    Prodigy recipes while still moving the former frontend semantics to Python.
     """
     optimizer = str(config.get("optimizer_type") or "")
     lower = optimizer.lower()
-    if not (lower.startswith(DADAPT_PREFIX) or lower in PRODIGY_TYPES):
+    if not lower.startswith(DADAPT_PREFIX):
         return
 
     changed = []
@@ -74,6 +74,12 @@ def normalize_sd_token_length(config: dict, warnings: list[str]) -> None:
     elif config.get("max_token_length") == 255:
         config["max_token_length"] = 225
         warnings.append("旧 GUI 的 max_token_length=255 不被 trainer 接受；已迁移为 225。")
+    elif "max_token_length" in config and config.get("max_token_length") not in (None, "", 150, 225):
+        value = config.get("max_token_length")
+        if value == 75:
+            config.pop("max_token_length", None)
+        else:
+            raise ValueError("SD/SDXL max_token_length 只能是 75 / 150 / 225（75 在 TOML 中省略）。")
 
 
 def normalize_common_dataloader(config: dict) -> None:
@@ -98,9 +104,10 @@ def normalize_dataset_source(config: dict) -> None:
         raise ValueError("dataset_source 只能是 folder / config。")
     if str(source) == "config" and not has_config:
         raise ValueError("dataset_source=config 时必须填写 dataset_config。")
+    if str(source) == "folder":
+        config.pop("dataset_config", None)
+        has_config = False
     if has_config:
-        # dataset_config owns dataset/subset layout. Folder/metadata fields must
-        # not silently leak into the trainer and change its source selection.
         for key in ("train_data_dir", "reg_data_dir", "in_json"):
             config.pop(key, None)
     else:
@@ -140,7 +147,6 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
     target = config.pop("flux_lora_target", None)
     legacy_train_t5 = _as_bool(config.pop("train_t5xxl", False))
     if target in (None, ""):
-        # Backward-compatible legacy state.
         target = "dit_t5xxl" if chroma and legacy_train_t5 else (
             "dit_clip_l_t5xxl" if legacy_train_t5 else None
         )
@@ -174,6 +180,23 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
         config["network_args"] = args
     else:
         config.pop("network_args", None)
+
+
+def validate_legacy_common_conflicts(config: dict, effective_train_type: str) -> None:
+    """Preserve checkParams() invariants after removing frontend validation."""
+    if config.get("noise_offset") not in (None, "", 0, 0.0) and config.get("multires_noise_iterations") not in (None, "", 0, 0.0):
+        raise ValueError("noise_offset 与 multires_noise_iterations 不能同时启用。")
+
+    latent_cache = _as_bool(config.get("cache_latents")) or _as_bool(config.get("cache_latents_to_disk"))
+    if latent_cache and (_as_bool(config.get("color_aug")) or _as_bool(config.get("random_crop"))):
+        raise ValueError("latent cache 不能与 color_aug / random_crop 同时启用。")
+
+    te_cache = _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
+    if te_cache and _as_bool(config.get("shuffle_caption")):
+        raise ValueError("Text Encoder output cache 不能与 shuffle_caption 同时启用。")
+
+    if str(config.get("network_module") or "") == "networks.oft" and effective_train_type != "sdxl-lora":
+        raise ValueError("OFT 当前仅支持 SDXL LoRA。")
 
 
 # Backward-compatible import surface for callers/tests.
