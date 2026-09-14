@@ -1,4 +1,7 @@
 from pathlib import Path
+import json
+import shutil
+import subprocess
 import unittest
 
 from mikazuki.training_schema_overrides import (
@@ -10,6 +13,25 @@ from mikazuki.training_schema_overrides import (
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "mikazuki" / "schema"
+
+
+def assert_js_expression_compiles(testcase: unittest.TestCase, source: str, label: str) -> None:
+    node = shutil.which("node")
+    if not node:
+        raise unittest.SkipTest("node is required for transformed schema syntax checks")
+    # new Function compiles without evaluating the expression, so runtime globals
+    # such as Schema / SHARED_SCHEMAS / UpdateSchema need not be stubbed here.
+    body = "return (\n" + source + "\n);"
+    completed = subprocess.run(
+        [node, "-e", f"new Function({json.dumps(body)});"],
+        capture_output=True,
+        text=True,
+    )
+    testcase.assertEqual(
+        completed.returncode,
+        0,
+        f"{label} transformed schema is not valid JavaScript:\n{completed.stderr}",
+    )
 
 
 class TrainingSchemaOverrideTests(unittest.TestCase):
@@ -69,6 +91,31 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertIn("torch_compile", fixed)
         self.assertIn('dynamo_backend: Schema.string().default("inductor")', fixed)
         self.assertIn("memory_mode", fixed)
+
+    def test_all_transformed_training_schemas_remain_valid_javascript(self):
+        lora_master = (SCHEMA / "lora-master.ts").read_text(encoding="utf-8")
+        dreambooth = (SCHEMA / "dreambooth.ts").read_text(encoding="utf-8")
+        flux_lora = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
+        transformed = {
+            "sd-lora": fixed_sd_schema(lora_master, "sd-lora"),
+            "sdxl-lora": fixed_sd_schema(lora_master, "sdxl-lora"),
+            "sd-dreambooth": fixed_sd_schema(dreambooth, "sd-dreambooth"),
+            "flux-lora": fixed_flux_family_schema(flux_lora, "flux", "flux-lora"),
+            "chroma-lora": fixed_flux_family_schema(flux_lora, "chroma", "chroma-lora"),
+            "anima-lora": fixed_flux_family_schema(flux_lora, "anima", "anima-lora", "lora"),
+            "anima-finetune": fixed_flux_family_schema(flux_lora, "anima", "anima-finetune", "finetune"),
+            "flux-finetune": override_raw_schema(
+                "flux-finetune",
+                (SCHEMA / "flux-finetune.ts").read_text(encoding="utf-8"),
+            ),
+            "sdxl-finetune": override_raw_schema(
+                "sdxl-full",
+                (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8"),
+            ),
+        }
+        for label, source in transformed.items():
+            with self.subTest(label=label):
+                assert_js_expression_compiles(self, source, label)
 
 
 if __name__ == "__main__":
