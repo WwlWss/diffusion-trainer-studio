@@ -17,6 +17,9 @@ def run_prepared_train(
     trainer_file: str,
     gpu_ids: Optional[list] = None,
     cpu_threads: Optional[int] = 2,
+    *,
+    page_train_type: str | None = None,
+    run_id: str | None = None,
 ):
     """Start Accelerate without mutating trainer configuration again."""
     log.info(f"Training started with effective config / 使用最终配置启动训练: {toml_path}")
@@ -46,9 +49,19 @@ def run_prepared_train(
                 env["USE_LIBUV"] = "0"
                 args[3:3] = ["--rdzv_backend", "c10d"]
 
-    task = tm.create_task(args, env)
+    task = tm.create_task(
+        args,
+        env,
+        metadata={
+            "page_train_type": page_train_type,
+            "run_id": run_id,
+            "toml_path": toml_path,
+        },
+    )
     if not task:
-        return APIResponse(status="error", message="Failed to create task / 无法创建训练任务")
+        active = tm.find_active_task()
+        data = {"active_task_id": active.task_id} if active else None
+        return APIResponse(status="error", message="已有训练任务正在启动或运行，不能重复 Start。", data=data)
 
     def _run():
         try:
@@ -65,5 +78,5 @@ def run_prepared_train(
     return APIResponse(
         status="success",
         message=f"Training started / 训练开始 ID: {task.task_id}",
-        data={"task_id": task.task_id},
+        data={"task_id": task.task_id, "run_id": run_id, "page_train_type": page_train_type},
     )

@@ -4,12 +4,7 @@ import shutil
 import subprocess
 import unittest
 
-from mikazuki.training_schema_overrides import (
-    fixed_flux_family_schema,
-    fixed_sd_schema,
-    override_raw_schema,
-)
-
+from mikazuki.training_schema_overrides import fixed_flux_family_schema, fixed_sd_schema, override_raw_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 SCHEMA = ROOT / "mikazuki" / "schema"
@@ -19,27 +14,21 @@ def assert_js_expression_compiles(testcase: unittest.TestCase, source: str, labe
     node = shutil.which("node")
     if not node:
         raise unittest.SkipTest("node is required for transformed schema syntax checks")
-    # Schema source files are standalone expression statements and therefore end
-    # with a semicolon. Strip only that final statement terminator before placing
-    # the expression inside return (...);. new Function compiles without
-    # evaluating runtime globals such as Schema / SHARED_SCHEMAS / UpdateSchema.
     expression = source.strip()
     if expression.endswith(";"):
         expression = expression[:-1].rstrip()
     body = "return (\n" + expression + "\n);"
-    completed = subprocess.run(
-        [node, "-e", f"new Function({json.dumps(body)});"],
-        capture_output=True,
-        text=True,
-    )
-    testcase.assertEqual(
-        completed.returncode,
-        0,
-        f"{label} transformed schema is not valid JavaScript:\n{completed.stderr}",
-    )
+    completed = subprocess.run([node, "-e", f"new Function({json.dumps(body)});"], capture_output=True, text=True)
+    testcase.assertEqual(completed.returncode, 0, f"{label} transformed schema is not valid JavaScript:\n{completed.stderr}")
 
 
 class TrainingSchemaOverrideTests(unittest.TestCase):
+    def test_shared_wandb_api_key_is_optional(self):
+        source = (SCHEMA / "shared.ts").read_text(encoding="utf-8")
+        fixed = override_raw_schema("shared", source)
+        self.assertIn("wandb_api_key: Schema.string().description", fixed)
+        self.assertNotIn("wandb_api_key: Schema.string().required()", fixed)
+
     def test_dreambooth_uses_real_save_formats_token_mode_and_shared_logging(self):
         source = (SCHEMA / "dreambooth.ts").read_text(encoding="utf-8")
         fixed = fixed_sd_schema(source, "sd-dreambooth")
@@ -48,21 +37,39 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertIn("sd_max_token_length_mode", fixed)
         self.assertNotIn("max_token_length: Schema.number().default(255)", fixed)
         self.assertIn("SHARED_SCHEMAS.LOG_SETTINGS", fixed)
-        self.assertNotIn('log_with: Schema.union(["tensorboard", "wandb"])', fixed)
+        self.assertIn("dataset_source", fixed)
+        self.assertIn("dataset_config", fixed)
         self.assertIn("memory_mode", fixed)
 
-    def test_sdxl_lora_does_not_render_clip_skip(self):
+    def test_sd_lora_uses_semantic_token_target_and_dataset_source(self):
+        source = (SCHEMA / "lora-master.ts").read_text(encoding="utf-8")
+        fixed = fixed_sd_schema(source, "sd-lora")
+        self.assertIn("sd_max_token_length_mode", fixed)
+        self.assertIn("lora_target", fixed)
+        self.assertNotIn("network_train_unet_only: Schema.boolean", fixed)
+        self.assertNotIn("network_train_text_encoder_only: Schema.boolean", fixed)
+        self.assertIn("dataset_source", fixed)
+        self.assertIn("dataset_config", fixed)
+
+    def test_sdxl_lora_defaults_and_no_clip_skip(self):
         source = (SCHEMA / "lora-master.ts").read_text(encoding="utf-8")
         fixed = fixed_sd_schema(source, "sdxl-lora")
         self.assertNotIn("SHARED_SCHEMAS.OTHER,", fixed)
         self.assertNotIn("clip_skip", fixed)
+        self.assertIn('resolution: Schema.string().default("1024,1024")', fixed)
+        self.assertIn("max_bucket_reso: Schema.number().default(2048)", fixed)
+        self.assertIn("bucket_reso_steps: Schema.number().default(32)", fixed)
         self.assertIn("memory_mode", fixed)
 
-    def test_flux_and_chroma_lora_gain_flux_shift_and_memory_mode(self):
+    def test_flux_and_chroma_lora_gain_semantic_target_dataset_and_memory(self):
         source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
-        fixed = fixed_flux_family_schema(source, "flux", "flux-lora")
-        self.assertIn('"shift", "flux_shift"', fixed)
-        self.assertIn("memory_mode", fixed)
+        flux = fixed_flux_family_schema(source, "flux", "flux-lora")
+        chroma = fixed_flux_family_schema(source, "chroma", "chroma-lora")
+        self.assertIn('"shift", "flux_shift"', flux)
+        self.assertIn('Schema.union(["dit", "dit_clip_l", "dit_clip_l_t5xxl"])', flux)
+        self.assertIn('Schema.union(["dit", "dit_t5xxl"])', chroma)
+        self.assertIn("dataset_config", flux)
+        self.assertIn("memory_mode", flux)
 
     def test_anima_lora_target_is_not_locked_to_dit(self):
         source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
@@ -72,14 +79,12 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertNotIn("固定为仅训练 Anima DiT LoRA", fixed)
         self.assertIn("memory_mode", fixed)
 
-    def test_anima_full_uses_same_mutually_exclusive_memory_mode(self):
+    def test_anima_full_removes_unimplemented_lowram_option(self):
         source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         fixed = fixed_flux_family_schema(source, "anima", "anima-finetune", "finetune")
-        self.assertIn('memory_mode: Schema.union(["auto", "lowram", "highvram"])', fixed)
-        self.assertNotIn(
-            'highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式',
-            fixed,
-        )
+        self.assertIn('memory_mode: Schema.union(["auto", "highvram"])', fixed)
+        self.assertNotIn('memory_mode: Schema.union(["auto", "lowram", "highvram"])', fixed)
+        self.assertNotIn('highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式', fixed)
 
     def test_sdxl_full_removes_fake_vpred_controls_and_adds_compile(self):
         source = (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8")
@@ -109,14 +114,8 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
             "chroma-lora": fixed_flux_family_schema(flux_lora, "chroma", "chroma-lora"),
             "anima-lora": fixed_flux_family_schema(flux_lora, "anima", "anima-lora", "lora"),
             "anima-finetune": fixed_flux_family_schema(flux_lora, "anima", "anima-finetune", "finetune"),
-            "flux-finetune": override_raw_schema(
-                "flux-finetune",
-                (SCHEMA / "flux-finetune.ts").read_text(encoding="utf-8"),
-            ),
-            "sdxl-finetune": override_raw_schema(
-                "sdxl-full",
-                (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8"),
-            ),
+            "flux-finetune": override_raw_schema("flux-finetune", (SCHEMA / "flux-finetune.ts").read_text(encoding="utf-8")),
+            "sdxl-finetune": override_raw_schema("sdxl-full", (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8")),
         }
         for label, source in transformed.items():
             with self.subTest(label=label):
