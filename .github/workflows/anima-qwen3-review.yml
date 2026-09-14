@@ -16,6 +16,7 @@ on:
       - "tests/test_anima_finetune_integration.py"
       - "tests/test_anima_finetune_trainer_coverage.py"
       - "tests/test_anima_process_advanced.py"
+      - "tests/test_anima_gui_trainer_contract.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -50,7 +51,8 @@ jobs:
             tests/test_anima_finetune_config.py \
             tests/test_anima_finetune_integration.py \
             tests/test_anima_finetune_trainer_coverage.py \
-            tests/test_anima_process_advanced.py
+            tests/test_anima_process_advanced.py \
+            tests/test_anima_gui_trainer_contract.py
 
       - name: Syntax-check expert GUI schema
         run: |
