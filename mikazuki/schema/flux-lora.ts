@@ -27,9 +27,6 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
-    // Legacy frontend caches disabled default fields when a union branch changes.
-    // Therefore model_train_type is exposed only for Flux/Chroma. For Anima the
-    // backend derives anima-lora/anima-finetune exclusively from anima_training_mode.
     Schema.union([
         Schema.object({
             model_type: Schema.union(["flux", "chroma"]).required(),
@@ -78,16 +75,24 @@ Schema.intersect([
         })
     ).description("数据集设置"),
 
-    // Anima full finetune always writes safetensors. Do not reuse the shared
-    // save_model_as selector because it falsely advertises ckpt/pt support.
+    // Keep the existing save UI for LoRA. Only full finetune is fixed to the
+    // Anima safetensors saver and therefore gets a format-specific save block.
     Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
             SHARED_SCHEMAS.SAVE_SETTINGS,
         ]),
+        Schema.intersect([
+            Schema.object({
+                model_type: Schema.const("anima").required(),
+                anima_training_mode: Schema.const("lora").required(),
+            }),
+            SHARED_SCHEMAS.SAVE_SETTINGS,
+        ]),
         Schema.object({
             model_type: Schema.const("anima").required(),
-            output_name: Schema.string().default("aki").description("模型保存名称；Anima 固定保存为 safetensors"),
+            anima_training_mode: Schema.const("finetune").required(),
+            output_name: Schema.string().default("aki").description("模型保存名称；Anima full finetune 固定保存为 safetensors"),
             output_dir: Schema.string().role('filepicker', { type: "folder" }).default("./output").description("模型保存文件夹"),
             save_precision: Schema.union(["fp16", "float", "bf16"]).default("bf16").description("checkpoint 保存精度；全参 BF16 训练建议保存 bf16"),
             save_every_n_epochs: Schema.number().min(1).default(1).description("每 N epoch 保存一次模型"),
@@ -97,7 +102,7 @@ Schema.intersect([
             save_state_on_train_end: Schema.boolean().default(false).description("训练结束时额外保存最后的训练状态"),
             save_last_n_epochs_state: Schema.number().min(1).description("最多保留最近 N 个 epoch state"),
             save_last_n_steps_state: Schema.number().min(1).description("按 step 保存时仅保留最近 N step 范围内的 state"),
-        }).description("Anima 保存设置（固定 safetensors）"),
+        }).description("Anima 全参微调保存设置（固定 safetensors）"),
         Schema.object({}),
     ]),
 
@@ -117,6 +122,7 @@ Schema.intersect([
             save_every_n_steps: Schema.number().min(1).description("可选：每 N step 保存一次模型"),
             train_batch_size: Schema.number().min(1).default(1).description("批量大小"),
             gradient_checkpointing: Schema.boolean().default(true).description("梯度检查点"),
+            unsloth_offload_checkpointing: Schema.boolean().default(false).description("异步将 checkpoint activation 卸载到 CPU；不能与 blocks_to_swap 同时使用"),
             gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累加步数"),
         }).description("Anima LoRA 训练相关参数"),
         Schema.object({
@@ -173,10 +179,10 @@ Schema.intersect([
                 anima_finetune_learning_rate: Schema.string().default("1e-5").description("Anima 全参 DiT 总学习率；必须大于 0。分组件学习率留空时继承此值"),
                 lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]).default("constant").description("学习率调度器"),
                 lr_warmup_steps: Schema.number().default(0).description("学习率预热步数"),
-                lr_decay_steps: Schema.number().min(0).description("学习率衰减步数；支持整数或通过自定义参数使用比例"),
+                lr_decay_steps: Schema.number().min(0).description("学习率衰减步数"),
                 loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数类型"),
-                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap"]).default("uniform").description("Anima 实际实现的 loss weighting；不暴露 parser 中目前会退化成 uniform 的 mode/logit_normal"),
-                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME"]).default("AdamW8bit").description("优化器设置；训练 Qwen3 时仅允许 GUI 警告中列出的独立参数组 LR 安全优化器"),
+                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap"]).default("uniform").description("Anima 实际实现的 loss weighting；不暴露目前会退化成 uniform 的 mode/logit_normal"),
+                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME"]).default("AdamW8bit").description("优化器设置；训练 Qwen3 时仅允许具有可靠独立参数组 LR 的优化器"),
                 optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
             }).description("Anima 全参微调学习率与优化器"),
             Schema.union([
@@ -280,8 +286,6 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
-    // Anima uses its own fixed rectified-flow Euler sampler. Do not show the
-    // shared SD sample_sampler selector because changing it has no effect.
     Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
@@ -386,6 +390,8 @@ Schema.intersect([
             cache_text_encoder_outputs_to_disk: Schema.boolean().default(true).description("将 Qwen3 输出缓存到磁盘"),
             persistent_data_loader_workers: Schema.boolean().default(true).description("保留 DataLoader workers"),
             vae_batch_size: Schema.number().min(1).default(1).description("VAE 编码批量大小"),
+            cuda_allow_tf32: Schema.boolean().default(true).description("允许 Ampere 及更新 GPU 使用 TF32；Anima LoRA trainer 会实际应用该设置"),
+            cuda_cudnn_benchmark: Schema.boolean().default(false).description("启用 cuDNN benchmark；输入形状变化很大时未必更快"),
         }).description("Anima LoRA 速度与缓存选项"),
         Schema.object({
             model_type: Schema.const("anima").required(),
@@ -400,8 +406,5 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
-    // Keep the shared DDP timeout/bucket-view controls. DeepSpeed is deliberately
-    // not exposed here yet: Qwen joint training rejects it and frozen-Qwen full
-    // finetune needs a separate advanced-UI pass with ZeRO-dependent validation.
     SHARED_SCHEMAS.DISTRIBUTED_TRAINING
 ]);
