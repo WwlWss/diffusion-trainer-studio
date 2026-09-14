@@ -1,14 +1,12 @@
 [metadata]
 name = "Anima 2.9B LoRA 训练"
-version = "1.0"
+version = "1.1"
 author = "WwlWss"
-train_type = "flux-lora"
-description = "使用支持 40-block Anima 2.9B 的 sd-scripts anima_train_network.py 训练 LoRA。"
+train_type = "anima-lora"
+description = "使用支持 40-block Anima 2.9B 的 sd-scripts/anima_train_network.py 训练 LoRA。"
 
 [data]
-model_type = "anima"
 anima_model_variant = "2.9b"
-anima_training_mode = "lora"
 network_module = "networks.lora_anima"
 network_dim = 8
 network_alpha = 1
