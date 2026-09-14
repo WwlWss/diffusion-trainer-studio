@@ -2,14 +2,14 @@
 
 The legacy GUI exposes several low-level sd-scripts booleans independently.
 That makes it easy to create contradictory configurations (for example disk
-cache without cache, or full_fp16 together with bf16 mixed precision).  New
+cache without cache, or full_fp16 together with bf16 mixed precision). New
 Anima full-finetune UI fields describe the user's intent as mutually-exclusive
 modes; this module converts them to the raw sd-scripts arguments immediately
 before launch.
 
 Legacy presets remain supported: if a semantic field is absent, the existing
 raw sd-scripts fields are normalized to their effective behaviour and then
-validated.  The functions are intentionally idempotent so the API and process
+validated. The functions are intentionally idempotent so the API and process
 boundaries may both call them in the future.
 """
 
@@ -68,7 +68,7 @@ CHECKPOINT_MODES: Mapping[str, tuple[bool, bool, bool]] = {
 }
 
 # anima_train_utils.compute_loss_weighting_for_anima genuinely implements only
-# these behaviours.  The shared parser advertises additional SD3-style names,
+# these behaviours. The shared parser advertises additional SD3-style names,
 # but they currently fall back to uniform weighting in the Anima helper.
 SUPPORTED_ANIMA_WEIGHTING_SCHEMES = {
     "uniform",
@@ -304,7 +304,7 @@ def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> No
             "Anima: cpu_offload_checkpointing 与 unsloth_offload_checkpointing 不能同时启用。"
         )
 
-    # Current anima_train.py always writes safetensors.  Accept and remove the
+    # Current anima_train.py always writes safetensors. Accept and remove the
     # legacy shared-GUI default, but reject choices that would falsely imply a
     # different output format.
     save_model_as = config.pop("save_model_as", None)
@@ -314,12 +314,14 @@ def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> No
         )
 
     # These options currently parse successfully but do not affect the full
-    # trainer.  Reject true/non-empty values instead of silently contaminating
+    # trainer. Reject true/non-empty values instead of silently contaminating
     # experiments with no-op controls.
     unsupported_truthy = {
         "no_half_vae": "no_half_vae",
         "lowram": "lowram",
         "compile": "compile / per-block torch.compile",
+        "cuda_allow_tf32": "cuda_allow_tf32",
+        "cuda_cudnn_benchmark": "cuda_cudnn_benchmark",
     }
     for key, label in unsupported_truthy.items():
         if _as_bool(config.get(key)):
