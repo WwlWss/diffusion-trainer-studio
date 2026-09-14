@@ -66,6 +66,43 @@ def _resolve_requested_backend(config: dict, page_train_type: str | None, warnin
     return str(embedded or "sd-lora")
 
 
+def _enforce_page_discriminators(config: dict, requested: str, warnings: list[str]) -> None:
+    """Overwrite stale legacy selectors before the old backend resolver sees them.
+
+    The prebuilt frontend reuses form state between pages and custom TOML may
+    also contain obsolete routing keys.  Page routing lives outside the trainer
+    config now, so those values are never allowed to switch a fixed page to a
+    different Python trainer.
+    """
+    stale_model_type = config.get("model_type")
+    stale_anima_mode = config.get("anima_training_mode")
+
+    if requested in {"flux-lora", "flux-finetune"}:
+        if stale_model_type not in (None, "", "flux"):
+            warnings.append(f"Flux 页面已忽略旧 model_type={stale_model_type!r}。")
+        config["model_type"] = "flux"
+        config.pop("anima_training_mode", None)
+    elif requested == "chroma-lora":
+        if stale_model_type not in (None, "", "chroma"):
+            warnings.append(f"Chroma 页面已忽略旧 model_type={stale_model_type!r}。")
+        config["model_type"] = "chroma"
+        config.pop("anima_training_mode", None)
+    elif requested in {"anima-lora", "anima-finetune"}:
+        expected_mode = "lora" if requested == "anima-lora" else "finetune"
+        if stale_model_type not in (None, "", "anima"):
+            warnings.append(f"Anima 页面已忽略旧 model_type={stale_model_type!r}。")
+        if stale_anima_mode not in (None, "", expected_mode):
+            warnings.append(f"Anima 页面已忽略旧 anima_training_mode={stale_anima_mode!r}。")
+        config["model_type"] = "anima"
+        config["anima_training_mode"] = expected_mode
+    else:
+        # SD/SDXL/SD3 pages must never be redirected by Flux-family selectors.
+        if stale_model_type not in (None, ""):
+            warnings.append(f"当前页面已忽略旧 model_type={stale_model_type!r}。")
+        config.pop("model_type", None)
+        config.pop("anima_training_mode", None)
+
+
 def _normalize_memory_mode(config: dict) -> None:
     semantic = config.pop("memory_mode", None)
     if semantic not in (None, ""):
@@ -124,6 +161,7 @@ def prepare_training_config(
     warnings: list[str] = []
     gpu_ids = config.pop("gpu_ids", None)
     requested = _resolve_requested_backend(config, page_train_type, warnings)
+    _enforce_page_discriminators(config, requested, warnings)
     effective_train_type, trainer_file = resolve_backend(config, requested)
     _normalize_memory_mode(config)
 
