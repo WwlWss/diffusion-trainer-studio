@@ -19,13 +19,18 @@ import mikazuki.process as process
 from mikazuki.app.models import APIResponseFail
 from mikazuki.log import log
 from mikazuki.training_data_contract import validate_dataset_source
+from mikazuki.training_schema_factory import fixed_flux_family_schema, fixed_sd_schema
 from mikazuki.utils import train_utils
 
 
+# load_schemas() resolves these names from the legacy module at call time. Point
+# them at the pure, independently testable implementations used by the new page
+# contracts instead of maintaining two runtime copies.
+legacy_api._fixed_sd_schema = fixed_sd_schema
+legacy_api._fixed_flux_family_schema = fixed_flux_family_schema
+
 router = legacy_api.router
 
-# Remove the legacy training submission route before registering the corrected
-# handler. All other API endpoints remain unchanged.
 router.routes[:] = [
     route
     for route in router.routes
@@ -41,8 +46,6 @@ async def create_toml_file(request: Request):
     train_utils.fix_config_types(config)
 
     gpu_ids = config.pop("gpu_ids", None)
-    train_data_dir = config.get("train_data_dir")
-    suggest_cpu_threads = 8 if train_data_dir and len(train_utils.get_total_images(train_data_dir)) > 200 else 2
     model_train_type = config.pop("model_train_type", "sd-lora")
     try:
         effective_train_type, trainer_file = legacy_api.resolve_training_backend(config, model_train_type)
@@ -58,6 +61,9 @@ async def create_toml_file(request: Request):
         )
     except ValueError as e:
         return APIResponseFail(message=str(e))
+
+    train_data_dir = config.get("train_data_dir")
+    suggest_cpu_threads = 8 if train_data_dir and len(train_utils.get_total_images(train_data_dir)) > 200 else 2
 
     if effective_train_type in {"anima-lora", "anima-finetune"}:
         if not os.path.exists(trainer_file):
