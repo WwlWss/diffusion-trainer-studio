@@ -70,7 +70,7 @@ def _enforce_page_discriminators(config: dict, requested: str, warnings: list[st
     """Overwrite stale legacy selectors before the old backend resolver sees them.
 
     The prebuilt frontend reuses form state between pages and custom TOML may
-    also contain obsolete routing keys.  Page routing lives outside the trainer
+    also contain obsolete routing keys. Page routing lives outside the trainer
     config now, so those values are never allowed to switch a fixed page to a
     different Python trainer.
     """
@@ -96,7 +96,6 @@ def _enforce_page_discriminators(config: dict, requested: str, warnings: list[st
         config["model_type"] = "anima"
         config["anima_training_mode"] = expected_mode
     else:
-        # SD/SDXL/SD3 pages must never be redirected by Flux-family selectors.
         if stale_model_type not in (None, ""):
             warnings.append(f"当前页面已忽略旧 model_type={stale_model_type!r}。")
         config.pop("model_type", None)
@@ -187,13 +186,15 @@ def prepare_training_config(
             launch=launch,
             toml_path=toml_path,
         )
+        # Anima trainers do not consume the shared Flux-family selector. Do not
+        # depend on the legacy resolver to remove it as a side effect.
+        config.pop("model_type", None)
 
     config.pop("model_train_type", None)
     config.pop("anima_training_mode", None)
     return PreparedTrainingConfig(effective_train_type, trainer_file, config, gpu_ids, warnings)
 
 
-# Compatibility alias for older tests/imports added during the page-isolation work.
 def prepare_non_anima_config(raw_config: dict, *, page_train_type: str | None, resolve_backend) -> PreparedTrainingConfig:
     return prepare_training_config(
         raw_config,
