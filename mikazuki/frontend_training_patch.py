@@ -36,6 +36,19 @@ def patch_training_layout_js(content: str) -> str:
         'C=ref([]),d=ref([]),__effectiveToml=ref("Loading..."),__previewTimer=null,__previewGeneration=0,__startPending=ref(!1),w=["network_args_custom","optimizer_args_custom"]',
         "effective preview state",
     )
+
+    # T() feeds every backend training request. The pinned frontend normalizes
+    # custom argument arrays by assigning them back into its input object. Once
+    # live Preview became a deep-watched async request, doing that directly on
+    # a.value retriggered the watcher and invalidated every in-flight generation,
+    # leaving the panel permanently at "Loading...". Normalize a clone instead.
+    content = _replace_once(
+        content,
+        'T=()=>{let _=a.value;w.forEach(g=>{_&&_.hasOwnProperty(g)&&_[g]!=null&&(_[g]=_[g].map(N=>N||""))});let m=n.value(_);return w.forEach(g=>{m.hasOwnProperty(g)&&m[g].length==0&&delete m[g]}),m}',
+        'T=()=>{let _=clone(a.value);w.forEach(g=>{_&&_.hasOwnProperty(g)&&_[g]!=null&&(_[g]=_[g].map(N=>N||""))});let m=n.value(_);return w.forEach(g=>{m.hasOwnProperty(g)&&m[g].length==0&&delete m[g]}),m}',
+        "pure raw gui normalization",
+    )
+
     content = _replace_once(
         content,
         'onMounted(async()=>{I(),y()})',
@@ -99,6 +112,7 @@ def patch_training_layout_js(content: str) -> str:
         'O=async()=>{const _=parseParams(',
         'stringify(parseParams(n.value(clone(m.value)),t))',
         'a.value=Object.assign({},n.value(),B)',
+        'T=()=>{let _=a.value;',
     )
     for anchor in forbidden:
         if anchor in content:
