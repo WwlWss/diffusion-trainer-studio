@@ -79,8 +79,26 @@ jobs:
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
 
-      - name: Run training page routing contracts
-        run: python -m unittest tests.test_training_page_routing -v
+      - name: Contract - backend mapping
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_one_backend_key_maps_to_one_concrete_trainer -v
+
+      - name: Contract - virtual page schema names
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_virtual_pages_use_dedicated_schema_names -v
+
+      - name: Contract - frontend sidebar and routes
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_frontend_bundle_patch_creates_separate_sidebar_groups_and_routes -v
+
+      - name: Contract - Flux full schema
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_flux_full_schema_has_no_lora_network_hyperparameters -v
+
+      - name: Contract - SDXL full schema
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_sdxl_full_schema_is_not_dreambooth_or_lora_ui -v
+
+      - name: Contract - legacy templates
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_source_templates_remain_for_legacy_compatibility -v
+
+      - name: Contract - migrated presets
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_migrated_presets_target_dedicated_pages -v
 
       - name: Validate sd-scripts patch against pinned source
         run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
