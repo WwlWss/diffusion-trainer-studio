@@ -85,6 +85,23 @@ ANIMA_FINETUNE_ONLY_KEYS = {
     "mod_lr",
     "llm_adapter_lr",
     "cpu_offload_checkpointing",
+    "fused_backward_pass",
+    "deepspeed",
+    "zero_stage",
+    "offload_optimizer_device",
+    "offload_optimizer_nvme_path",
+    "offload_param_device",
+    "offload_param_nvme_path",
+    "zero3_init_flag",
+    "zero3_save_16bit_model",
+    "fp16_master_weights_and_gradients",
+    "torch_compile",
+    "dynamo_backend",
+    "ddp_static_graph",
+    "dataset_config",
+    "in_json",
+    "masked_loss",
+    "conditioning_data_dir",
 }
 
 # Old SD/SDXL fields that are either meaningless or actively misleading for
@@ -239,9 +256,6 @@ def get_sample_prompts(config: dict) -> Tuple[Optional[str], str]:
     if "sample_prompts" in config and "positive_prompts" not in config:
         return None, config["sample_prompts"]
 
-    train_data_dir = config["train_data_dir"]
-    sub_dir = [dir for dir in glob(os.path.join(train_data_dir, '*')) if os.path.isdir(dir)]
-
     positive_prompts = config.pop('positive_prompts', None)
     negative_prompts = config.pop('negative_prompts', '')
     sample_width = config.pop('sample_width', 512)
@@ -252,6 +266,10 @@ def get_sample_prompts(config: dict) -> Tuple[Optional[str], str]:
     randomly_choice_prompt = config.pop('randomly_choice_prompt', False)
 
     if randomly_choice_prompt:
+        train_data_dir = config.get("train_data_dir")
+        if not train_data_dir:
+            raise ValueError('随机选取 Prompt 需要 train_data_dir；dataset_config 模式请指定 Prompt 文件或固定 Prompt')
+        sub_dir = [dir for dir in glob(os.path.join(train_data_dir, '*')) if os.path.isdir(dir)]
         if len(sub_dir) != 1:
             raise ValueError('训练数据集下有多个子文件夹，无法启用随机选取 Prompt 功能')
 
@@ -279,16 +297,27 @@ async def create_toml_file(request: Request):
 
     gpu_ids = config.pop("gpu_ids", None)
 
-    suggest_cpu_threads = 8 if len(train_utils.get_total_images(config["train_data_dir"])) > 200 else 2
+    train_data_dir = config.get("train_data_dir")
+    suggest_cpu_threads = 8 if train_data_dir and len(train_utils.get_total_images(train_data_dir)) > 200 else 2
     model_train_type = config.pop("model_train_type", "sd-lora")
     try:
         effective_train_type, trainer_file = resolve_training_backend(config, model_train_type)
     except (KeyError, ValueError) as e:
         return APIResponseFail(message=f"训练类型配置无效: {e}")
 
-    if effective_train_type != "sdxl-finetune":
-        if not train_utils.validate_data_dir(config["train_data_dir"]):
+    dataset_config = config.get("dataset_config")
+    if dataset_config:
+        if effective_train_type != "anima-finetune":
+            return APIResponseFail(message="当前 GUI 仅在 Anima 全参微调模式开放 dataset_config。")
+        if not os.path.isfile(dataset_config):
+            return APIResponseFail(message=f"dataset_config 文件不存在: {dataset_config}")
+    elif effective_train_type != "sdxl-finetune":
+        if not train_data_dir or not train_utils.validate_data_dir(train_data_dir):
             return APIResponseFail(message="训练数据集路径不存在或没有图片，请检查目录。")
+
+    in_json = config.get("in_json")
+    if in_json and not os.path.isfile(in_json):
+        return APIResponseFail(message=f"metadata JSON 文件不存在: {in_json}")
 
     if effective_train_type in {"anima-lora", "anima-finetune"}:
         if not os.path.exists(trainer_file):
@@ -304,7 +333,7 @@ async def create_toml_file(request: Request):
 
         # Optional Anima paths must be omitted instead of serialized as empty strings.
         # sd-scripts treats a non-None empty path as a real directory and fails to load it.
-        for key in ("llm_adapter_path", "t5_tokenizer_path"):
+        for key in ("llm_adapter_path", "t5_tokenizer_path", "dataset_config", "in_json", "conditioning_data_dir"):
             if not config.get(key):
                 config.pop(key, None)
 
@@ -403,6 +432,10 @@ async def pick_file(picker_type: str):
     elif picker_type == "model-file":
         file_types = [("checkpoints", "*.safetensors;*.ckpt;*.pt;*.pth"), ("all files", "*.*")]
         coro = asyncio.to_thread(open_file_selector, "", "Select file", file_types)
+    elif picker_type == "file":
+        coro = asyncio.to_thread(open_file_selector, "", "Select file", [("all files", "*.*")])
+    else:
+        return APIResponseFail(message="Unsupported picker type")
 
     result = await coro
     if result == "":
