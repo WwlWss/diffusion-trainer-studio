@@ -6,13 +6,20 @@ on:
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
+      - "mikazuki/anima_effective_config.py"
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
       - "mikazuki/app/api_overlay.py"
+      - "mikazuki/app/training_api.py"
       - "mikazuki/app/application.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_pages.py"
       - "mikazuki/training_data_contract.py"
       - "mikazuki/training_schema_factory.py"
+      - "mikazuki/training_schema_overrides.py"
       - "mikazuki/full_trainer_contract.py"
       - "mikazuki/schema/flux-lora.ts"
       - "mikazuki/schema/flux-finetune.ts"
@@ -29,6 +36,9 @@ on:
       - "tests/test_anima_finetune_trainer_coverage.py"
       - "tests/test_anima_process_advanced.py"
       - "tests/test_anima_gui_trainer_contract.py"
+      - "tests/test_effective_training_config.py"
+      - "tests/test_frontend_effective_config_patch.py"
+      - "tests/test_training_schema_overrides.py"
       - "tests/test_training_page_routing.py"
       - "tests/test_training_schema_factory.py"
       - "tests/test_training_data_contract.py"
@@ -62,13 +72,20 @@ jobs:
             mikazuki/anima_qwen_config.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
+            mikazuki/anima_effective_config.py \
             mikazuki/process.py \
             mikazuki/app/api.py \
             mikazuki/app/api_overlay.py \
+            mikazuki/app/training_api.py \
             mikazuki/app/application.py \
+            mikazuki/training_config.py \
+            mikazuki/training_request.py \
+            mikazuki/training_launcher.py \
+            mikazuki/frontend_training_patch.py \
             mikazuki/training_pages.py \
             mikazuki/training_data_contract.py \
             mikazuki/training_schema_factory.py \
+            mikazuki/training_schema_overrides.py \
             mikazuki/full_trainer_contract.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tests/test_anima_qwen_config.py \
@@ -78,6 +95,9 @@ jobs:
             tests/test_anima_finetune_trainer_coverage.py \
             tests/test_anima_process_advanced.py \
             tests/test_anima_gui_trainer_contract.py \
+            tests/test_effective_training_config.py \
+            tests/test_frontend_effective_config_patch.py \
+            tests/test_training_schema_overrides.py \
             tests/test_training_page_routing.py \
             tests/test_training_schema_factory.py \
             tests/test_training_data_contract.py \
@@ -96,6 +116,15 @@ jobs:
 
       - name: Run Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
+
+      - name: Contract - unified effective config
+        run: python -m unittest tests.test_effective_training_config -v
+
+      - name: Contract - runtime schema overrides
+        run: python -m unittest tests.test_training_schema_overrides -v
+
+      - name: Contract - pinned frontend effective-config patch
+        run: python -m unittest tests.test_frontend_effective_config_patch -v
 
       - name: Contract - runtime schema specialization
         run: python -m unittest tests.test_training_schema_factory -v
