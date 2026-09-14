@@ -19,9 +19,14 @@ def assert_js_expression_compiles(testcase: unittest.TestCase, source: str, labe
     node = shutil.which("node")
     if not node:
         raise unittest.SkipTest("node is required for transformed schema syntax checks")
-    # new Function compiles without evaluating the expression, so runtime globals
-    # such as Schema / SHARED_SCHEMAS / UpdateSchema need not be stubbed here.
-    body = "return (\n" + source + "\n);"
+    # Schema source files are standalone expression statements and therefore end
+    # with a semicolon. Strip only that final statement terminator before placing
+    # the expression inside return (...);. new Function compiles without
+    # evaluating runtime globals such as Schema / SHARED_SCHEMAS / UpdateSchema.
+    expression = source.strip()
+    if expression.endswith(";"):
+        expression = expression[:-1].rstrip()
+    body = "return (\n" + expression + "\n);"
     completed = subprocess.run(
         [node, "-e", f"new Function({json.dumps(body)});"],
         capture_output=True,
