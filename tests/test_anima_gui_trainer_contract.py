@@ -3,7 +3,11 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = (ROOT / "mikazuki/schema/flux-lora.ts").read_text(encoding="utf-8")
+SCHEMA = (
+    (ROOT / "mikazuki/schema/flux-lora.ts").read_text(encoding="utf-8")
+    + "\n"
+    + (ROOT / "mikazuki/schema/shared.ts").read_text(encoding="utf-8")
+)
 TRAINER = (ROOT / "sd-scripts/anima_train.py").read_text(encoding="utf-8-sig")
 ARGS = (ROOT / "sd-scripts/library/args.py").read_text(encoding="utf-8-sig")
 ANIMA_ARGS = (ROOT / "sd-scripts/library/anima_train_utils.py").read_text(encoding="utf-8-sig")
