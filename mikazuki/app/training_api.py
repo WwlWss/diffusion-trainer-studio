@@ -17,7 +17,7 @@ from mikazuki.training_request import (
     prepare_request_config,
     validate_prepared_config,
 )
-from mikazuki.training_schema_factory import fixed_flux_family_schema, fixed_sd_schema
+from mikazuki.training_schema_overrides import fixed_flux_family_schema, fixed_sd_schema
 from mikazuki.utils import train_utils
 
 legacy_api._fixed_sd_schema = fixed_sd_schema
