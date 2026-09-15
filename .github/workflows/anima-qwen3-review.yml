@@ -20,6 +20,7 @@ on:
       - "mikazuki/training_validation.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/frontend_training_patch.py"
+      - "mikazuki/frontend_branding.py"
       - "mikazuki/training_pages.py"
       - "mikazuki/training_data_contract.py"
       - "mikazuki/training_schema_factory.py"
@@ -45,6 +46,7 @@ on:
       - "tests/test_effective_training_config.py"
       - "tests/test_training_semantic_contract.py"
       - "tests/test_frontend_effective_config_patch.py"
+      - "tests/test_frontend_branding.py"
       - "tests/test_training_schema_overrides.py"
       - "tests/test_training_page_routing.py"
       - "tests/test_training_schema_factory.py"
@@ -93,6 +95,7 @@ jobs:
             mikazuki/training_validation.py \
             mikazuki/training_launcher.py \
             mikazuki/frontend_training_patch.py \
+            mikazuki/frontend_branding.py \
             mikazuki/training_pages.py \
             mikazuki/training_data_contract.py \
             mikazuki/training_schema_factory.py \
@@ -111,6 +114,7 @@ jobs:
             tests/test_effective_training_config.py \
             tests/test_training_semantic_contract.py \
             tests/test_frontend_effective_config_patch.py \
+            tests/test_frontend_branding.py \
             tests/test_training_schema_overrides.py \
             tests/test_training_page_routing.py \
             tests/test_training_schema_factory.py \
@@ -142,6 +146,9 @@ jobs:
 
       - name: Contract - pinned frontend effective-config patch
         run: python -m unittest tests.test_frontend_effective_config_patch -v
+
+      - name: Contract - frontend branding overlay
+        run: python -m unittest tests.test_frontend_branding -v
 
       - name: Contract - runtime schema specialization
         run: python -m unittest tests.test_training_schema_factory -v
