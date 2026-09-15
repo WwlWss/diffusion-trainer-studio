@@ -1,188 +1,157 @@
 <div align="center">
 
-<img src="https://github.com/Akegarasu/lora-scripts/assets/36563862/3b177f4a-d92a-4da4-85c8-a0d163061a40" width="200" height="200" alt="SD-Trainer" style="border-radius: 25px">
+<img src="assets/dts-logo.webp" width="200" height="200" alt="Diffusion Trainer Studio" style="border-radius: 25px">
 
-# SD-Trainer
+# Diffusion Trainer Studio
 
-_✨ 享受 Stable Diffusion 训练！ ✨_
+_✨ 多架构 Diffusion 模型训练工作台 ✨_
+
+**v2.0.0**
 
 </div>
 
 <p align="center">
-  <a href="https://github.com/Akegarasu/lora-scripts" style="margin: 2px;">
-    <img alt="GitHub 仓库星标" src="https://img.shields.io/github/stars/Akegarasu/lora-scripts">
-  </a>
-  <a href="https://github.com/Akegarasu/lora-scripts" style="margin: 2px;">
-    <img alt="GitHub 仓库分支" src="https://img.shields.io/github/forks/Akegarasu/lora-scripts">
-  </a>
-  <a href="https://raw.githubusercontent.com/Akegarasu/lora-scripts/master/LICENSE" style="margin: 2px;">
-    <img src="https://img.shields.io/github/license/Akegarasu/lora-scripts" alt="许可证">
-  </a>
-  <a href="https://github.com/Akegarasu/lora-scripts/releases" style="margin: 2px;">
-    <img src="https://img.shields.io/github/v/release/Akegarasu/lora-scripts?color=blueviolet&include_prereleases" alt="发布版本">
-  </a>
+  <a href="https://github.com/WwlWss/lora-scripts">GitHub</a>
+  ·
+  <a href="https://github.com/WwlWss/lora-scripts/releases">Releases</a>
+  ·
+  <a href="README.md">English README</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/Akegarasu/lora-scripts/releases">下载</a>
-  ·
-  <a href="https://github.com/Akegarasu/lora-scripts/blob/main/README.md">文档</a>
-  ·
-  <a href="https://github.com/Akegarasu/lora-scripts/blob/main/README-zh.md">中文README</a>
-</p>
+Diffusion Trainer Studio（DTS）是一套面向多种 Diffusion 模型架构的训练 WebUI、脚本预设和一键训练环境。项目从原有 SD-Trainer / LoRA-scripts 工作流持续发展，现已包含独立的 LoRA 与全参微调页面、统一配置校验、扩展 Tagger，以及完整的 Anima 训练支持。
 
-LoRA-scripts（又名 SD-Trainer）
+> [!IMPORTANT]
+> Diffusion Trainer Studio 基于 [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts) 开发，并继续使用 [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts) 的训练基础设施。仓库中大量上游代码继续保留原有许可证与署名。感谢 **秋葉 / Akegarasu**、**kohya-ss** 以及所有上游贡献者为本项目提供的基础。
 
-LoRA & Dreambooth 训练图形界面 & 脚本预设 & 一键训练环境，用于 [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts.git)
+## v2.0.0 主要变化
 
-## ✨新特性: 训练 WebUI
+- 正式启用 **Diffusion Trainer Studio** 项目名称与独立品牌。
+- 按实际训练后端拆分 SD / SDXL / Flux / Chroma / Anima 的训练页面和配置语义。
+- 支持 Anima 与 Anima 2.9B 的 LoRA 和全参微调。
+- Anima 全参训练支持可选的 Qwen3 文本编码器联合微调。
+- Preview、Import、Export 与 Start 统一使用同一套 effective-config 管线。
+- Tagger 新增 AnimeTimm、DanbooruTagQuery、PixAI 等模型，同时保留原有 WD / CL 工作流。
+- 补充模型类型、训练目标、缓存、数据集与显存模式等组合的后端校验。
+- 增加训练页面、schema、API 与 trainer 路由的自动化契约测试。
 
-Stable Diffusion 训练工作台。一切集成于一个 WebUI 中。
+过去的 SD-Trainer v1.x 更新日志属于上游项目，可前往 [Akegarasu/lora-scripts Releases](https://github.com/Akegarasu/lora-scripts/releases) 查看。本项目从 v2.0.0 起使用 Diffusion Trainer Studio 的版本体系。
 
-按照下面的安装指南安装 GUI，然后运行 `run_gui.ps1`(Windows) 或 `run_gui.sh`(Linux) 来启动 GUI。
+## 主要训练工作流
 
-![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/d3fcf5ad-fb8f-4e1d-81f9-c903376c19c6)
+| 模型家族 | LoRA / Network | 全参 / Finetune |
+| --- | --- | --- |
+| SD 1.5 / SD2 | 支持 | DreamBooth |
+| SDXL | 支持 | 支持 |
+| Flux | 支持 | 支持 |
+| Chroma | 支持 | — |
+| Anima / Anima 2.9B | 支持 | 支持 |
+| SD3 / SD3.5 | 支持 | — |
 
-| Tensorboard | WD 1.4 标签器 | 标签编辑器 |
-| ------------ | ------------ | ------------ |
-| ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/b2ac5c36-3edf-43a6-9719-cb00b757fc76) | ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/9504fad1-7d77-46a7-a68f-91fbbdbc7407) | ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/4597917b-caa8-4e90-b950-8b01738996f2) |
+Anima 的 2.9B 模型、Block Swap、Qwen3 联合训练等额外说明见 [ANIMA.md](ANIMA.md)。
 
+## WebUI
 
-# 使用方法
+训练、配置预览、任务管理、TensorBoard、Tagger 与标签编辑工具都集成在同一个浏览器界面中。安装后在 Windows 运行 `run_gui.ps1`，Linux 运行 `bash run_gui.sh`。默认地址为：
 
-### 必要依赖
+`http://127.0.0.1:28000`
 
-Python 3.10 和 Git
+当前项目继续固定使用上游预编译 frontend，并通过运行时注入的方式添加 DTS 自己的训练页面、导航与配置行为，而不是直接修改 frontend 子模块。这可以降低与上游 GUI 更新之间的冲突。
 
-### 克隆带子模块的仓库
+## 安装
+
+### 必要环境
+
+- Python 3.10+（实际请以当前依赖支持范围为准）
+- Git
+- 进行 GPU 训练时需要可用的 CUDA 环境
+
+### 克隆仓库和子模块
+
+这里显式指定本地目录名，使以后 GitHub 仓库改名后本地路径仍保持一致：
 
 ```sh
-git clone --recurse-submodules https://github.com/Akegarasu/lora-scripts
+git clone --recurse-submodules https://github.com/WwlWss/lora-scripts diffusion-trainer-studio
+cd diffusion-trainer-studio
 ```
 
-## ✨ SD-Trainer GUI
+如果之前没有初始化子模块：
+
+```sh
+git submodule sync --recursive
+git submodule update --init --recursive
+```
 
 ### Windows
 
-#### 安装
+可运行现有的国内环境安装脚本：
 
-运行 `install-cn.ps1` 将自动为您创建虚拟环境并安装必要的依赖。 
+```powershell
+.\install-cn.ps1
+```
 
-#### 训练
+安装完成后启动 GUI：
 
-运行 `run_gui.ps1`，程序将自动打开 [http://127.0.0.1:28000](http://127.0.0.1:28000)
+```powershell
+.\run_gui.ps1
+```
 
 ### Linux
 
-#### 安装
-
-运行 `install.bash` 将创建虚拟环境并安装必要的依赖。
-
-#### 训练
-
-运行 `bash run_gui.sh`，程序将自动打开 [http://127.0.0.1:28000](http://127.0.0.1:28000)
+```bash
+bash install.bash
+bash run_gui.sh
+```
 
 ### Docker
 
-#### 编译镜像
+建议直接基于当前仓库自行构建镜像，不再把上游历史镜像描述成 DTS 的官方镜像：
 
 ```bash
-# 国内镜像优化版本
-# 其中 akegarasu_lora-scripts:latest 为镜像及其 tag 名，根据镜像托管服务商实际进行修改
-docker build -t akegarasu_lora-scripts:latest -f Dockfile-for-Mainland-China .
-docker push akegarasu_lora-scripts:latest
+docker build -t diffusion-trainer-studio:latest .
+docker run --gpus all -p 28000:28000 -p 6006:6006 diffusion-trainer-studio:latest
 ```
 
-#### 使用镜像
+国内环境仍可使用 `Dockerfile-for-Mainland-China` 进行构建。
 
-> 提供一个本人已打包好并推送到 `aliyuncs` 上的镜像，此镜像压缩归档大小约 `10G` 左右，请耐心等待拉取。
+## 传统脚本训练方式
 
-```bash
-docker run --gpus all -p 28000:28000 -p 6006:6006 registry.cn-hangzhou.aliyuncs.com/go-to-mirror/akegarasu_lora-scripts:latest 
-```
+仓库仍保留不依赖 WebUI 的传统脚本入口。
 
-或者使用 `docker-compose.yaml` 。
-
-```yaml
-services:
-  lora-scripts:
-    container_name: lora-scripts
-    build:
-      context: .
-      dockerfile: Dockerfile-for-Mainland-China
-    image: "registry.cn-hangzhou.aliyuncs.com/go-to-mirror/akegarasu_lora-scripts:latest"
-    ports:
-      - "28000:28000"
-      - "6006:6006"  
-    # 共享本地文件夹（请根据实际修改）
-    #volumes:
-      # - "/data/srv/lora-scripts:/app/lora-scripts"
-      # 共享 comfyui 大模型
-      # - "/data/srv/comfyui/models/checkpoints:/app/lora-scripts/sd-models/comfyui"
-      # 共享 sd-webui 大模型
-      # - "/data/srv/stable-diffusion-webui/models/Stable-diffusion:/app/lora-scripts/sd-models/sd-webui"
-    environment:
-      - HF_HOME=huggingface
-      - PYTHONUTF8=1
-    security_opt:
-      - "label=type:nvidia_container_t"
-    runtime: nvidia
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              device_ids: ['0']
-              capabilities: [gpu]
-```
- 
-关于容器使用 GPU 相关依赖安装问题，请自行搜索查阅资料解决。
-
-## 通过手动运行脚本的传统训练方式
-
-### Windows
-
-#### 安装
-
-运行 `install.ps1` 将自动为您创建虚拟环境并安装必要的依赖。
-
-#### 训练
-
-编辑 `train.ps1`，然后运行它。
-
-### Linux
-
-#### 安装
-
-运行 `install.bash` 将创建虚拟环境并安装必要的依赖。
-
-#### 训练
-
-训练
-
-脚本 `train.sh` **不会** 为您激活虚拟环境。您应该先激活虚拟环境。
+Windows 可编辑并运行 `train.ps1`。Linux 可先激活虚拟环境，再编辑并运行 `train.sh`：
 
 ```sh
 source venv/bin/activate
+bash train.sh
 ```
 
-编辑 `train.sh`，然后运行它。
-
-#### TensorBoard
-
-运行 `tensorboard.ps1` 将在 http://localhost:6006/ 启动 TensorBoard
+TensorBoard 默认使用 `6006` 端口，也可以继续使用仓库中的 TensorBoard 辅助脚本。
 
 ## 程序参数
 
-| 参数名称                     | 类型  | 默认值       | 描述                                            |
-|------------------------------|-------|--------------|-------------------------------------------------|
-| `--host`                     | str   | "127.0.0.1"  | 服务器的主机名                                  |
-| `--port`                     | int   | 28000        | 运行服务器的端口                                |
-| `--listen`                   | bool  | false        | 启用服务器的监听模式                            |
-| `--skip-prepare-environment` | bool  | false        | 跳过环境准备步骤                                |
-| `--disable-tensorboard`      | bool  | false        | 禁用 TensorBoard                                |
-| `--disable-tageditor`        | bool  | false        | 禁用标签编辑器                                  |
-| `--tensorboard-host`         | str   | "127.0.0.1"  | 运行 TensorBoard 的主机                         |
-| `--tensorboard-port`         | int   | 6006         | 运行 TensorBoard 的端口                          |
-| `--localization`             | str   |              | 界面的本地化设置                                |
-| `--dev`                      | bool  | false        | 开发者模式，用于禁用某些检查                     |
+| 参数名称 | 类型 | 默认值 | 描述 |
+| --- | --- | --- | --- |
+| `--host` | str | `127.0.0.1` | WebUI 主机地址 |
+| `--port` | int | `28000` | WebUI 端口 |
+| `--listen` | bool | false | 启用监听模式 |
+| `--skip-prepare-environment` | bool | false | 跳过环境准备 |
+| `--disable-tensorboard` | bool | false | 禁用 TensorBoard |
+| `--disable-tageditor` | bool | false | 禁用标签编辑器 |
+| `--tensorboard-host` | str | `127.0.0.1` | TensorBoard 主机地址 |
+| `--tensorboard-port` | int | `6006` | TensorBoard 端口 |
+| `--localization` | str | — | 界面本地化设置 |
+| `--dev` | bool | false | 开发者模式 |
+
+## 项目沿革与致谢
+
+Diffusion Trainer Studio 的开发建立在多个上游项目之上：
+
+- [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts) — 原 LoRA-scripts / SD-Trainer 项目，作者 **秋葉 / Akegarasu**。
+- [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts) — 项目大量训练脚本与模型架构实现的基础。
+- [hanamizuki-ai/lora-gui-dist](https://github.com/hanamizuki-ai/lora-gui-dist) — 当前固定使用的预编译 frontend 分发。
+- [Schemastery](https://github.com/shigma/schemastery) — schema 驱动的界面基础组件。
+
+子模块、上游派生文件和第三方代码继续遵循各自的许可证和版权声明。DTS 的 GitHub Issues 仅用于当前项目，不代表任何上游项目的官方支持渠道。
+
+## 仓库改名过渡说明
+
+本版本在仓库正式改名前提交，因此当前项目自己的链接统一指向现有 canonical 地址 `WwlWss/lora-scripts`。GitHub 在仓库改名后会为常规仓库 URL 提供重定向；同时本 README 不再使用依赖仓库 slug 的 Stars / Forks Shields 徽章，以避免改名后徽章失效。仓库正式改名后，再用一个很小的后续提交把 canonical URL 统一替换成最终新地址即可。
