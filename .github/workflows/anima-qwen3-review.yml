@@ -1,0 +1,194 @@
+name: Anima Qwen3 review
+
+on:
+  pull_request:
+    paths:
+      - "mikazuki/anima_qwen_config.py"
+      - "mikazuki/anima_finetune_config.py"
+      - "mikazuki/anima_finetune_advanced.py"
+      - "mikazuki/anima_effective_config.py"
+      - "mikazuki/process.py"
+      - "mikazuki/app/api.py"
+      - "mikazuki/app/api_overlay.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/app/application.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/training_gui_args.py"
+      - "mikazuki/training_gui_semantics.py"
+      - "mikazuki/training_rehydrate.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_validation.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/frontend_training_patch.py"
+      - "mikazuki/training_pages.py"
+      - "mikazuki/training_data_contract.py"
+      - "mikazuki/training_schema_factory.py"
+      - "mikazuki/training_schema_overrides.py"
+      - "mikazuki/full_trainer_contract.py"
+      - "mikazuki/tasks.py"
+      - "mikazuki/utils/train_utils.py"
+      - "mikazuki/schema/flux-lora.ts"
+      - "mikazuki/schema/flux-finetune.ts"
+      - "mikazuki/schema/sdxl-full.ts"
+      - "mikazuki/schema/dreambooth.ts"
+      - "mikazuki/schema/lora-master.ts"
+      - "mikazuki/schema/shared.ts"
+      - "config/presets/anima*.toml"
+      - "config/presets/chroma.toml"
+      - "tests/test_anima_qwen_config.py"
+      - "tests/test_anima_qwen_off_compat.py"
+      - "tests/test_anima_finetune_config.py"
+      - "tests/test_anima_finetune_integration.py"
+      - "tests/test_anima_finetune_trainer_coverage.py"
+      - "tests/test_anima_process_advanced.py"
+      - "tests/test_anima_gui_trainer_contract.py"
+      - "tests/test_effective_training_config.py"
+      - "tests/test_training_semantic_contract.py"
+      - "tests/test_frontend_effective_config_patch.py"
+      - "tests/test_training_schema_overrides.py"
+      - "tests/test_training_page_routing.py"
+      - "tests/test_training_schema_factory.py"
+      - "tests/test_training_data_contract.py"
+      - "tests/test_training_api_overlay_contract.py"
+      - "tests/test_full_trainer_contract.py"
+      - "tests/test_full_schema_contract.py"
+      - "tools/apply_anima_qwen3_sd_scripts_patch.py"
+      - "ANIMA.md"
+      - ".gitmodules"
+      - "sd-scripts"
+      - "frontend"
+      - ".github/workflows/anima-qwen3-review.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository and pinned submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile host-side Python
+        run: |
+          python -m py_compile \
+            mikazuki/anima_qwen_config.py \
+            mikazuki/anima_finetune_config.py \
+            mikazuki/anima_finetune_advanced.py \
+            mikazuki/anima_effective_config.py \
+            mikazuki/process.py \
+            mikazuki/app/api.py \
+            mikazuki/app/api_overlay.py \
+            mikazuki/app/training_api.py \
+            mikazuki/app/application.py \
+            mikazuki/training_config.py \
+            mikazuki/training_gui_args.py \
+            mikazuki/training_gui_semantics.py \
+            mikazuki/training_rehydrate.py \
+            mikazuki/training_request.py \
+            mikazuki/training_validation.py \
+            mikazuki/training_launcher.py \
+            mikazuki/frontend_training_patch.py \
+            mikazuki/training_pages.py \
+            mikazuki/training_data_contract.py \
+            mikazuki/training_schema_factory.py \
+            mikazuki/training_schema_overrides.py \
+            mikazuki/full_trainer_contract.py \
+            mikazuki/tasks.py \
+            mikazuki/utils/train_utils.py \
+            tools/apply_anima_qwen3_sd_scripts_patch.py \
+            tests/test_anima_qwen_config.py \
+            tests/test_anima_qwen_off_compat.py \
+            tests/test_anima_finetune_config.py \
+            tests/test_anima_finetune_integration.py \
+            tests/test_anima_finetune_trainer_coverage.py \
+            tests/test_anima_process_advanced.py \
+            tests/test_anima_gui_trainer_contract.py \
+            tests/test_effective_training_config.py \
+            tests/test_training_semantic_contract.py \
+            tests/test_frontend_effective_config_patch.py \
+            tests/test_training_schema_overrides.py \
+            tests/test_training_page_routing.py \
+            tests/test_training_schema_factory.py \
+            tests/test_training_data_contract.py \
+            tests/test_training_api_overlay_contract.py \
+            tests/test_full_trainer_contract.py \
+            tests/test_full_schema_contract.py
+
+      - name: Syntax-check expert GUI schemas
+        run: |
+          cp mikazuki/schema/flux-lora.ts /tmp/flux-lora.js
+          cp mikazuki/schema/flux-finetune.ts /tmp/flux-finetune.js
+          cp mikazuki/schema/sdxl-full.ts /tmp/sdxl-full.js
+          node --check /tmp/flux-lora.js
+          node --check /tmp/flux-finetune.js
+          node --check /tmp/sdxl-full.js
+
+      - name: Run existing Anima configuration regression tests
+        run: python -m unittest discover -s tests -p 'test_anima*.py' -v
+
+      - name: Semantic - complete effective-config contract
+        run: python -m unittest tests.test_training_semantic_contract -v
+
+      - name: Contract - unified effective config
+        run: python -m unittest tests.test_effective_training_config -v
+
+      - name: Contract - runtime schema overrides
+        run: python -m unittest tests.test_training_schema_overrides -v
+
+      - name: Contract - pinned frontend effective-config patch
+        run: python -m unittest tests.test_frontend_effective_config_patch -v
+
+      - name: Contract - runtime schema specialization
+        run: python -m unittest tests.test_training_schema_factory -v
+
+      - name: Contract - dataset sources
+        run: python -m unittest tests.test_training_data_contract -v
+
+      - name: Contract - API overlay wiring
+        run: python -m unittest tests.test_training_api_overlay_contract -v
+
+      - name: Contract - full trainers
+        run: python -m unittest tests.test_full_trainer_contract -v
+
+      - name: Contract - full trainer schemas
+        run: python -m unittest tests.test_full_schema_contract -v
+
+      - name: Contract - backend mapping
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_one_backend_key_maps_to_one_concrete_trainer -v
+
+      - name: Contract - virtual page schema names
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_virtual_pages_use_dedicated_schema_names -v
+
+      - name: Contract - frontend sidebar and routes
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_frontend_bundle_patch_creates_separate_sidebar_groups_and_routes -v
+
+      - name: Contract - Flux full schema
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_flux_full_schema_has_no_lora_network_hyperparameters -v
+
+      - name: Contract - SDXL full schema
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_sdxl_full_schema_is_not_dreambooth_or_lora_ui -v
+
+      - name: Contract - legacy templates
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_source_templates_remain_for_legacy_compatibility -v
+
+      - name: Contract - migrated presets
+        run: python -m unittest tests.test_training_page_routing.TrainingPageRoutingTests.test_migrated_presets_target_dedicated_pages -v
+
+      - name: Validate sd-scripts patch against pinned source
+        run: python tools/apply_anima_qwen3_sd_scripts_patch.py --check
+
+      - name: Apply patch in ephemeral checkout and compile patched sources
+        run: |
+          python tools/apply_anima_qwen3_sd_scripts_patch.py --write
+          python -m py_compile \
+            sd-scripts/anima_train.py \
+            sd-scripts/library/anima_train_utils.py \
+            sd-scripts/library/anima_utils.py \
+            sd-scripts/library/strategy_anima.py
+          git -C sd-scripts diff --check
+          git -C sd-scripts diff --stat

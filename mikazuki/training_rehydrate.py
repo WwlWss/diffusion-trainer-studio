@@ -1,0 +1,171 @@
+"""Inverse mapping from effective trainer TOML to semantic GUI state."""
+
+from __future__ import annotations
+
+from copy import deepcopy
+
+from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
+
+
+def _extract_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
+    key_lower = key.lower()
+    found = None
+    remaining: list[str] = []
+    for item in args:
+        if _arg_key(item) == key_lower:
+            found = item.split("=", 1)[1] if "=" in item else ""
+        else:
+            remaining.append(item)
+    return found, remaining
+
+
+def _infer_anima_precision_mode(config: dict) -> str:
+    mixed = str(config.pop("mixed_precision", "no") or "no").lower()
+    full_fp16 = _as_bool(config.pop("full_fp16", False))
+    full_bf16 = _as_bool(config.pop("full_bf16", False))
+    if full_fp16:
+        return "full_fp16"
+    if full_bf16:
+        return "full_bf16"
+    if mixed == "fp16":
+        return "mixed_fp16"
+    if mixed == "bf16":
+        return "mixed_bf16"
+    return "fp32"
+
+
+def _infer_cache_mode(config: dict, key: str, disk_key: str) -> str:
+    disk = _as_bool(config.pop(disk_key, False))
+    enabled = _as_bool(config.pop(key, False))
+    return "disk" if disk else "memory" if enabled else "off"
+
+
+def _infer_checkpoint_mode(config: dict) -> str:
+    gradient = _as_bool(config.pop("gradient_checkpointing", False))
+    cpu = _as_bool(config.pop("cpu_offload_checkpointing", False))
+    unsloth = _as_bool(config.pop("unsloth_offload_checkpointing", False))
+    if unsloth:
+        return "unsloth"
+    if cpu:
+        return "cpu"
+    return "standard" if gradient else "off"
+
+
+def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> dict:
+    """Inverse-map an exported trainer TOML into current-page GUI state.
+
+    The inverse is semantic rather than byte-for-byte historical state: values
+    that were deliberately compiled away (for example a D-Adapt GUI LR before
+    it became trainer LR=1) cannot be recovered, but re-preparing the returned
+    state yields an equivalent trainer configuration.
+    """
+    config = deepcopy(effective_config)
+
+    if _as_bool(config.pop("lowram", False)):
+        config["memory_mode"] = "lowram"
+        config.pop("highvram", None)
+    elif _as_bool(config.pop("highvram", False)):
+        config["memory_mode"] = "highvram"
+    else:
+        config.pop("highvram", None)
+        config["memory_mode"] = "auto"
+
+    sd_pages = {"lora-basic", "lora-master", "sd-lora", "sdxl-lora", "dreambooth", "sd-dreambooth"}
+    if page_train_type in sd_pages:
+        token = config.pop("max_token_length", None)
+        config["sd_max_token_length_mode"] = str(token) if token in {150, 225, "150", "225"} else "75"
+
+    if page_train_type in {"lora-basic", "lora-master", "sd-lora", "sdxl-lora"}:
+        unet_only = _as_bool(config.pop("network_train_unet_only", False))
+        te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
+        config["lora_target"] = "unet" if unet_only else "text_encoder" if te_only else "unet_text_encoder"
+
+    args = _items(config.pop("network_args", None))
+    if page_train_type in {"flux-lora", "chroma-lora"}:
+        train_t5_raw, args = _extract_arg(args, "train_t5xxl")
+        train_t5 = _as_bool(train_t5_raw)
+        unet_only = _as_bool(config.pop("network_train_unet_only", False))
+        if page_train_type == "chroma-lora":
+            config["flux_lora_target"] = "dit_t5xxl" if train_t5 else "dit"
+        else:
+            config["flux_lora_target"] = "dit" if unet_only else "dit_clip_l_t5xxl" if train_t5 else "dit_clip_l"
+
+    if page_train_type == "anima-lora":
+        unet_only = _as_bool(config.pop("network_train_unet_only", False))
+        te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
+        config["anima_lora_target"] = "dit" if unet_only else "qwen3" if te_only else "dit_qwen3"
+        if "text_encoder_lr" in config:
+            config["anima_lora_text_encoder_lr"] = str(config.pop("text_encoder_lr"))
+
+    if page_train_type == "anima-finetune":
+        if "learning_rate" in config:
+            config["anima_finetune_learning_rate"] = str(config.pop("learning_rate"))
+        config["anima_precision_mode"] = _infer_anima_precision_mode(config)
+        config["anima_latent_cache_mode"] = _infer_cache_mode(config, "cache_latents", "cache_latents_to_disk")
+        config["anima_text_encoder_cache_mode"] = _infer_cache_mode(
+            config, "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk"
+        )
+        config["anima_checkpoint_mode"] = _infer_checkpoint_mode(config)
+
+    module = str(config.get("network_module") or "")
+    if module == "lycoris.kohya":
+        reverse = {
+            "algo": "lycoris_algo",
+            "conv_dim": "conv_dim",
+            "conv_alpha": "conv_alpha",
+            "factor": "lokr_factor",
+            "dropout": "dropout",
+            "train_norm": "train_norm",
+        }
+        for arg_key, field in reverse.items():
+            value, args = _extract_arg(args, arg_key)
+            if value is not None:
+                config[field] = value
+    elif module == "networks.dylora":
+        value, args = _extract_arg(args, "unit")
+        if value is not None:
+            config["dylora_unit"] = value
+
+    block_found = False
+    for field in ("down_lr_weight", "mid_lr_weight", "up_lr_weight", "block_lr_zero_threshold"):
+        value, args = _extract_arg(args, field)
+        if value is not None:
+            config[field] = value
+            block_found = True
+    if block_found:
+        config["enable_block_weights"] = True
+
+    if args:
+        config["network_args_custom"] = args
+    else:
+        config.pop("network_args", None)
+
+    weights = config.get("base_weights")
+    if isinstance(weights, list) and weights:
+        config["enable_base_weight"] = True
+        config["base_weights"] = "\n".join(str(item) for item in weights)
+        multipliers = config.get("base_weights_multiplier")
+        if isinstance(multipliers, list):
+            config["base_weights_multiplier"] = "\n".join(str(item) for item in multipliers)
+
+    opt_args = _items(config.pop("optimizer_args", None))
+    optimizer = str(config.get("optimizer_type") or "").lower()
+    if optimizer in PRODIGY_TYPES:
+        value, opt_args = _extract_arg(opt_args, "d0")
+        if value is not None:
+            config["prodigy_d0"] = value
+        value, opt_args = _extract_arg(opt_args, "d_coef")
+        if value is not None:
+            config["prodigy_d_coef"] = value
+    if opt_args:
+        config["optimizer_args_custom"] = opt_args
+
+    config["dataset_source"] = "config" if config.get("dataset_config") else "folder"
+
+    # Split-prompt pages can faithfully round-trip an exported generated sidecar
+    # by treating the already-materialized file as their prompt_file. Basic's
+    # historical inline sample_prompts control is kept as-is.
+    if page_train_type != "lora-basic" and config.get("sample_prompts"):
+        config["prompt_file"] = config.pop("sample_prompts")
+
+    return config
