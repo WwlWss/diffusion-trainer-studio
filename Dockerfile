@@ -8,14 +8,14 @@ RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone &
 RUN mkdir /app
 
 WORKDIR /app
-RUN git clone --recurse-submodules https://github.com/Akegarasu/lora-scripts
+RUN git clone --recurse-submodules https://github.com/WwlWss/lora-scripts /app/diffusion-trainer-studio
 
-WORKDIR /app/lora-scripts
+WORKDIR /app/diffusion-trainer-studio
 RUN pip install xformers==0.0.27.post2 --no-deps && pip install -r requirements.txt
 
-WORKDIR /app/lora-scripts/scripts
+WORKDIR /app/diffusion-trainer-studio/scripts
 RUN pip install -r requirements.txt
 
-WORKDIR /app/lora-scripts
+WORKDIR /app/diffusion-trainer-studio
 
 CMD ["python", "gui.py", "--listen"]
