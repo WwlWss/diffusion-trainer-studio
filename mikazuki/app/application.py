@@ -103,6 +103,11 @@ async def favicon():
     return FileResponse("assets/favicon.ico")
 
 
+@app.get("/branding/logo.webp", response_class=FileResponse)
+async def branding_logo():
+    return FileResponse("assets/dts-logo.webp", media_type="image/webp")
+
+
 @app.get("/assets/{asset_name:path}")
 async def frontend_asset(asset_name: str):
     """Serve the pinned frontend plus runtime-injected backend training pages."""
