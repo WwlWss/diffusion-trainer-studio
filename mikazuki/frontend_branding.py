@@ -60,12 +60,13 @@ def patch_branding_layout_js(content: str) -> str:
 
 
 def _static_page_module(html: str, source_name: str) -> str:
+    """Build a tiny VuePress page using only exports known to the pinned bundle."""
     html_json = json.dumps(html, ensure_ascii=True)
     source_json = json.dumps(source_name, ensure_ascii=True)
     return (
-        'import{_ as n,o as s,c,e as a}from"./app.547295de.js";'
-        f'const h={{}},i=a({html_json},1);'
-        'function m(){return s(),c("div",null,[i])}'
+        'import{_ as n,o as s,c}from"./app.547295de.js";'
+        f'const h={{}},i={html_json};'
+        'function m(){return s(),c("div",{innerHTML:i})}'
         f'var x=n(h,[["render",m],["__file",{source_json}]]);export{{x as default}};\n'
     )
 
