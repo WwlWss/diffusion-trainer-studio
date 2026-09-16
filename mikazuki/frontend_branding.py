@@ -21,7 +21,7 @@ ABOUT_DATA_ASSET = "about.html.5b0c0de9.js"
 
 PROJECT_NAME = "Diffusion Trainer Studio"
 PROJECT_VERSION = "2.0.0"
-PROJECT_REPOSITORY = "https://github.com/WwlWss/lora-scripts"
+PROJECT_REPOSITORY = "https://github.com/WwlWss/diffusion-trainer-studio"
 PROJECT_ISSUES = f"{PROJECT_REPOSITORY}/issues"
 
 
@@ -54,7 +54,7 @@ def patch_branding_layout_js(content: str) -> str:
     return _replace_once(
         content,
         'href:"https://github.com/Akegarasu/lora-scripts",target:"_blank","aria-label":"GitHub"',
-        'href:"https://github.com/WwlWss/lora-scripts",target:"_blank","aria-label":"GitHub"',
+        'href:"https://github.com/WwlWss/diffusion-trainer-studio",target:"_blank","aria-label":"GitHub"',
         "sidebar GitHub link",
     )
 
@@ -99,7 +99,7 @@ def about_content_js() -> str:
     html = f"""
 <h2>关于 Diffusion Trainer Studio</h2>
 <p>Diffusion Trainer Studio（DTS）是一个面向多种 Diffusion 架构的训练工作台，由 WwlWss 维护。</p>
-<p>当前项目仓库：<a href="{PROJECT_REPOSITORY}" target="_blank" rel="noopener noreferrer">WwlWss/lora-scripts</a>。问题与功能建议请提交到 <a href="{PROJECT_ISSUES}" target="_blank" rel="noopener noreferrer">GitHub Issues</a>。</p>
+<p>当前项目仓库：<a href="{PROJECT_REPOSITORY}" target="_blank" rel="noopener noreferrer">WwlWss/diffusion-trainer-studio</a>。问题与功能建议请提交到 <a href="{PROJECT_ISSUES}" target="_blank" rel="noopener noreferrer">GitHub Issues</a>。</p>
 <h3>上游项目与致谢</h3>
 <ul>
   <li><a href="https://github.com/Akegarasu/lora-scripts" target="_blank" rel="noopener noreferrer">Akegarasu/lora-scripts</a> — 原 SD-Trainer / LoRA-scripts 项目。感谢 <a href="https://space.bilibili.com/12566101" target="_blank" rel="noopener noreferrer">秋葉 / Akegarasu</a> 及其贡献者。</li>
