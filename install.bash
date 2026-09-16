@@ -16,11 +16,31 @@ while [ -n "$1" ]; do
     esac
 done
 
+check_python_version() {
+    local python_cmd="$1"
+    local version
+    version=$($python_cmd -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
+    case "$version" in
+        3.10|3.11|3.12)
+            ;;
+        *)
+            echo "Unsupported Python $version. DTS v2.0.0 supports Python 3.10-3.12; Python 3.11 is the tested/recommended version."
+            exit 1
+            ;;
+    esac
+    if [ "$version" != "3.11" ]; then
+        echo "Warning: Python $version is supported by the installer, but DTS v2.0.0 CI and release testing use Python 3.11."
+    fi
+}
+
 if $create_venv; then
+    check_python_version python3
     echo "Creating python venv..."
     python3 -m venv venv
     source "$script_dir/venv/bin/activate"
     echo "active venv"
+else
+    check_python_version python
 fi
 
 echo "Installing torch & xformers..."
