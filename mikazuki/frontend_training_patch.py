@@ -150,4 +150,5 @@ def install_frontend_training_patch() -> None:
         return None
 
     virtual_asset._mikazuki_effective_config_patch = True
+    virtual_asset.__wrapped__ = original
     training_pages.virtual_asset = virtual_asset
