@@ -3,37 +3,40 @@ FROM nvcr.io/nvidia/pytorch:24.07-py3
 EXPOSE 28000
 
 ENV TZ=Asia/Shanghai
-RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && apt update && apt install python3-tk -y
-
-RUN mkdir /app
-
-WORKDIR /app
-RUN git clone --recurse-submodules https://github.com/WwlWss/diffusion-trainer-studio /app/diffusion-trainer-studio
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone && \
+    apt-get update && apt-get install -y python3-tk && \
+    rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app/diffusion-trainer-studio
+
+# Build the exact checkout supplied as the Docker build context. This avoids
+# silently switching feature branches/tags back to the repository default branch.
+COPY . .
+
+# Required runtime submodules must already be present in the checkout used as
+# the Docker build context.
+RUN test -f frontend/dist/index.html && \
+    test -f mikazuki/dataset-tag-editor/scripts/launch.py && \
+    test -f sd-scripts/anima_train_network.py || \
+    (echo 'Required submodules are missing. Run: git submodule update --init --recursive' >&2; exit 1)
 
 # 设置 Python pip 软件包国内镜像代理
 RUN pip config set global.index-url 'https://pypi.tuna.tsinghua.edu.cn/simple' && \
     pip config set install.trusted-host 'pypi.tuna.tsinghua.edu.cn'
 
-# 初次安装依赖
-RUN pip install xformers==0.0.27.post2 --no-deps && pip install -r requirements.txt
-
-# 更新 训练程序 stable 版本依赖
-WORKDIR /app/diffusion-trainer-studio/scripts/stable
-RUN pip install -r requirements.txt
-
-# 更新 训练程序 dev 版本依赖
-WORKDIR /app/diffusion-trainer-studio/scripts/dev
-RUN pip install -r requirements.txt
-
-WORKDIR /app/diffusion-trainer-studio
+# 安装当前 DTS 根依赖。不要再安装 scripts/stable / scripts/dev 的旧依赖集，
+# 否则会把当前训练环境中的 transformers / diffusers / accelerate 等版本降级。
+RUN pip install xformers==0.0.27.post2 --no-deps && \
+    pip install -r requirements.txt
 
 # 修正运行报错以及底包缺失的依赖
 # ref
 # - https://soulteary.com/2024/01/07/fix-opencv-dependency-errors-opencv-fixer.html
 # - https://blog.csdn.net/qq_50195602/article/details/124188467
-RUN pip install opencv-fixer==0.2.5 && python -c "from opencv_fixer import AutoFix; AutoFix()" \
-    pip install opencv-python-headless && apt install ffmpeg libsm6 libxext6 libgl1 -y
+RUN pip install opencv-fixer==0.2.5 && \
+    python -c "from opencv_fixer import AutoFix; AutoFix()" && \
+    pip install opencv-python-headless && \
+    apt-get update && apt-get install -y ffmpeg libsm6 libxext6 libgl1 && \
+    rm -rf /var/lib/apt/lists/*
 
 CMD ["python", "gui.py", "--listen"]
