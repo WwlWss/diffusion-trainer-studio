@@ -50,27 +50,52 @@ class AnimeTimmInterrogator(Interrogator):
     def load(self) -> None:
         # Import PyTorch before ONNX Runtime so ORT can reuse the CUDA/cuDNN DLLs
         # bundled with the project's PyTorch installation on Windows.
-        import torch  # noqa: F401
+        import torch
         import onnxruntime as ort
+
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "AnimeTimm requires a usable CUDA GPU in DTS. PyTorch reports CUDA is unavailable; "
+                "CPU tagging fallback is disabled."
+            )
 
         if hasattr(ort, "preload_dlls"):
             try:
                 ort.preload_dlls()
             except Exception as exc:
-                print(f"Warning: ONNX Runtime DLL preload failed: {exc}")
+                raise RuntimeError(f"ONNX Runtime CUDA DLL preload failed: {exc}") from exc
+
+        available = ort.get_available_providers()
+        if "CUDAExecutionProvider" not in available:
+            raise RuntimeError(
+                "AnimeTimm requires ONNX Runtime CUDAExecutionProvider, but it is not available. "
+                f"Available providers: {available}. CPU tagging fallback is disabled."
+            )
 
         model_path, tags_path, preprocess_path = self.download()
-        available = ort.get_available_providers()
-        providers = ["CPUExecutionProvider"]
-        if "CUDAExecutionProvider" in available:
-            providers.insert(0, "CUDAExecutionProvider")
+        session_options = ort.SessionOptions()
+        # ORT normally assigns unsupported nodes to CPU even when only the CUDA
+        # provider is requested. This config makes session creation fail instead,
+        # so a nominally-GPU tagger can never perform hidden CPU graph fallback.
+        session_options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+        try:
+            self.model = ort.InferenceSession(
+                str(model_path),
+                sess_options=session_options,
+                providers=["CUDAExecutionProvider"],
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "AnimeTimm could not create a CUDA-only ONNX Runtime session. "
+                "DTS does not fall back to CPU tagging; verify the ONNX Runtime/CUDA/cuDNN installation. "
+                f"Original error: {exc}"
+            ) from exc
 
-        self.model = ort.InferenceSession(str(model_path), providers=providers)
         active = self.model.get_providers()
         if "CUDAExecutionProvider" not in active:
-            print(
-                "Warning: AnimeTimm is using CPUExecutionProvider. "
-                "GPU tagging is unavailable in the current ONNX Runtime environment."
+            raise RuntimeError(
+                f"AnimeTimm CUDA session was not activated (active providers: {active}). "
+                "CPU tagging fallback is disabled."
             )
 
         self.tags = pd.read_csv(tags_path)
