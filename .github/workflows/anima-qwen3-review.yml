@@ -137,14 +137,37 @@ jobs:
           node --check /tmp/flux-finetune.js
           node --check /tmp/sdxl-full.js
 
-      - name: Syntax-check generated branding modules
+      - name: Syntax-check final patched frontend bundles
         run: |
           python - <<'PY'
           from pathlib import Path
-          from mikazuki.frontend_branding import about_content_js, home_content_js
+          from mikazuki.frontend_branding import (
+              APP_ASSET,
+              LAYOUT_ASSET,
+              about_content_js,
+              home_content_js,
+              patch_branding_app_js,
+              patch_branding_layout_js,
+              patch_branding_index_html,
+          )
+          from mikazuki.frontend_training_patch import patch_training_layout_js
+          from mikazuki.training_pages import patch_frontend_app_js
+
+          assets = Path('frontend/dist/assets')
+          app = patch_branding_app_js(
+              patch_frontend_app_js((assets / APP_ASSET).read_text(encoding='utf-8'))
+          )
+          layout = patch_branding_layout_js(
+              patch_training_layout_js((assets / LAYOUT_ASSET).read_text(encoding='utf-8'))
+          )
+          Path('/tmp/dts-app.mjs').write_text(app, encoding='utf-8')
+          Path('/tmp/dts-layout.mjs').write_text(layout, encoding='utf-8')
           Path('/tmp/dts-home.mjs').write_text(home_content_js(), encoding='utf-8')
           Path('/tmp/dts-about.mjs').write_text(about_content_js(), encoding='utf-8')
+          patch_branding_index_html(Path('frontend/dist/index.html').read_text(encoding='utf-8'))
           PY
+          node --check /tmp/dts-app.mjs
+          node --check /tmp/dts-layout.mjs
           node --check /tmp/dts-home.mjs
           node --check /tmp/dts-about.mjs
 
