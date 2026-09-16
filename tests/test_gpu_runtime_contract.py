@@ -4,7 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from mikazuki import training_launcher
+from mikazuki import gpu_runtime
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -32,18 +32,18 @@ class TrainingGpuRuntimeTests(unittest.TestCase):
     def test_cuda_preflight_rejects_cpu_only_runtime(self):
         with patch.dict(sys.modules, {"torch": self._torch(False, [])}):
             with self.assertRaisesRegex(RuntimeError, "will not fall back to CPU training"):
-                training_launcher.validate_cuda_training_runtime()
+                gpu_runtime.validate_cuda_training_runtime()
 
     def test_cuda_preflight_accepts_gpu_and_normalizes_selection(self):
         with patch.dict(sys.modules, {"torch": self._torch(True, ["GPU 0", "GPU 1"])}):
-            selected, names = training_launcher.validate_cuda_training_runtime(["1"])
+            selected, names = gpu_runtime.validate_cuda_training_runtime(["1"])
         self.assertEqual(selected, ["1"])
         self.assertEqual(names, ["GPU 1"])
 
     def test_cuda_preflight_rejects_out_of_range_gpu_id(self):
         with patch.dict(sys.modules, {"torch": self._torch(True, ["GPU 0"])}):
             with self.assertRaisesRegex(RuntimeError, "outside the visible CUDA device range"):
-                training_launcher.validate_cuda_training_runtime(["1"])
+                gpu_runtime.validate_cuda_training_runtime(["1"])
 
     def test_repo_accelerate_config_forbids_cpu(self):
         config = (ROOT / "config" / "accelerate-gpu.yaml").read_text(encoding="utf-8")
@@ -51,10 +51,11 @@ class TrainingGpuRuntimeTests(unittest.TestCase):
         self.assertIn("gpu_ids: all", config)
 
     def test_common_launcher_always_uses_repo_gpu_config(self):
-        source = (ROOT / "mikazuki" / "training_launcher.py").read_text(encoding="utf-8")
-        self.assertIn("validate_cuda_training_runtime(gpu_ids)", source)
-        self.assertIn('"--config_file",\n        str(ACCELERATE_GPU_CONFIG)', source)
-        self.assertIn("Training was not started; DTS will not fall back to CPU training", source)
+        launcher = (ROOT / "mikazuki" / "training_launcher.py").read_text(encoding="utf-8")
+        runtime = (ROOT / "mikazuki" / "gpu_runtime.py").read_text(encoding="utf-8")
+        self.assertIn("validate_cuda_training_runtime(gpu_ids)", launcher)
+        self.assertIn('"--config_file",\n        str(ACCELERATE_GPU_CONFIG)', launcher)
+        self.assertIn("Training was not started; DTS will not fall back to CPU training", runtime)
 
     def test_every_webui_training_backend_uses_the_common_launch_path(self):
         api_source = (ROOT / "mikazuki" / "app" / "api.py").read_text(encoding="utf-8")
