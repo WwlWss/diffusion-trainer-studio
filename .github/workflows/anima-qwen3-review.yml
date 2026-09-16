@@ -47,6 +47,7 @@ on:
       - "tests/test_training_semantic_contract.py"
       - "tests/test_frontend_effective_config_patch.py"
       - "tests/test_frontend_branding.py"
+      - "tests/test_docker_contract.py"
       - "tests/test_training_schema_overrides.py"
       - "tests/test_training_page_routing.py"
       - "tests/test_training_schema_factory.py"
@@ -59,6 +60,9 @@ on:
       - ".gitmodules"
       - "sd-scripts"
       - "frontend"
+      - "Dockerfile"
+      - "Dockerfile-for-Mainland-China"
+      - ".dockerignore"
       - ".github/workflows/anima-qwen3-review.yml"
 
 jobs:
@@ -115,6 +119,7 @@ jobs:
             tests/test_training_semantic_contract.py \
             tests/test_frontend_effective_config_patch.py \
             tests/test_frontend_branding.py \
+            tests/test_docker_contract.py \
             tests/test_training_schema_overrides.py \
             tests/test_training_page_routing.py \
             tests/test_training_schema_factory.py \
@@ -131,6 +136,17 @@ jobs:
           node --check /tmp/flux-lora.js
           node --check /tmp/flux-finetune.js
           node --check /tmp/sdxl-full.js
+
+      - name: Syntax-check generated branding modules
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from mikazuki.frontend_branding import about_content_js, home_content_js
+          Path('/tmp/dts-home.mjs').write_text(home_content_js(), encoding='utf-8')
+          Path('/tmp/dts-about.mjs').write_text(about_content_js(), encoding='utf-8')
+          PY
+          node --check /tmp/dts-home.mjs
+          node --check /tmp/dts-about.mjs
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
@@ -149,6 +165,9 @@ jobs:
 
       - name: Contract - frontend branding overlay
         run: python -m unittest tests.test_frontend_branding -v
+
+      - name: Contract - Docker build inputs
+        run: python -m unittest tests.test_docker_contract -v
 
       - name: Contract - runtime schema specialization
         run: python -m unittest tests.test_training_schema_factory -v
