@@ -16,6 +16,9 @@ from mikazuki.log import log
 
 python_bin = sys.executable
 
+DEFAULT_ONNXRUNTIME_VERSION = "1.24.1"
+LEGACY_GLIBC_ONNXRUNTIME_VERSION = "1.16.3"
+
 
 def base_dir_path():
     return Path(__file__).parents[1].absolute()
@@ -71,8 +74,8 @@ def prepare_submodules():
 
 def git_tag(path: str) -> str:
     try:
-        return subprocess.check_output(["git", "-C", path, "describe", "--tags"]).strip().decode("utf-8")
-    except Exception as e:
+        return subprocess.check_output(["git", "-C", path, "describe", "--tags"], stderr=subprocess.DEVNULL).strip().decode("utf-8")
+    except Exception:
         return "<none>"
 
 
@@ -166,8 +169,6 @@ def is_installed(package, friendly: str = None):
             version = _installed_version(pkg_name)
 
             if version is not None:
-                # log.debug(f'Package version found: {pkg_name} {version}')
-
                 if pkg_version is not None:
                     if '>=' in pkg:
                         ok = version >= pkg_version
@@ -216,39 +217,101 @@ def setup_windows_bitsandbytes():
     if sys.platform != "win32":
         return
 
-    # bnb_windows_index = os.environ.get("BNB_WINDOWS_INDEX", "https://jihulab.com/api/v4/projects/140618/packages/pypi/simple")
     bnb_package = "bitsandbytes==0.46.0"
     bnb_path = os.path.join(sysconfig.get_paths()["purelib"], "bitsandbytes")
 
     installed_bnb = is_installed("bitsandbytes")  # don't check version here
-    bnb_cuda_setup = len([f for f in os.listdir(bnb_path) if re.findall(r"libbitsandbytes_cuda.+?\.dll", f)]) != 0
+    bnb_cuda_setup = (
+        os.path.isdir(bnb_path)
+        and any(re.findall(r"libbitsandbytes_cuda.+?\.dll", f) for f in os.listdir(bnb_path))
+    )
 
     if not installed_bnb or not bnb_cuda_setup:
         log.error("detected wrong install of bitsandbytes, reinstall it")
-        run_pip(f"uninstall bitsandbytes -y", "bitsandbytes", live=True)
+        run_pip("uninstall bitsandbytes -y", "bitsandbytes", live=True)
         run_pip(f"install {bnb_package}", bnb_package, live=True)
+
+
+def _torch_cuda_major() -> Optional[int]:
+    try:
+        import torch
+        cuda_version = getattr(torch.version, "cuda", None)
+    except Exception:
+        return None
+
+    if not cuda_version:
+        return None
+
+    try:
+        return int(str(cuda_version).split(".", 1)[0])
+    except (TypeError, ValueError):
+        return None
+
+
+def _onnxruntime_target(
+        onnx_version: Optional[str] = None,
+        index_url: Optional[str] = None
+):
+    explicit_package = os.environ.get("ONNXRUNTIME_PACKAGE")
+    if explicit_package and explicit_package not in {"onnxruntime", "onnxruntime-gpu"}:
+        raise ValueError("ONNXRUNTIME_PACKAGE must be 'onnxruntime' or 'onnxruntime-gpu'")
+
+    explicit_version = os.environ.get("ONNXRUNTIME_VERSION")
+    target_version = explicit_version or onnx_version or DEFAULT_ONNXRUNTIME_VERSION
+    target_index = os.environ.get("ONNXRUNTIME_INDEX_URL", index_url)
+
+    if sys.platform == "linux":
+        libc_name, libc_version = platform.libc_ver()
+        if libc_name == "glibc" and libc_version and libc_version <= "2.27" and not explicit_version:
+            target_version = LEGACY_GLIBC_ONNXRUNTIME_VERSION
+
+    if explicit_package:
+        return explicit_package, target_version, target_index
+
+    cuda_major = _torch_cuda_major()
+    if cuda_major is not None and cuda_major >= 12:
+        return "onnxruntime-gpu", target_version, target_index
+
+    if cuda_major is not None and cuda_major < 12:
+        log.warning(
+            "The default DTS ONNX Runtime GPU build targets CUDA 12.x; "
+            "using CPU ONNX Runtime for this legacy CUDA environment. "
+            "Set ONNXRUNTIME_PACKAGE/ONNXRUNTIME_VERSION/ONNXRUNTIME_INDEX_URL "
+            "to override this expert fallback."
+        )
+    else:
+        log.info("CUDA-enabled PyTorch not detected for ONNX Runtime; using the CPU package")
+
+    return "onnxruntime", target_version, target_index
 
 
 def setup_onnxruntime(
         onnx_version: Optional[str] = None,
         index_url: Optional[str] = None
 ):
-    if sys.platform == "linux":
-        libc_ver = platform.libc_ver()
-        if libc_ver[0] == "glibc" and libc_ver[1] <= "2.27":
-            onnx_version = "1.16.3"
+    target_package, target_version, target_index = _onnxruntime_target(onnx_version, index_url)
+    cpu_version = _installed_version("onnxruntime")
+    gpu_version = _installed_version("onnxruntime-gpu")
 
-    onnx_version = os.environ.get("ONNXRUNTIME_VERSION", onnx_version)
+    expected_version = cpu_version if target_package == "onnxruntime" else gpu_version
+    other_version = gpu_version if target_package == "onnxruntime" else cpu_version
 
-    if onnx_version and not is_installed(f"onnxruntime-gpu=={onnx_version}"):
-        log.info("uninstalling wrong onnxruntime version")
-        run_pip(f"uninstall onnxruntime -y", "onnxruntime", live=True)
-        run_pip(f"uninstall onnxruntime-gpu -y", "onnxruntime", live=True)
+    if expected_version == target_version and other_version is None:
+        return
 
-    if not is_installed(f"onnxruntime-gpu"):
-        log.info(f"installing onnxruntime")
-        pip_install("onnxruntime", onnx_version, index_url=index_url, live=True)
-        pip_install("onnxruntime-gpu", onnx_version, index_url=index_url, live=True)
+    if cpu_version is not None or gpu_version is not None:
+        log.info(
+            "repairing ONNX Runtime installation: "
+            f"cpu={cpu_version or 'none'}, gpu={gpu_version or 'none'}, "
+            f"target={target_package}=={target_version}"
+        )
+        # The CPU and GPU distributions expose the same `onnxruntime` namespace.
+        # Remove both before reinstalling one target package so shared files are
+        # never left in a mixed/partially-overwritten state.
+        run_pip("uninstall -y onnxruntime onnxruntime-gpu", "old ONNX Runtime packages", live=True)
+
+    log.info(f"installing {target_package}=={target_version}")
+    pip_install(target_package, target_version, index_url=target_index, live=True)
 
 
 def run_pip(command, desc=None, live=False):
@@ -318,9 +381,6 @@ def prepare_environment(disable_auto_mirror: bool = True, prepare_onnxruntime: b
 
     check_dirs(["config/autosave", "logs"])
 
-    # if not check_run("mikazuki/scripts/torch_check.py"):
-    #     sys.exit(1)
-
     validate_requirements("requirements.txt")
     setup_windows_bitsandbytes()
 
@@ -344,7 +404,7 @@ def check_port_avaliable(port: int):
         s.bind(("127.0.0.1", port))
         s.close()
         return True
-    except:
+    except Exception:
         return False
 
 
