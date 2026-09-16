@@ -32,6 +32,64 @@ class FrontendBrandingTests(unittest.TestCase):
             'href:"https://github.com/Akegarasu/lora-scripts",target:"_blank","aria-label":"GitHub"',
             branded,
         )
+        self.assertIn('/api/training/preview', branded)
+        self.assertIn('/api/training/export', branded)
+        self.assertIn('/api/training/rehydrate', branded)
+
+    def test_runtime_wrapper_chain_is_ordered_idempotent_and_preserves_virtual_pages(self):
+        original = training_pages.virtual_asset
+        try:
+            frontend_training_patch.install_frontend_training_patch()
+            effective_wrapper = training_pages.virtual_asset
+            self.assertTrue(getattr(effective_wrapper, "_mikazuki_effective_config_patch", False))
+
+            frontend_branding.install_frontend_branding_patch()
+            branded_wrapper = training_pages.virtual_asset
+            self.assertTrue(getattr(branded_wrapper, "_mikazuki_effective_config_patch", False))
+            self.assertTrue(getattr(branded_wrapper, "_mikazuki_branding_patch", False))
+            self.assertIs(getattr(branded_wrapper, "__wrapped__", None), effective_wrapper)
+
+            # Installing either layer again must not stack another wrapper.
+            frontend_training_patch.install_frontend_training_patch()
+            frontend_branding.install_frontend_branding_patch()
+            self.assertIs(training_pages.virtual_asset, branded_wrapper)
+
+            app = training_pages.virtual_asset(frontend_branding.APP_ASSET)
+            self.assertIn('{"text":"Diffusion Trainer Studio","link":"/"}', app)
+            self.assertIn('"text":"Anima LoRA"', app)
+            self.assertIn('"text":"Anima Finetune"', app)
+
+            layout = training_pages.virtual_asset(frontend_branding.LAYOUT_ASSET)
+            self.assertIn('/api/training/preview', layout)
+            self.assertIn('/api/training/export', layout)
+            self.assertIn('/api/training/rehydrate', layout)
+            self.assertIn(
+                'href:"https://github.com/WwlWss/diffusion-trainer-studio",target:"_blank","aria-label":"GitHub"',
+                layout,
+            )
+
+            anima_page = next(page for page in training_pages.VIRTUAL_TRAINING_PAGES if page.train_type == "anima-lora")
+            self.assertEqual(
+                training_pages.virtual_asset(anima_page.content_asset),
+                training_pages.page_content_js(anima_page),
+            )
+            self.assertEqual(
+                training_pages.virtual_asset(anima_page.data_asset),
+                training_pages.page_data_js(anima_page),
+            )
+        finally:
+            training_pages.virtual_asset = original
+
+    def test_branding_refuses_wrong_installation_order(self):
+        original = training_pages.virtual_asset
+        try:
+            training_pages.virtual_asset = training_pages.virtual_asset.__wrapped__ if hasattr(training_pages.virtual_asset, "__wrapped__") else training_pages.virtual_asset
+            while hasattr(training_pages.virtual_asset, "__wrapped__"):
+                training_pages.virtual_asset = training_pages.virtual_asset.__wrapped__
+            with self.assertRaisesRegex(RuntimeError, "after the effective-config frontend patch"):
+                frontend_branding.install_frontend_branding_patch()
+        finally:
+            training_pages.virtual_asset = original
 
     def test_home_content_uses_new_project_identity_and_upstream_credits(self):
         content = frontend_branding.home_content_js()
