@@ -1,0 +1,44 @@
+name: Runtime dependency review
+
+on:
+  pull_request:
+    paths:
+      - "requirements.txt"
+      - "gui.py"
+      - "run_gui.ps1"
+      - "install.ps1"
+      - "install-cn.ps1"
+      - "install.bash"
+      - "mikazuki/launch_utils.py"
+      - "mikazuki/tagger/interrogators/animetimm.py"
+      - "tests/test_runtime_dependency_contract.py"
+      - ".github/workflows/runtime-dependency-review.yml"
+  workflow_dispatch:
+
+jobs:
+  dependency-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile runtime bootstrap sources
+        run: |
+          python -m py_compile \
+            gui.py \
+            mikazuki/launch_utils.py \
+            mikazuki/tagger/interrogators/animetimm.py \
+            tests/test_runtime_dependency_contract.py
+
+      - name: Run runtime dependency contract tests
+        run: python -m unittest tests.test_runtime_dependency_contract -v
+
+      - name: Verify declared dependencies resolve on supported Python
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --dry-run -r requirements.txt
