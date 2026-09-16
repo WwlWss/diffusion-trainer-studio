@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 from huggingface_hub import hf_hub_download
+from huggingface_hub.errors import GatedRepoError, LocalEntryNotFoundError
 
 from mikazuki.tagger.interrogators.base import Interrogator
 
@@ -18,22 +19,63 @@ class AnimeTimmInterrogator(Interrogator):
         self.repo_id = repo_id
         self.kwargs = kwargs
 
-    def download(self):
+    def _download_file(self, filename: str) -> Path:
         common = {"repo_id": self.repo_id, **self.kwargs}
+
+        # A cached model must remain usable even if its upstream repository later
+        # becomes gated or the machine is temporarily offline. Try the local HF
+        # cache without a network request first, then fall back to the normal
+        # authenticated download path only when the file is missing.
+        try:
+            return Path(hf_hub_download(**common, filename=filename, local_files_only=True))
+        except LocalEntryNotFoundError:
+            pass
+
+        try:
+            return Path(hf_hub_download(**common, filename=filename))
+        except GatedRepoError as exc:
+            raise RuntimeError(
+                f"AnimeTimm model '{self.repo_id}' is gated on Hugging Face. "
+                "Accept the model's access terms in your browser and authenticate "
+                "Hugging Face locally (or provide HF_TOKEN), then retry."
+            ) from exc
+
+    def download(self):
         return (
-            Path(hf_hub_download(**common, filename="model.onnx")),
-            Path(hf_hub_download(**common, filename="selected_tags.csv")),
-            Path(hf_hub_download(**common, filename="preprocess.json")),
+            self._download_file("model.onnx"),
+            self._download_file("selected_tags.csv"),
+            self._download_file("preprocess.json"),
         )
 
     def load(self) -> None:
-        import torch
-        from onnxruntime import InferenceSession
+        # Import PyTorch before ONNX Runtime so ORT can reuse the CUDA/cuDNN DLLs
+        # bundled with the project's PyTorch installation on Windows.
+        import torch  # noqa: F401
+        import onnxruntime as ort
+
+        if hasattr(ort, "preload_dlls"):
+            try:
+                ort.preload_dlls()
+            except Exception as exc:
+                print(f"Warning: ONNX Runtime DLL preload failed: {exc}")
+
         model_path, tags_path, preprocess_path = self.download()
-        self.model = InferenceSession(str(model_path), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        available = ort.get_available_providers()
+        providers = ["CPUExecutionProvider"]
+        if "CUDAExecutionProvider" in available:
+            providers.insert(0, "CUDAExecutionProvider")
+
+        self.model = ort.InferenceSession(str(model_path), providers=providers)
+        active = self.model.get_providers()
+        if "CUDAExecutionProvider" not in active:
+            print(
+                "Warning: AnimeTimm is using CPUExecutionProvider. "
+                "GPU tagging is unavailable in the current ONNX Runtime environment."
+            )
+
         self.tags = pd.read_csv(tags_path)
         self.preprocess = json.loads(preprocess_path.read_text(encoding="utf-8"))
-        print(f"Loaded {self.name} model from {model_path}")
+        print(f"Loaded {self.name} model from {model_path} with providers {active}")
 
     @staticmethod
     def _resize_shorter_side(image: Image.Image, size):
