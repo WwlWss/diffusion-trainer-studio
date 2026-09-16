@@ -152,6 +152,10 @@ def install_frontend_branding_patch() -> None:
     original = training_pages.virtual_asset
     if getattr(original, "_mikazuki_branding_patch", False):
         return
+    if not getattr(original, "_mikazuki_effective_config_patch", False):
+        raise RuntimeError(
+            "Frontend branding must be installed after the effective-config frontend patch"
+        )
 
     def virtual_asset(asset_name: str):
         generated = original(asset_name)
@@ -181,5 +185,10 @@ def install_frontend_branding_patch() -> None:
 
         return generated
 
+    # Preserve the contract marker from the wrapped effective-config layer so
+    # future/repeated installer calls cannot mistake the outer wrapper for an
+    # unpatched function and stack another effective-config wrapper on top.
+    virtual_asset._mikazuki_effective_config_patch = True
     virtual_asset._mikazuki_branding_patch = True
+    virtual_asset.__wrapped__ = original
     training_pages.virtual_asset = virtual_asset
