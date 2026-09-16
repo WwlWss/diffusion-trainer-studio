@@ -20,6 +20,14 @@ function Assert-CompatiblePython {
     }
 }
 
+function Assert-NativeSuccess {
+    param([string]$Message)
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error $Message
+        exit 1
+    }
+}
+
 if (!(Test-Path -Path "venv")) {
     Write-Output "Creating venv for Python..."
     $py311 = Get-Command py -ErrorAction SilentlyContinue
@@ -27,37 +35,40 @@ if (!(Test-Path -Path "venv")) {
         py -3.11 -c "import sys" 2>$null
         if ($LASTEXITCODE -eq 0) {
             py -3.11 -m venv venv
+            Assert-NativeSuccess "Failed to create the Python 3.11 virtual environment."
         }
         else {
             Assert-CompatiblePython "python"
             python -m venv venv
+            Assert-NativeSuccess "Failed to create the virtual environment."
         }
     }
     else {
         Assert-CompatiblePython "python"
         python -m venv venv
-    }
-    if (-not $?) {
-        Write-Error "Failed to create the virtual environment."
-        exit 1
+        Assert-NativeSuccess "Failed to create the virtual environment."
     }
 }
 
 Assert-CompatiblePython ".\venv\Scripts\python.exe"
 .\venv\Scripts\activate
+if (-not $?) {
+    Write-Error "Failed to activate the virtual environment."
+    exit 1
+}
 
 Write-Output "Installing deps..."
 
 python -m pip install torch==2.7.0+cu128 torchvision==0.22.0+cu128 --extra-index-url https://download.pytorch.org/whl/cu128
+Assert-NativeSuccess "Torch/torchvision installation failed."
 python -m pip install -U -I --no-deps xformers==0.0.30 --extra-index-url https://download.pytorch.org/whl/cu128
+Assert-NativeSuccess "xformers installation failed."
 python -m pip install --upgrade -r requirements.txt
+Assert-NativeSuccess "DTS dependency installation failed."
 
 Write-Output "Checking dependency consistency..."
 python -m pip check
-if (-not $?) {
-    Write-Error "Dependency consistency check failed. Please review the pip output above."
-    exit 1
-}
+Assert-NativeSuccess "Dependency consistency check failed. Please review the pip output above."
 
 Write-Output "Install completed"
 Read-Host | Out-Null
