@@ -93,6 +93,20 @@ class TrainingPageRoutingTests(unittest.TestCase):
             with self.subTest(fragment=fragment):
                 self.assertIn(fragment, patched)
 
+        self.assertIn(
+            '{"text":"LoRA\\u8BAD\\u7EC3","collapsible":true,"children":[',
+            patched,
+        )
+        self.assertIn(
+            '{"text":"\\u5168\\u53C2\\u5FAE\\u8C03","collapsible":true,"children":[',
+            patched,
+        )
+        self.assertIn('{"text":"LoRA \\u6982\\u89C8","link":"/lora/index.md"}', patched)
+        self.assertNotIn(
+            '{"text":"LoRA\\u8BAD\\u7EC3","link":"/lora/index.md","collapsible":false',
+            patched,
+        )
+
         self.assertNotIn("Anima / Flux / Chroma", patched)
         self.assertNotIn("chroma-finetune", patched)
         for page in VIRTUAL_TRAINING_PAGES:
