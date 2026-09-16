@@ -49,6 +49,9 @@ jobs:
           printf 'torch==2.7.0\ntorchvision==0.22.0\n' > /tmp/dts-torch-constraints.txt
           python -m pip install --dry-run -c /tmp/dts-torch-constraints.txt -r requirements.txt
 
+      - name: Verify pinned ONNX Runtime resolves with DTS protobuf
+        run: python -m pip install --dry-run protobuf==3.20.3 onnxruntime-gpu==1.24.1
+
       - name: Smoke-test TensorBoard protobuf runtime
         run: |
           python -m pip install protobuf==3.20.3 tensorboard==2.20.0
