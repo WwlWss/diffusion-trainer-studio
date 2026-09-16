@@ -145,6 +145,17 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertIn('providers=["CUDAExecutionProvider"]', source)
         self.assertNotIn('providers=["CUDAExecutionProvider", "CPUExecutionProvider"]', source)
 
+    def test_all_other_local_onnx_taggers_use_cuda_only_session_helper(self):
+        helper = (ROOT / "mikazuki/tagger/interrogators/onnx_gpu.py").read_text(encoding="utf-8")
+        self.assertIn('session.disable_cpu_ep_fallback", "1"', helper)
+        self.assertIn('providers=["CUDAExecutionProvider"]', helper)
+        self.assertNotIn('"CPUExecutionProvider"', helper)
+
+        for filename in ("wd14.py", "cl.py", "pixai.py", "danbooru_query.py"):
+            source = (ROOT / "mikazuki/tagger/interrogators" / filename).read_text(encoding="utf-8")
+            self.assertIn("create_cuda_onnx_session", source, filename)
+            self.assertNotIn("CPUExecutionProvider", source, filename)
+
 
 if __name__ == "__main__":
     unittest.main()
