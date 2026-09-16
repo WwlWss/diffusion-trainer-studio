@@ -11,6 +11,7 @@ on:
       - "install.bash"
       - "config/accelerate-gpu.yaml"
       - "mikazuki/launch_utils.py"
+      - "mikazuki/gpu_runtime.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/app/api.py"
       - "mikazuki/app/training_api.py"
@@ -38,6 +39,7 @@ jobs:
           python -m py_compile \
             gui.py \
             mikazuki/launch_utils.py \
+            mikazuki/gpu_runtime.py \
             mikazuki/training_launcher.py \
             mikazuki/tagger/interrogators/animetimm.py \
             tests/test_runtime_dependency_contract.py \
