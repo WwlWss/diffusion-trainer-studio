@@ -63,7 +63,7 @@ The repository keeps the pinned prebuilt frontend distribution clean and injects
 
 ### Requirements
 
-- Python 3.10+ (use the version supported by the current dependency set)
+- Python 3.11 is the currently tested and recommended version for v2.0.0
 - Git
 - A CUDA-capable environment for GPU training
 
@@ -83,7 +83,19 @@ git submodule update --init --recursive
 
 ### Windows
 
-Run `install-cn.ps1` for the existing China-optimized setup, or use the project's normal installation workflow for your environment. Then start the UI with:
+For the normal installation path:
+
+```powershell
+.\install.ps1
+```
+
+For the existing China-optimized installation path:
+
+```powershell
+.\install-cn.ps1
+```
+
+Then start the UI with:
 
 ```powershell
 .\run_gui.ps1
