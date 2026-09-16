@@ -13,9 +13,10 @@ pytorch-optimizer==3.10.0
 prodigy-plus-schedule-free==1.9.2
 prodigyopt==1.1.2
 # TensorBoard 2.10.x ships generated protobuf code that is incompatible with
-# modern protobuf runtimes. 2.20.0 + protobuf 4.25.9 also stays within
-# wandb 0.16.2's protobuf<5 constraint.
-protobuf==4.25.9
+# newer protobuf runtimes. TensorBoard 2.20.0 works with protobuf>=3.19.6,
+# while open-clip-torch 2.20.0 requires protobuf<4 and wandb 0.16.2 requires
+# protobuf>=3.19,<5. Pin 3.20.3 at the intersection of all three constraints.
+protobuf==3.20.3
 tensorboard==2.20.0
 safetensors==0.4.5
 # ONNX Runtime is intentionally managed by mikazuki.launch_utils.setup_onnxruntime
