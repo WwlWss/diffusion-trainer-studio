@@ -41,6 +41,13 @@ def _frontend_shell_response() -> Response:
 
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
+        # VuePress ships a pre-rendered HTML file for every route. Those files
+        # contain the legacy SD-Trainer snapshot, so route/document requests use
+        # the branded runtime shell and let the client router hydrate the target
+        # page. Static assets continue through StaticFiles unchanged.
+        leaf = Path(path).name
+        if path.endswith(".html") or (leaf and "." not in leaf):
+            return _frontend_shell_response()
         try:
             return await super().get_response(path, scope)
         except HTTPException as ex:
