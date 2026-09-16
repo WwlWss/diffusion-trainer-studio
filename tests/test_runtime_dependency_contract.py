@@ -133,28 +133,28 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertNotIn("torch==1.12.1", source)
         self.assertIn("cuda_major_version == 11 && cuda_minor_version >= 8", source)
 
-    def test_animetimm_is_cache_first_and_forbids_cpu_fallback(self):
+    def test_animetimm_is_cache_first_and_uses_verified_cuda_helper(self):
         source = (
             ROOT / "mikazuki/tagger/interrogators/animetimm.py"
         ).read_text(encoding="utf-8")
         self.assertIn("local_files_only=True", source)
         self.assertIn("GatedRepoError", source)
-        self.assertIn("preload_dlls", source)
-        self.assertIn("get_providers", source)
-        self.assertIn('session.disable_cpu_ep_fallback", "1"', source)
-        self.assertIn('providers=["CUDAExecutionProvider"]', source)
-        self.assertNotIn('providers=["CUDAExecutionProvider", "CPUExecutionProvider"]', source)
+        self.assertIn("create_cuda_onnx_session", source)
+        self.assertNotIn("session.disable_cpu_ep_fallback", source)
 
-    def test_all_other_local_onnx_taggers_use_cuda_only_session_helper(self):
+    def test_all_local_onnx_taggers_use_verified_cuda_session_helper(self):
         helper = (ROOT / "mikazuki/tagger/interrogators/onnx_gpu.py").read_text(encoding="utf-8")
-        self.assertIn('session.disable_cpu_ep_fallback", "1"', helper)
-        self.assertIn('providers=["CUDAExecutionProvider"]', helper)
-        self.assertNotIn('"CPUExecutionProvider"', helper)
+        self.assertIn('session.record_ep_graph_assignment_info", "1"', helper)
+        self.assertIn('providers=["CUDAExecutionProvider", "CPUExecutionProvider"]', helper)
+        self.assertIn("get_provider_graph_assignment_info", helper)
+        self.assertIn("cuda_compute_nodes", helper)
+        self.assertIn("assigned no substantial tagger compute to CUDA", helper)
+        self.assertNotIn("session.disable_cpu_ep_fallback", helper)
 
-        for filename in ("wd14.py", "cl.py", "pixai.py", "danbooru_query.py"):
+        for filename in ("animetimm.py", "wd14.py", "cl.py", "pixai.py", "danbooru_query.py"):
             source = (ROOT / "mikazuki/tagger/interrogators" / filename).read_text(encoding="utf-8")
             self.assertIn("create_cuda_onnx_session", source, filename)
-            self.assertNotIn("CPUExecutionProvider", source, filename)
+            self.assertNotIn("session.disable_cpu_ep_fallback", source, filename)
 
 
 if __name__ == "__main__":
