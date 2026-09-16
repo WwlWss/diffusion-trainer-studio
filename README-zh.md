@@ -61,7 +61,7 @@ Anima 的 2.9B 模型、Block Swap、Qwen3 联合训练等额外说明见 [ANIMA
 
 ### 必要环境
 
-- Python 3.10+（实际请以当前依赖支持范围为准）
+- Python 3.11 是 v2.0.0 当前 CI 实际测试并推荐的版本
 - Git
 - 进行 GPU 训练时需要可用的 CUDA 环境
 
@@ -81,7 +81,13 @@ git submodule update --init --recursive
 
 ### Windows
 
-可运行现有的国内环境安装脚本：
+普通安装路径：
+
+```powershell
+.\install.ps1
+```
+
+中国大陆优化安装路径：
 
 ```powershell
 .\install-cn.ps1
