@@ -22,18 +22,51 @@ function Check {
     }
 }
 
+function Get-PythonMinor {
+    param([string]$PythonExe)
+    return (& $PythonExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
+}
+
+function Assert-CompatiblePython {
+    param([string]$PythonExe)
+    $version = Get-PythonMinor $PythonExe
+    if ($LASTEXITCODE -ne 0 -or $version -notin @("3.10", "3.11", "3.12")) {
+        Write-Output "不支持 Python $version。DTS v2.0.0 安装器支持 Python 3.10-3.12，其中 Python 3.11 为当前 CI 与发布测试版本。"
+        InstallFail
+    }
+    if ($version -ne "3.11") {
+        Write-Warning "当前 Python $version 可由安装器使用，但 DTS v2.0.0 当前推荐并测试 Python 3.11。"
+    }
+}
+
 if (Test-Path -Path "python\python.exe") {
     Write-Output "使用 python 文件夹内的 python..."
+    Assert-CompatiblePython ".\python\python.exe"
     $py_path = (Get-Item "python").FullName
     $env:PATH = "$py_path;$env:PATH"
 }
 else {
     if (!(Test-Path -Path "venv")) {
         Write-Output "正在创建虚拟环境..."
-        python -m venv venv
-        Check "创建虚拟环境失败。DTS v2.0.0 当前推荐并测试 Python 3.11 64 位，请确认 Python 已安装并加入 PATH。"
+        $py311 = Get-Command py -ErrorAction SilentlyContinue
+        if ($py311) {
+            py -3.11 -c "import sys" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                py -3.11 -m venv venv
+            }
+            else {
+                Assert-CompatiblePython "python"
+                python -m venv venv
+            }
+        }
+        else {
+            Assert-CompatiblePython "python"
+            python -m venv venv
+        }
+        Check "创建虚拟环境失败。DTS v2.0.0 当前推荐并测试 Python 3.11 64 位。"
     }
 
+    Assert-CompatiblePython ".\venv\Scripts\python.exe"
     Write-Output "检测到虚拟环境，尝试激活..."
     .\venv\Scripts\activate
     Check "激活虚拟环境失败。"
