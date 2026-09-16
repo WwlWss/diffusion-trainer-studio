@@ -25,7 +25,7 @@ class FrontendBrandingTests(unittest.TestCase):
         branded = frontend_branding.patch_branding_layout_js(training_patched)
 
         self.assertIn(
-            'href:"https://github.com/WwlWss/lora-scripts",target:"_blank","aria-label":"GitHub"',
+            'href:"https://github.com/WwlWss/diffusion-trainer-studio",target:"_blank","aria-label":"GitHub"',
             branded,
         )
         self.assertNotIn(
@@ -38,13 +38,13 @@ class FrontendBrandingTests(unittest.TestCase):
         self.assertIn("Diffusion Trainer Studio", content)
         self.assertIn("v2.0.0", content)
         self.assertIn("/branding/logo.webp", content)
-        self.assertIn("https://github.com/WwlWss/lora-scripts", content)
+        self.assertIn("https://github.com/WwlWss/diffusion-trainer-studio", content)
         self.assertIn("https://github.com/Akegarasu/lora-scripts", content)
         self.assertIn("https://github.com/kohya-ss/sd-scripts", content)
 
     def test_about_replaces_upstream_contact_details_with_project_links(self):
         content = frontend_branding.about_content_js()
-        self.assertIn("https://github.com/WwlWss/lora-scripts/issues", content)
+        self.assertIn("https://github.com/WwlWss/diffusion-trainer-studio/issues", content)
         self.assertIn("https://github.com/hanamizuki-ai/lora-gui-dist", content)
         self.assertIn("https://github.com/shigma/schemastery", content)
         self.assertNotIn("work@anzu.link", content)
