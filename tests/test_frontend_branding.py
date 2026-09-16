@@ -5,6 +5,7 @@ from mikazuki import frontend_branding, frontend_training_patch, training_pages
 
 
 ASSETS = Path("frontend/dist/assets")
+INDEX = Path("frontend/dist/index.html")
 
 
 class FrontendBrandingTests(unittest.TestCase):
@@ -36,12 +37,38 @@ class FrontendBrandingTests(unittest.TestCase):
         self.assertIn('/api/training/export', branded)
         self.assertIn('/api/training/rehydrate', branded)
 
+    def test_pre_rendered_shell_is_branded_before_hydration(self):
+        source = INDEX.read_text(encoding="utf-8")
+        branded = frontend_branding.patch_branding_index_html(source)
+
+        self.assertIn(
+            "<title>Diffusion Trainer Studio | 多架构 Diffusion 模型训练工作台</title>",
+            branded,
+        )
+        self.assertIn('href="/branding/logo.webp"', branded)
+        self.assertIn('aria-label="Diffusion Trainer Studio"', branded)
+        self.assertIn('href="https://github.com/WwlWss/diffusion-trainer-studio"', branded)
+        self.assertIn(frontend_branding.home_html(), branded)
+        self.assertNotIn("<title>SD-Trainer | SD 训练 UI</title>", branded)
+        self.assertNotIn('aria-label="SD-Trainer"', branded)
+        self.assertNotIn('<h1 id="sd-trainer"', branded)
+        self.assertNotIn("Stable Diffusion 训练 UI v1.13.0", branded)
+
+    def test_shell_patch_fails_closed_when_pinned_html_changes(self):
+        with self.assertRaises(RuntimeError):
+            frontend_branding.patch_branding_index_html("not the pinned VuePress shell")
+
     def test_runtime_wrapper_chain_is_ordered_idempotent_and_preserves_virtual_pages(self):
         original = training_pages.virtual_asset
         try:
+            while hasattr(training_pages.virtual_asset, "__wrapped__"):
+                training_pages.virtual_asset = training_pages.virtual_asset.__wrapped__
+            base_wrapper = training_pages.virtual_asset
+
             frontend_training_patch.install_frontend_training_patch()
             effective_wrapper = training_pages.virtual_asset
             self.assertTrue(getattr(effective_wrapper, "_mikazuki_effective_config_patch", False))
+            self.assertIs(getattr(effective_wrapper, "__wrapped__", None), base_wrapper)
 
             frontend_branding.install_frontend_branding_patch()
             branded_wrapper = training_pages.virtual_asset
@@ -83,9 +110,11 @@ class FrontendBrandingTests(unittest.TestCase):
     def test_branding_refuses_wrong_installation_order(self):
         original = training_pages.virtual_asset
         try:
-            training_pages.virtual_asset = training_pages.virtual_asset.__wrapped__ if hasattr(training_pages.virtual_asset, "__wrapped__") else training_pages.virtual_asset
             while hasattr(training_pages.virtual_asset, "__wrapped__"):
                 training_pages.virtual_asset = training_pages.virtual_asset.__wrapped__
+            self.assertFalse(
+                getattr(training_pages.virtual_asset, "_mikazuki_effective_config_patch", False)
+            )
             with self.assertRaisesRegex(RuntimeError, "after the effective-config frontend patch"):
                 frontend_branding.install_frontend_branding_patch()
         finally:
