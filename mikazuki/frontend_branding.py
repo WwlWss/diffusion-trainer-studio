@@ -32,6 +32,20 @@ def _replace_once(content: str, old: str, new: str, label: str) -> str:
     return content.replace(old, new, 1)
 
 
+def _replace_between_once(content: str, start: str, end: str, new: str, label: str) -> str:
+    """Replace one span while retaining the exact pinned start/end anchors."""
+    start_count = content.count(start)
+    end_count = content.count(end)
+    if start_count != 1 or end_count != 1:
+        raise RuntimeError(
+            f"Frontend branding span {label!r} expected one start/end anchor, "
+            f"found start={start_count}, end={end_count}"
+        )
+    start_pos = content.index(start) + len(start)
+    end_pos = content.index(end, start_pos)
+    return content[:start_pos] + new + content[end_pos:]
+
+
 def patch_branding_app_js(content: str) -> str:
     """Patch project-name strings after the training-page app patch is applied."""
     content = _replace_once(
@@ -59,20 +73,9 @@ def patch_branding_layout_js(content: str) -> str:
     )
 
 
-def _static_page_module(html: str, source_name: str) -> str:
-    """Build a tiny VuePress page using only exports known to the pinned bundle."""
-    html_json = json.dumps(html, ensure_ascii=True)
-    source_json = json.dumps(source_name, ensure_ascii=True)
-    return (
-        'import{_ as n,o as s,c}from"./app.547295de.js";'
-        f'const h={{}},i={html_json};'
-        'function m(){return s(),c("div",{innerHTML:i})}'
-        f'var x=n(h,[["render",m],["__file",{source_json}]]);export{{x as default}};\n'
-    )
-
-
-def home_content_js() -> str:
-    html = f"""
+def home_html() -> str:
+    """Return the DTS homepage body shared by the runtime page and SSR shell."""
+    return f"""
 <div align="center">
   <h1>Diffusion Trainer Studio</h1>
   <img src="/branding/logo.webp" width="200" height="200" alt="Diffusion Trainer Studio" style="margin:20px;border-radius:25px;object-fit:cover">
@@ -92,11 +95,10 @@ def home_content_js() -> str:
 <p>Diffusion Trainer Studio 从 Akegarasu/lora-scripts 的 SD-Trainer 工作流发展而来，并继续使用 kohya-ss/sd-scripts 及相关上游组件。上游项目、许可证与贡献者署名均予以保留。</p>
 <p>旧版 SD-Trainer 的历史更新记录请查看 <a href="https://github.com/Akegarasu/lora-scripts/releases" target="_blank" rel="noopener noreferrer">上游 Releases</a>。</p>
 """.strip()
-    return _static_page_module(html, "runtime-dts-home.vue")
 
 
-def about_content_js() -> str:
-    html = f"""
+def about_html() -> str:
+    return f"""
 <h2>关于 Diffusion Trainer Studio</h2>
 <p>Diffusion Trainer Studio（DTS）是一个面向多种 Diffusion 架构的训练工作台，由 WwlWss 维护。</p>
 <p>当前项目仓库：<a href="{PROJECT_REPOSITORY}" target="_blank" rel="noopener noreferrer">WwlWss/diffusion-trainer-studio</a>。问题与功能建议请提交到 <a href="{PROJECT_ISSUES}" target="_blank" rel="noopener noreferrer">GitHub Issues</a>。</p>
@@ -109,7 +111,78 @@ def about_content_js() -> str:
 </ul>
 <p>本项目保留并遵循仓库内各上游组件的许可证、版权声明与贡献者署名。本页面中的“当前项目”联系方式不代表上述上游项目的官方支持渠道。</p>
 """.strip()
-    return _static_page_module(html, "runtime-dts-about.vue")
+
+
+def patch_branding_index_html(content: str) -> str:
+    """Patch the pinned pre-rendered shell before it reaches the browser.
+
+    VuePress ships an SSR snapshot in ``dist/index.html``. Leaving that snapshot
+    untouched would flash the old SD-Trainer identity before hydration and would
+    expose stale branding to no-JS clients/crawlers, so the shell is patched with
+    the same DTS homepage body used by the runtime page module.
+    """
+    content = _replace_once(
+        content,
+        "<title>SD-Trainer | SD 训练 UI</title>",
+        "<title>Diffusion Trainer Studio | 多架构 Diffusion 模型训练工作台</title>",
+        "document title",
+    )
+    content = _replace_once(
+        content,
+        '<meta name="description" content="">',
+        '<meta name="description" content="Diffusion Trainer Studio"><link rel="icon" type="image/webp" href="/branding/logo.webp">',
+        "document metadata",
+    )
+    content = _replace_once(
+        content,
+        'aria-label="SD-Trainer"><!--[--><!--]--> SD-Trainer <!--[--><!--]--></a>',
+        'aria-label="Diffusion Trainer Studio"><!--[--><!--]--> Diffusion Trainer Studio <!--[--><!--]--></a>',
+        "pre-rendered sidebar project name",
+    )
+    content = _replace_once(
+        content,
+        'href="https://github.com/Akegarasu/lora-scripts" target="_blank" aria-label="GitHub"',
+        'href="https://github.com/WwlWss/diffusion-trainer-studio" target="_blank" aria-label="GitHub"',
+        "pre-rendered sidebar GitHub link",
+    )
+    content = _replace_between_once(
+        content,
+        '<div class="theme-default-content"><!--[--><!--]--><div>',
+        '</div><!--[--><!--]--></div><footer class="page-meta">',
+        home_html(),
+        "pre-rendered homepage",
+    )
+
+    forbidden = (
+        "<title>SD-Trainer | SD 训练 UI</title>",
+        'aria-label="SD-Trainer"',
+        '<h1 id="sd-trainer"',
+        "Stable Diffusion 训练 UI v1.13.0",
+    )
+    for anchor in forbidden:
+        if anchor in content:
+            raise RuntimeError(f"Legacy project branding survived frontend shell patch: {anchor}")
+    return content
+
+
+def _static_page_module(html: str, source_name: str) -> str:
+    """Build a tiny VuePress page using only exports known to the pinned bundle."""
+    html_json = json.dumps(html, ensure_ascii=True)
+    source_json = json.dumps(source_name, ensure_ascii=True)
+    return (
+        'import{_ as n,o as s,c}from"./app.547295de.js";'
+        f'const h={{}},i={html_json};'
+        'function m(){return s(),c("div",{innerHTML:i})}'
+        f'var x=n(h,[["render",m],["__file",{source_json}]]);export{{x as default}};\n'
+    )
+
+
+def home_content_js() -> str:
+    return _static_page_module(home_html(), "runtime-dts-home.vue")
+
+
+def about_content_js() -> str:
+    return _static_page_module(about_html(), "runtime-dts-about.vue")
 
 
 def _page_data_js(*, key: str, path: str, title: str, frontmatter: dict, file_path: str) -> str:
