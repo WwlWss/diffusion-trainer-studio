@@ -17,6 +17,11 @@ on:
       - "mikazuki/app/training_api.py"
       - "mikazuki/process.py"
       - "mikazuki/tagger/interrogators/animetimm.py"
+      - "mikazuki/tagger/interrogators/onnx_gpu.py"
+      - "mikazuki/tagger/interrogators/wd14.py"
+      - "mikazuki/tagger/interrogators/cl.py"
+      - "mikazuki/tagger/interrogators/pixai.py"
+      - "mikazuki/tagger/interrogators/danbooru_query.py"
       - "tests/test_runtime_dependency_contract.py"
       - "tests/test_gpu_runtime_contract.py"
       - ".github/workflows/runtime-dependency-review.yml"
@@ -42,6 +47,11 @@ jobs:
             mikazuki/gpu_runtime.py \
             mikazuki/training_launcher.py \
             mikazuki/tagger/interrogators/animetimm.py \
+            mikazuki/tagger/interrogators/onnx_gpu.py \
+            mikazuki/tagger/interrogators/wd14.py \
+            mikazuki/tagger/interrogators/cl.py \
+            mikazuki/tagger/interrogators/pixai.py \
+            mikazuki/tagger/interrogators/danbooru_query.py \
             tests/test_runtime_dependency_contract.py \
             tests/test_gpu_runtime_contract.py
 
