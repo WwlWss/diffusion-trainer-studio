@@ -12,9 +12,15 @@ schedulefree==1.4
 pytorch-optimizer==3.10.0
 prodigy-plus-schedule-free==1.9.2
 prodigyopt==1.1.2
-tensorboard==2.10.1
+# TensorBoard 2.10.x ships generated protobuf code that is incompatible with
+# modern protobuf runtimes. 2.20.0 + protobuf 4.25.9 also stays within
+# wandb 0.16.2's protobuf<5 constraint.
+protobuf==4.25.9
+tensorboard==2.20.0
 safetensors==0.4.5
-prodigy-plus-schedule-free
+# ONNX Runtime is intentionally managed by mikazuki.launch_utils.setup_onnxruntime
+# so the selected CPU/GPU distribution matches the installed PyTorch CUDA stack.
+# Do not add onnxruntime or onnxruntime-gpu here.
 # gradio==3.16.2
 altair==4.2.2
 easygui==0.98.3
