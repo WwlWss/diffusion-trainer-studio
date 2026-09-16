@@ -7,6 +7,7 @@ from PIL import Image
 from huggingface_hub import HfApi, hf_hub_download
 
 from mikazuki.tagger.interrogators.base import Interrogator
+from mikazuki.tagger.interrogators.onnx_gpu import create_cuda_onnx_session
 
 
 class DanbooruTagQueryInterrogator(Interrogator):
@@ -43,15 +44,13 @@ class DanbooruTagQueryInterrogator(Interrogator):
         return model_path, sidecars
 
     def load(self) -> None:
-        import torch
-        from onnxruntime import InferenceSession
         model_path, sidecars = self.download()
-        self.model = InferenceSession(str(model_path), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        self.model = create_cuda_onnx_session(model_path)
         self.config = json.loads(sidecars["config.json"].read_text(encoding="utf-8"))
         self.tag_to_id = json.loads(sidecars["tag_to_id.json"].read_text(encoding="utf-8"))
         self.category_map = json.loads(sidecars["tag_category.json"].read_text(encoding="utf-8"))
         self.id_to_tag = {int(v): k for k, v in self.tag_to_id.items()}
-        print(f"Loaded {self.name} model from {model_path}")
+        print(f"Loaded {self.name} model from {model_path} with providers {self.model.get_providers()}")
 
     def _preprocess(self, image: Image.Image) -> np.ndarray:
         image_size = int(self.config.get("image_size", 448))
