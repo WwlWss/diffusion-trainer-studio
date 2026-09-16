@@ -9,9 +9,15 @@ on:
       - "install.ps1"
       - "install-cn.ps1"
       - "install.bash"
+      - "config/accelerate-gpu.yaml"
       - "mikazuki/launch_utils.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/api.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/process.py"
       - "mikazuki/tagger/interrogators/animetimm.py"
       - "tests/test_runtime_dependency_contract.py"
+      - "tests/test_gpu_runtime_contract.py"
       - ".github/workflows/runtime-dependency-review.yml"
   workflow_dispatch:
 
@@ -32,8 +38,10 @@ jobs:
           python -m py_compile \
             gui.py \
             mikazuki/launch_utils.py \
+            mikazuki/training_launcher.py \
             mikazuki/tagger/interrogators/animetimm.py \
-            tests/test_runtime_dependency_contract.py
+            tests/test_runtime_dependency_contract.py \
+            tests/test_gpu_runtime_contract.py
 
       - name: Syntax-check installer scripts
         run: |
@@ -41,7 +49,9 @@ jobs:
           pwsh -NoProfile -Command '$files=@("install.ps1","install-cn.ps1","run_gui.ps1"); foreach ($f in $files) { $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 } }'
 
       - name: Run runtime dependency contract tests
-        run: python -m unittest tests.test_runtime_dependency_contract -v
+        run: |
+          python -m unittest tests.test_runtime_dependency_contract -v
+          python -m unittest tests.test_gpu_runtime_contract -v
 
       - name: Verify declared dependencies resolve on supported Python
         run: |
