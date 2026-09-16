@@ -56,7 +56,10 @@ def launch():
     log.info(f"{platform.system()} Python {platform.python_version()} {sys.executable}")
 
     if not args.skip_prepare_environment:
-        prepare_environment(disable_auto_mirror=args.disable_auto_mirror)
+        prepare_environment(
+            disable_auto_mirror=args.disable_auto_mirror,
+            prepare_onnxruntime=not args.skip_prepare_onnxruntime,
+        )
 
     if not check_port_avaliable(args.port):
         avaliable = find_avaliable_ports(30000, 30000+20)
