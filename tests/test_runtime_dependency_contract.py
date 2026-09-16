@@ -1,5 +1,4 @@
 import os
-import sys
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -100,12 +99,14 @@ class OnnxRuntimeBootstrapTests(unittest.TestCase):
 
 
 class RuntimeDependencyFileContractTests(unittest.TestCase):
-    def test_requirements_pin_tensorboard_and_protobuf_but_not_onnxruntime(self):
+    def test_requirements_pin_tensorboard_and_shared_protobuf_intersection(self):
         lines = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
         active = [line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")]
 
         self.assertIn("tensorboard==2.20.0", active)
-        self.assertIn("protobuf==4.25.9", active)
+        self.assertIn("protobuf==3.20.3", active)
+        self.assertIn("open-clip-torch==2.20.0", active)
+        self.assertIn("wandb==0.16.2", active)
         self.assertFalse(any(line.startswith("onnxruntime") for line in active))
         self.assertEqual(active.count("prodigy-plus-schedule-free==1.9.2"), 1)
 
