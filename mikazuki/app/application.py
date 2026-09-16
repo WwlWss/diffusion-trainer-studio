@@ -16,6 +16,7 @@ from mikazuki.app.config import app_config
 from mikazuki.app.api import load_schemas, load_presets
 from mikazuki.app.api_overlay import router as api_router
 from mikazuki.app.proxy import router as proxy_router
+from mikazuki.frontend_branding import patch_branding_index_html
 from mikazuki.training_pages import (
     patch_frontend_app_js,
     virtual_asset,
@@ -30,13 +31,21 @@ FRONTEND_DIST_DIR = Path("./frontend/dist")
 FRONTEND_ASSETS_DIR = FRONTEND_DIST_DIR / "assets"
 
 
+def _frontend_shell_response() -> Response:
+    index_path = FRONTEND_DIST_DIR / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=404)
+    content = patch_branding_index_html(index_path.read_text(encoding="utf-8"))
+    return Response(content=content, media_type="text/html")
+
+
 class SPAStaticFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         try:
             return await super().get_response(path, scope)
         except HTTPException as ex:
             if ex.status_code == 404:
-                return await super().get_response("index.html", scope)
+                return _frontend_shell_response()
             raise ex
 
 
@@ -95,7 +104,7 @@ app.include_router(api_router, prefix="/api")
 
 @app.get("/")
 async def index():
-    return FileResponse(FRONTEND_DIST_DIR / "index.html")
+    return _frontend_shell_response()
 
 
 @app.get("/favicon.ico", response_class=FileResponse)
@@ -128,11 +137,8 @@ async def frontend_asset(asset_name: str):
 
 
 def _virtual_training_shell():
-    """All runtime VuePress pages use the same SPA shell; route data is injected in app.js."""
-    index_path = FRONTEND_DIST_DIR / "index.html"
-    if not index_path.is_file():
-        raise HTTPException(status_code=404)
-    return FileResponse(index_path)
+    """All runtime VuePress pages use the same branded SPA shell."""
+    return _frontend_shell_response()
 
 
 @app.get("/lora/chroma.html")
