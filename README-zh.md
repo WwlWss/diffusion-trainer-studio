@@ -11,9 +11,9 @@ _✨ 多架构 Diffusion 模型训练工作台 ✨_
 </div>
 
 <p align="center">
-  <a href="https://github.com/WwlWss/lora-scripts">GitHub</a>
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio">GitHub</a>
   ·
-  <a href="https://github.com/WwlWss/lora-scripts/releases">Releases</a>
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio/releases">Releases</a>
   ·
   <a href="README.md">English README</a>
 </p>
@@ -67,10 +67,8 @@ Anima 的 2.9B 模型、Block Swap、Qwen3 联合训练等额外说明见 [ANIMA
 
 ### 克隆仓库和子模块
 
-这里显式指定本地目录名，使以后 GitHub 仓库改名后本地路径仍保持一致：
-
 ```sh
-git clone --recurse-submodules https://github.com/WwlWss/lora-scripts diffusion-trainer-studio
+git clone --recurse-submodules https://github.com/WwlWss/diffusion-trainer-studio
 cd diffusion-trainer-studio
 ```
 
@@ -151,7 +149,3 @@ Diffusion Trainer Studio 的开发建立在多个上游项目之上：
 - [Schemastery](https://github.com/shigma/schemastery) — schema 驱动的界面基础组件。
 
 子模块、上游派生文件和第三方代码继续遵循各自的许可证和版权声明。DTS 的 GitHub Issues 仅用于当前项目，不代表任何上游项目的官方支持渠道。
-
-## 仓库改名过渡说明
-
-本版本在仓库正式改名前提交，因此当前项目自己的链接统一指向现有 canonical 地址 `WwlWss/lora-scripts`。GitHub 在仓库改名后会为常规仓库 URL 提供重定向；同时本 README 不再使用依赖仓库 slug 的 Stars / Forks Shields 徽章，以避免改名后徽章失效。仓库正式改名后，再用一个很小的后续提交把 canonical URL 统一替换成最终新地址即可。
