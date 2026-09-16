@@ -48,3 +48,9 @@ jobs:
           python -m pip install --upgrade pip
           printf 'torch==2.7.0\ntorchvision==0.22.0\n' > /tmp/dts-torch-constraints.txt
           python -m pip install --dry-run -c /tmp/dts-torch-constraints.txt -r requirements.txt
+
+      - name: Smoke-test TensorBoard protobuf runtime
+        run: |
+          python -m pip install protobuf==3.20.3 tensorboard==2.20.0
+          python -c "from tensorboard.compat.proto import summary_pb2; import tensorboard.main; print('TensorBoard protobuf runtime OK')"
+          python -m pip check
