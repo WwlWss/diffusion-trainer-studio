@@ -133,7 +133,7 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertNotIn("torch==1.12.1", source)
         self.assertIn("cuda_major_version == 11 && cuda_minor_version >= 8", source)
 
-    def test_animetimm_is_cache_first_and_reports_provider_fallback(self):
+    def test_animetimm_is_cache_first_and_forbids_cpu_fallback(self):
         source = (
             ROOT / "mikazuki/tagger/interrogators/animetimm.py"
         ).read_text(encoding="utf-8")
@@ -141,7 +141,9 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertIn("GatedRepoError", source)
         self.assertIn("preload_dlls", source)
         self.assertIn("get_providers", source)
-        self.assertIn("CPUExecutionProvider", source)
+        self.assertIn('session.disable_cpu_ep_fallback", "1"', source)
+        self.assertIn('providers=["CUDAExecutionProvider"]', source)
+        self.assertNotIn('providers=["CUDAExecutionProvider", "CPUExecutionProvider"]', source)
 
 
 if __name__ == "__main__":
