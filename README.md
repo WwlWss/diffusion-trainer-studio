@@ -11,9 +11,9 @@ _✨ A unified training studio for diffusion models. ✨_
 </div>
 
 <p align="center">
-  <a href="https://github.com/WwlWss/lora-scripts">GitHub</a>
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio">GitHub</a>
   ·
-  <a href="https://github.com/WwlWss/lora-scripts/releases">Releases</a>
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio/releases">Releases</a>
   ·
   <a href="README-zh.md">中文 README</a>
 </p>
@@ -69,10 +69,8 @@ The repository keeps the pinned prebuilt frontend distribution clean and injects
 
 ### Clone with submodules
 
-The explicit destination directory keeps the local path stable even if the GitHub repository is renamed later:
-
 ```sh
-git clone --recurse-submodules https://github.com/WwlWss/lora-scripts diffusion-trainer-studio
+git clone --recurse-submodules https://github.com/WwlWss/diffusion-trainer-studio
 cd diffusion-trainer-studio
 ```
 
@@ -149,7 +147,3 @@ Diffusion Trainer Studio would not exist without its upstream projects. In parti
 - [Schemastery](https://github.com/shigma/schemastery) — schema-driven UI foundation.
 
 Submodules and vendored/upstream-derived files keep their own license and attribution information. A DTS repository link should not be interpreted as an official support channel for any upstream project.
-
-## Repository links during the rename transition
-
-This version intentionally points project-owned links at the current canonical repository, `WwlWss/lora-scripts`. GitHub repository redirects make those links safe across the planned rename, while avoiding repository-name-sensitive star/fork badges that can become stale. After the rename, a small follow-up can replace the old canonical URL with the final repository slug.
