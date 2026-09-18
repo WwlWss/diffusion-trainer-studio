@@ -7,6 +7,7 @@ from typing import Optional
 
 from mikazuki.anima_effective_config import prepare_anima_config, validate_post_override_anima_config
 from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
+from mikazuki.training_gui_args import normalize_numeric_fields
 from mikazuki.training_gui_semantics import (
     apply_raw_gui_semantics,
     apply_ui_custom_overrides,
@@ -107,6 +108,11 @@ def _post_override_normalize(
     warnings: list[str],
 ) -> None:
     """Re-assert all trainer invariants after ui_custom_params has overwritten values."""
+    # ui_custom_params is intentionally last-write-wins, but it must obey the
+    # same type contract as ordinary GUI fields. sd-scripts seeds argparse from
+    # TOML values directly, so quoted scientific-notation strings must be
+    # coerced here rather than relying on argparse type=... conversions.
+    normalize_numeric_fields(config)
     normalize_dataset_source(config)
     normalize_common_dataloader(config)
     _normalize_memory_mode(config, effective_train_type)
