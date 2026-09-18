@@ -42,6 +42,11 @@ _PATH_FIELDS = {
 _FLOAT_FIELDS = {
     "learning_rate", "unet_lr", "text_encoder_lr", "learning_rate_te",
     "learning_rate_te1", "learning_rate_te2", "sigmoid_scale", "guidance_scale",
+    # Anima's legacy Schemastery pages intentionally use string inputs for
+    # scientific notation. Coerce them before TOML serialization so argparse's
+    # Namespace-based config loader never receives quoted numeric strings.
+    "self_attn_lr", "cross_attn_lr", "mlp_lr", "mod_lr", "llm_adapter_lr",
+    "qwen3_lr", "logit_mean", "logit_std", "mode_scale", "ip_noise_gamma",
 }
 _OPTIONAL_EMPTY_FIELDS = {
     "vae", "reg_data_dir", "network_weights", "noise_offset", "multires_noise_iterations",
@@ -104,8 +109,14 @@ def _normalize_paths_and_gpu(config: dict) -> None:
         config["gpu_ids"] = normalized
 
 
-def _normalize_numeric_fields(config: dict) -> None:
-    """Preserve parseParams' numeric TOML contract without silently turning typos into zero."""
+def normalize_numeric_fields(config: dict) -> None:
+    """Coerce known GUI numeric strings without silently turning typos into zero.
+
+    This function is public because ui_custom_params is applied after the first
+    raw-GUI normalization pass. The post-override pipeline must run the same
+    coercion again; otherwise values such as qwen3_lr="5e-7" reach sd-scripts as
+    strings because read_config_from_file() seeds an argparse Namespace directly.
+    """
     for field in _FLOAT_FIELDS:
         value = config.get(field)
         if value in (None, "") or isinstance(value, (int, float)):
@@ -243,7 +254,7 @@ def apply_raw_gui_semantics(raw_config: dict, *, page_train_type: str | None = N
     if page_train_type == "lora-basic":
         config = {**_BASIC_LORA_DEFAULTS, **config}
     _normalize_paths_and_gpu(config)
-    _normalize_numeric_fields(config)
+    normalize_numeric_fields(config)
     _drop_empty_optional_fields(config)
     _parse_ui_custom_params(config)
     _normalize_network_args(config)
