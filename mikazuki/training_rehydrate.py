@@ -141,6 +141,11 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
         config["anima_lora_target"] = "dit" if unet_only else "qwen3" if te_only else "dit_qwen3"
         if "text_encoder_lr" in config:
             config["anima_lora_text_encoder_lr"] = str(config.pop("text_encoder_lr"))
+        if "learning_rate" in config:
+            config["learning_rate"] = str(config["learning_rate"])
+        for field in ("ip_noise_gamma", "logit_mean", "logit_std", "mode_scale"):
+            if field in config and config[field] not in (None, ""):
+                config[field] = str(config[field])
 
         # Restore semantic controls rather than forcing imported configs into
         # opaque raw booleans/custom args. Re-exporting the GUI state must
@@ -182,6 +187,12 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
     if page_train_type == "anima-finetune":
         if "learning_rate" in config:
             config["anima_finetune_learning_rate"] = str(config.pop("learning_rate"))
+        for field in (
+            "self_attn_lr", "cross_attn_lr", "mlp_lr", "mod_lr", "llm_adapter_lr",
+            "qwen3_lr", "ip_noise_gamma", "logit_mean", "logit_std", "mode_scale",
+        ):
+            if field in config and config[field] not in (None, ""):
+                config[field] = str(config[field])
         config["anima_precision_mode"] = _infer_anima_precision_mode(config)
         config["anima_latent_cache_mode"] = _infer_cache_mode(config, "cache_latents", "cache_latents_to_disk")
         config["anima_text_encoder_cache_mode"] = _infer_cache_mode(
