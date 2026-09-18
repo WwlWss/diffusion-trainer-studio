@@ -337,7 +337,13 @@ Schema.intersect([
             ]),
             Schema.union([
                 Schema.object({
-                    loss_type: Schema.union(["huber", "smooth_l1"]).required(),
+                    loss_type: Schema.const("huber").required(),
+                    huber_schedule: Schema.union(["constant", "exponential", "snr"]).default("snr").description("Huber 参数调度方式"),
+                    huber_c: Schema.number().step(0.01).default(0.1).description("Huber decay 参数"),
+                    huber_scale: Schema.number().step(0.1).default(1.0).description("Huber scale 参数"),
+                }),
+                Schema.object({
+                    loss_type: Schema.const("smooth_l1").required(),
                     huber_schedule: Schema.union(["constant", "exponential", "snr"]).default("snr").description("Huber 参数调度方式"),
                     huber_c: Schema.number().step(0.01).default(0.1).description("Huber decay 参数"),
                     huber_scale: Schema.number().step(0.1).default(1.0).description("Huber scale 参数"),
