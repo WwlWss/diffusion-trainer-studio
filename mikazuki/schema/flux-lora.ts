@@ -150,8 +150,6 @@ Schema.intersect([
             max_train_epochs: Schema.number().min(1).default(1).description("最大 epoch；填写 max_train_steps 时后端优先 step"),
             save_every_n_steps: Schema.number().min(1).description("可选：每 N step 保存一次模型"),
             train_batch_size: Schema.number().min(1).default(1).description("批量大小"),
-            gradient_checkpointing: Schema.boolean().default(true).description("梯度检查点"),
-            unsloth_offload_checkpointing: Schema.boolean().default(false).description("异步将 checkpoint activation 卸载到 CPU；不能与 blocks_to_swap 同时使用"),
             gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累加步数"),
         }).description("Anima LoRA 训练相关参数"),
         Schema.object({
