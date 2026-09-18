@@ -164,16 +164,48 @@ Schema.intersect([
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("lora").required(),
                 learning_rate: Schema.string().default("5e-5").description("Anima LoRA 的 DiT 学习率"),
-                lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup"]).default("constant").description("学习率调度器"),
+                lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup", "inverse_sqrt", "cosine_with_min_lr", "warmup_stable_decay", "piecewise_constant", "custom"]).default("constant").description("学习率调度器；Custom 会映射到 sd-scripts 的 lr_scheduler_type"),
                 lr_warmup_steps: Schema.number().default(0).description("学习率预热步数"),
+                lr_decay_steps: Schema.number().min(0).description("学习率衰减步数"),
+                lr_scheduler_args: Schema.array(String).role('table').description("自定义 scheduler 参数，一行一个 key=value"),
                 loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数类型"),
-                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME"]).default("AdamW8bit").description("优化器设置"),
+                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap", "logit_normal", "mode"]).default("uniform").description("Loss/timestep weighting；logit_normal/mode 仅在 timestep_sampling=sigma 时改变真实采样分布"),
+                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME", "Custom"]).default("AdamW8bit").description("优化器设置；Custom 可填写 sd-scripts 支持的完整 optimizer type/class"),
                 optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
             }).description("Anima LoRA 学习率与优化器"),
             Schema.union([
                 Schema.object({
+                    optimizer_type: Schema.const("Custom").required(),
+                    anima_lora_custom_optimizer_type: Schema.string().description("完整 optimizer type/class"),
+                }),
+                Schema.object({}),
+            ]),
+            Schema.union([
+                Schema.object({
+                    lr_scheduler: Schema.const("custom").required(),
+                    anima_lora_custom_lr_scheduler_type: Schema.string().description("完整 scheduler class；不含点时从 torch.optim.lr_scheduler 查找"),
+                }),
+                Schema.object({}),
+            ]),
+            Schema.union([
+                Schema.object({
                     lr_scheduler: Schema.const("cosine_with_restarts").required(),
                     lr_scheduler_num_cycles: Schema.number().default(1).description("重启次数"),
+                }),
+                Schema.object({}),
+            ]),
+            Schema.union([
+                Schema.object({
+                    weighting_scheme: Schema.const("logit_normal").required(),
+                    logit_mean: Schema.string().default("0.0").description("logit-normal timestep 分布均值"),
+                    logit_std: Schema.string().default("1.0").description("logit-normal timestep 分布标准差"),
+                }),
+                Schema.object({}),
+            ]),
+            Schema.union([
+                Schema.object({
+                    weighting_scheme: Schema.const("mode").required(),
+                    mode_scale: Schema.string().default("1.29").description("mode timestep 分布缩放"),
                 }),
                 Schema.object({}),
             ]),
@@ -191,15 +223,35 @@ Schema.intersect([
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("finetune").required(),
                 anima_finetune_learning_rate: Schema.string().default("1e-5").description("Anima 全参 DiT 总学习率；必须大于 0。分组件学习率留空时继承此值"),
+                self_attn_lr: Schema.string().description("Self-Attention 学习率；留空=总学习率，0=冻结该组件"),
+                cross_attn_lr: Schema.string().description("Cross-Attention 学习率；留空=总学习率，0=冻结该组件"),
+                mlp_lr: Schema.string().description("MLP 学习率；留空=总学习率，0=冻结该组件"),
+                mod_lr: Schema.string().description("AdaLN modulation 学习率；留空=总学习率，0=冻结该组件"),
+                llm_adapter_lr: Schema.string().description("内嵌 LLM Adapter 学习率；留空=总学习率，0=冻结 Adapter"),
                 lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup", "inverse_sqrt", "cosine_with_min_lr", "warmup_stable_decay", "piecewise_constant", "custom"]).default("constant").description("学习率调度器；Custom 会映射到 sd-scripts 的 lr_scheduler_type"),
                 lr_warmup_steps: Schema.number().default(0).description("学习率预热步数；可填整数 step，底层 parser 也支持小于 1 的比例值"),
                 lr_decay_steps: Schema.number().min(0).description("学习率衰减步数；warmup_stable_decay 等 scheduler 使用"),
                 lr_scheduler_args: Schema.array(String).role('table').description("自定义 scheduler 参数，一行一个 key=value；piecewise/custom scheduler 可用"),
                 loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数类型"),
-                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap"]).default("uniform").description("Anima 实际实现的 loss weighting；不暴露目前会退化成 uniform 的 mode/logit_normal"),
+                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap", "logit_normal", "mode"]).default("uniform").description("Loss/timestep weighting；logit_normal/mode 仅在 timestep_sampling=sigma 时改变真实采样分布"),
                 optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW", "PagedAdamW8bit", "PagedAdamW32bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdan", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME", "Custom"]).default("AdamW8bit").description("优化器设置；Custom 可填写 sd-scripts 支持的完整 optimizer class；训练 Qwen3 时仍受独立参数组 LR 白名单限制"),
                 optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
             }).description("Anima 全参微调学习率与优化器"),
+            Schema.union([
+                Schema.object({
+                    weighting_scheme: Schema.const("logit_normal").required(),
+                    logit_mean: Schema.string().default("0.0").description("logit-normal timestep 分布均值"),
+                    logit_std: Schema.string().default("1.0").description("logit-normal timestep 分布标准差"),
+                }),
+                Schema.object({}),
+            ]),
+            Schema.union([
+                Schema.object({
+                    weighting_scheme: Schema.const("mode").required(),
+                    mode_scale: Schema.string().default("1.29").description("mode timestep 分布缩放"),
+                }),
+                Schema.object({}),
+            ]),
             Schema.union([
                 Schema.object({
                     optimizer_type: Schema.const("Custom").required(),
@@ -269,19 +321,6 @@ Schema.intersect([
                 Schema.object({}),
             ]),
         ]),
-        Schema.object({}),
-    ]),
-
-    Schema.union([
-        Schema.object({
-            model_type: Schema.const("anima").required(),
-            anima_training_mode: Schema.const("finetune").required(),
-            self_attn_lr: Schema.string().description("Self-Attention 学习率；留空=总学习率，0=冻结该组件"),
-            cross_attn_lr: Schema.string().description("Cross-Attention 学习率；留空=总学习率，0=冻结该组件"),
-            mlp_lr: Schema.string().description("MLP 学习率；留空=总学习率，0=冻结该组件"),
-            mod_lr: Schema.string().description("AdaLN modulation 学习率；留空=总学习率，0=冻结该组件"),
-            llm_adapter_lr: Schema.string().description("内嵌 LLM Adapter 学习率；留空=总学习率，0=冻结 Adapter。当前 GUI 不提供独立 llm_adapter_path，因为 full trainer 尚未实际加载该路径"),
-        }).description("Anima 全参微调分组件学习率"),
         Schema.object({}),
     ]),
 
