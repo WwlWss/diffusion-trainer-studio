@@ -209,16 +209,18 @@ Schema.intersect([
             Schema.object({
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("lora").required(),
-                learning_rate: Schema.string().default("5e-5").description("Anima LoRA 的 DiT 学习率"),
-                lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup", "inverse_sqrt", "cosine_with_min_lr", "warmup_stable_decay", "piecewise_constant", "custom"]).default("constant").description("学习率调度器；Custom 会映射到 sd-scripts 的 lr_scheduler_type"),
-                lr_warmup_steps: Schema.number().default(0).description("学习率预热步数"),
-                lr_decay_steps: Schema.number().min(0).description("学习率衰减步数"),
-                lr_scheduler_args: Schema.array(String).role('table').description("自定义 scheduler 参数，一行一个 key=value"),
-                loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数类型"),
-                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap", "logit_normal", "mode"]).default("uniform").description("Loss/timestep weighting；logit_normal/mode 仅在 timestep_sampling=sigma 时改变真实采样分布"),
-                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME", "Custom"]).default("AdamW8bit").description("优化器设置；Custom 可填写 sd-scripts 支持的完整 optimizer type/class"),
-                optimizer_args_custom: Schema.array(String).role('table').description("自定义 optimizer_args，一行一个"),
+                learning_rate: Schema.string().default("5e-5").description("LoRA 主学习率。5e-5 是稳妥起点；角色/风格 LoRA 常在约 1e-5~1e-4 内调，数据少或过拟合快时向下调。"),
+                lr_scheduler: Schema.union(["linear", "cosine", "cosine_with_restarts", "polynomial", "constant", "constant_with_warmup", "inverse_sqrt", "cosine_with_min_lr", "warmup_stable_decay", "piecewise_constant", "custom"]).default("constant").description("学习率调度。短 LoRA 常用 constant；较长训练可尝试 cosine/linear。没有明确需求时保持 constant。"),
+                loss_type: Schema.union(["l1", "l2", "huber", "smooth_l1"]).default("l2").description("损失函数。l2 为通用默认；Huber/smooth_l1 对异常样本更稳健，但会改变梯度形态，通常不需要改。"),
+                weighting_scheme: Schema.union(["uniform", "sigma_sqrt", "cosmap", "logit_normal", "mode"]).default("uniform").description("不同噪声区间的采样/损失权重。uniform 为默认；sigma_sqrt/cosmap 重加权 loss；logit_normal/mode 仅配合 timestep_sampling=sigma。"),
+                optimizer_type: Schema.union(["AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree", "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit", "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP", "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy", "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME", "Custom"]).default("AdamW8bit").description("优化器。AdamW8bit 是默认且省显存；换 Prodigy/D-Adaptation/AdaFactor 等时需按对应算法重新评估 LR，不建议只换名字不改训练策略。"),
             }).description("Anima LoRA 学习率与优化器"),
+            Schema.object({
+                lr_warmup_steps: Schema.number().default(0).description("Warmup；0=关闭。长训练/较大学习率时可尝试总步数约 1%~5%，短 LoRA 多数保持 0。"),
+                lr_decay_steps: Schema.number().min(0).description("Decay 段长度；仅特定 scheduler 使用。普通 constant/cosine 留空。"),
+                lr_scheduler_args: Schema.array(String).role('table').description("额外 scheduler key=value；只在 custom/piecewise 等特殊调度器中需要。"),
+                optimizer_args_custom: Schema.array(String).role('table').description("额外 optimizer 参数。通常留空；只有 AdaFactor/自定义 optimizer 等需要专用参数时填写。"),
+            }).description("优化器与调度器高级参数（通常留空）").collapse(),
             Schema.union([
                 Schema.object({
                     optimizer_type: Schema.const("Custom").required(),
