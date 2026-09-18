@@ -1,0 +1,281 @@
+import unittest
+from pathlib import Path
+
+from mikazuki.training_config import prepare_training_config
+from mikazuki.training_gui_args import apply_raw_gui_semantics
+
+
+ROOT = Path(__file__).resolve().parents[1]
+SCHEMA = (ROOT / "mikazuki/schema/flux-lora.ts").read_text(encoding="utf-8")
+ANIMA_ARGS = (ROOT / "sd-scripts/library/anima_train_utils.py").read_text(encoding="utf-8-sig")
+ANIMA_NETWORK = (ROOT / "sd-scripts/networks/lora_anima.py").read_text(encoding="utf-8-sig")
+ANIMA_NETWORK_TRAINER = (ROOT / "sd-scripts/anima_train_network.py").read_text(encoding="utf-8-sig")
+ANIMA_FULL_TRAINER = (ROOT / "sd-scripts/anima_train.py").read_text(encoding="utf-8-sig")
+GENERIC_ARGS = (ROOT / "sd-scripts/library/args.py").read_text(encoding="utf-8-sig")
+TRAIN_NETWORK = (ROOT / "sd-scripts/train_network.py").read_text(encoding="utf-8-sig")
+
+
+def fake_resolve_backend(config, requested):
+    return requested, f"./{requested}.py"
+
+
+class AnimaUiParityTests(unittest.TestCase):
+    def prepare(self, config, page):
+        return prepare_training_config(
+            config,
+            page_train_type=page,
+            resolve_backend=fake_resolve_backend,
+        )
+
+    def test_scientific_notation_gui_values_become_toml_numbers(self):
+        raw = apply_raw_gui_semantics(
+            {
+                "self_attn_lr": "1e-6",
+                "cross_attn_lr": "2e-6",
+                "mlp_lr": "3e-6",
+                "mod_lr": "4e-6",
+                "llm_adapter_lr": "5e-7",
+                "qwen3_lr": "2e-7",
+                "ip_noise_gamma": "0.1",
+                "logit_mean": "-0.2",
+                "logit_std": "1.1",
+                "mode_scale": "1.29",
+            }
+        )
+        for key in (
+            "self_attn_lr", "cross_attn_lr", "mlp_lr", "mod_lr",
+            "llm_adapter_lr", "qwen3_lr", "ip_noise_gamma",
+            "logit_mean", "logit_std", "mode_scale",
+        ):
+            with self.subTest(key=key):
+                self.assertIsInstance(raw[key], float)
+
+    def test_post_override_numeric_values_are_also_coerced(self):
+        prepared = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "ui_custom_params": 'ip_noise_gamma = "0.15"\n',
+            },
+            "anima-lora",
+        )
+        self.assertEqual(prepared.config["ip_noise_gamma"], 0.15)
+        self.assertIsInstance(prepared.config["ip_noise_gamma"], float)
+
+    def test_full_component_lrs_survive_as_numeric_trainer_values(self):
+        prepared = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "anima_finetune_learning_rate": "1e-6",
+                "anima_precision_mode": "mixed_bf16",
+                "anima_latent_cache_mode": "off",
+                "anima_text_encoder_cache_mode": "off",
+                "anima_checkpoint_mode": "standard",
+                "optimizer_type": "AdamW8bit",
+                "lr_scheduler": "constant",
+                "timestep_sampling": "sigmoid",
+                "self_attn_lr": "1e-6",
+                "cross_attn_lr": "8e-7",
+                "mlp_lr": "9e-7",
+                "mod_lr": "7e-7",
+                "llm_adapter_lr": "5e-7",
+            },
+            "anima-finetune",
+        )
+        expected = {
+            "self_attn_lr": 1e-6,
+            "cross_attn_lr": 8e-7,
+            "mlp_lr": 9e-7,
+            "mod_lr": 7e-7,
+            "llm_adapter_lr": 5e-7,
+        }
+        for key, value in expected.items():
+            with self.subTest(key=key):
+                self.assertEqual(prepared.config[key], value)
+                self.assertIsInstance(prepared.config[key], float)
+
+    def test_logit_normal_is_effective_only_with_sigma_sampling(self):
+        prepared = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigma",
+                "weighting_scheme": "logit_normal",
+                "logit_mean": "-0.3",
+                "logit_std": "1.2",
+            },
+            "anima-lora",
+        )
+        self.assertEqual(prepared.config["weighting_scheme"], "logit_normal")
+        self.assertEqual(prepared.config["logit_mean"], -0.3)
+        self.assertEqual(prepared.config["logit_std"], 1.2)
+        with self.assertRaisesRegex(ValueError, "timestep_sampling=sigma"):
+            self.prepare(
+                {
+                    "anima_model_variant": "base",
+                    "learning_rate": "5e-5",
+                    "anima_lora_target": "dit",
+                    "timestep_sampling": "sigmoid",
+                    "weighting_scheme": "logit_normal",
+                },
+                "anima-lora",
+            )
+
+    def test_lora_network_gui_materializes_real_network_args(self):
+        prepared = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "anima_lora_train_llm_adapter": True,
+                "anima_lora_rank_dropout": "0.1",
+                "anima_lora_module_dropout": "0.2",
+                "anima_lora_include_patterns": "blocks\\.0\nblocks\\.1",
+                "anima_lora_exclude_patterns": "final_layer",
+                "anima_lora_network_reg_dims": "blocks.0=16,blocks.1=8",
+                "anima_lora_network_reg_lrs": "blocks.0=1e-4,blocks.1=5e-5",
+                "anima_lora_loraplus_lr_ratio": "2.0",
+            },
+            "anima-lora",
+        )
+        args = prepared.config["network_args"]
+        self.assertIn("train_llm_adapter=true", args)
+        self.assertIn("rank_dropout=0.1", args)
+        self.assertIn("module_dropout=0.2", args)
+        self.assertTrue(any(x.startswith("include_patterns=") for x in args))
+        self.assertTrue(any(x.startswith("exclude_patterns=") for x in args))
+        self.assertIn("network_reg_dims=blocks.0=16,blocks.1=8", args)
+        self.assertIn("network_reg_lrs=blocks.0=1e-4,blocks.1=5e-5", args)
+        self.assertIn("loraplus_lr_ratio=2.0", args)
+        for semantic in (
+            "anima_lora_train_llm_adapter",
+            "anima_lora_rank_dropout",
+            "anima_lora_module_dropout",
+            "anima_lora_include_patterns",
+        ):
+            self.assertNotIn(semantic, prepared.config)
+
+    def test_lora_checkpoint_and_compile_modes_materialize_raw_args(self):
+        cpu = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "anima_lora_checkpoint_mode": "cpu",
+                "anima_lora_compile_mode": "off",
+            },
+            "anima-lora",
+        ).config
+        self.assertTrue(cpu["gradient_checkpointing"])
+        self.assertTrue(cpu["cpu_offload_checkpointing"])
+        self.assertFalse(cpu["unsloth_offload_checkpointing"])
+
+        compiled = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "anima_lora_checkpoint_mode": "standard",
+                "anima_lora_compile_mode": "per_block",
+                "compile_backend": "inductor",
+                "compile_mode": "default",
+                "compile_dynamic": "auto",
+            },
+            "anima-lora",
+        ).config
+        self.assertTrue(compiled["compile"])
+        self.assertFalse(compiled["torch_compile"])
+        self.assertEqual(compiled["compile_backend"], "inductor")
+
+    def test_timestep_diagnostic_off_is_not_written_to_trainer_toml(self):
+        off = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "show_timesteps": "off",
+            },
+            "anima-lora",
+        ).config
+        self.assertNotIn("show_timesteps", off)
+
+        console = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "show_timesteps": "console",
+                "show_timesteps_resolution": "1024,768",
+                "show_timesteps_offset": 0.1,
+            },
+            "anima-lora",
+        ).config
+        self.assertEqual(console["show_timesteps"], "console")
+        self.assertEqual(console["show_timesteps_resolution"], "1024,768")
+        self.assertEqual(console["show_timesteps_offset"], 0.1)
+
+    def test_schema_controls_are_backed_by_pinned_sd_scripts(self):
+        schema_fields = (
+            "llm_adapter_lr",
+            "logit_mean", "logit_std", "mode_scale",
+            "ip_noise_gamma", "ip_noise_gamma_random_strength",
+            "show_timesteps", "show_timesteps_resolution", "show_timesteps_offset",
+            "dataset_repeats", "debug_dataset", "dataset_class",
+            "text_encoder_batch_size", "skip_cache_check",
+            "validation_split", "validate_every_n_steps", "validate_every_n_epochs",
+        )
+        for field in schema_fields:
+            with self.subTest(field=field):
+                self.assertIn(field, SCHEMA)
+
+        for arg in (
+            "--llm_adapter_lr", "--show_timesteps", "--show_timesteps_resolution",
+            "--show_timesteps_offset",
+        ):
+            self.assertIn(arg, ANIMA_ARGS)
+        for arg in (
+            "--ip_noise_gamma", "--ip_noise_gamma_random_strength",
+            "--dataset_repeats", "--debug_dataset", "--dataset_class",
+            "--text_encoder_batch_size", "--skip_cache_check",
+        ):
+            self.assertIn(arg, GENERIC_ARGS)
+        for arg in (
+            "--validation_split", "--validate_every_n_steps", "--validate_every_n_epochs",
+        ):
+            self.assertIn(arg, TRAIN_NETWORK)
+
+        for marker in (
+            'kwargs.get("train_llm_adapter"',
+            'kwargs.get("rank_dropout"',
+            'kwargs.get("module_dropout"',
+            'kwargs.get("network_reg_dims"',
+            'kwargs.get("network_reg_lrs"',
+            'kwargs.get("loraplus_lr_ratio"',
+        ):
+            self.assertIn(marker, ANIMA_NETWORK)
+        self.assertIn("if args.compile:", ANIMA_NETWORK_TRAINER)
+        self.assertIn("args.llm_adapter_lr", ANIMA_FULL_TRAINER)
+
+    def test_non_anima_page_does_not_receive_anima_semantics(self):
+        prepared = self.prepare(
+            {
+                "learning_rate": "1e-4",
+                "mixed_precision": "bf16",
+            },
+            "flux-finetune",
+        )
+        self.assertEqual(prepared.train_type, "flux-finetune")
+        self.assertNotIn("anima_lora_compile_mode", prepared.config)
+        self.assertNotIn("llm_adapter_lr", prepared.config)
+
+
+if __name__ == "__main__":
+    unittest.main()
