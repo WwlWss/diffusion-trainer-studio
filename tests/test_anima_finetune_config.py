@@ -179,17 +179,19 @@ class AnimaFinetuneConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "safetensors"):
             validate_anima_finetune_config(bad, "finetune")
 
-    def test_only_real_anima_weighting_schemes_are_allowed(self):
-        for scheme in ("uniform", "none", "sigma_sqrt", "cosmap"):
+    def test_supported_anima_weighting_schemes_match_effective_trainer_paths(self):
+        # logit_normal/mode are not special loss weights in
+        # compute_loss_weighting_for_anima, but they are real timestep-density
+        # controls when timestep_sampling=sigma. The effective-config layer
+        # rejects no-op combinations before this low-level validator.
+        for scheme in ("uniform", "none", "sigma_sqrt", "cosmap", "mode", "logit_normal"):
             with self.subTest(scheme=scheme):
                 config = {"learning_rate": 1e-5, "weighting_scheme": scheme}
                 validate_anima_finetune_config(config, "finetune")
 
-        for scheme in ("mode", "logit_normal"):
-            with self.subTest(scheme=scheme):
-                config = {"learning_rate": 1e-5, "weighting_scheme": scheme}
-                with self.assertRaisesRegex(ValueError, "loss-weighting"):
-                    validate_anima_finetune_config(config, "finetune")
+        config = {"learning_rate": 1e-5, "weighting_scheme": "not-a-real-scheme"}
+        with self.assertRaisesRegex(ValueError, "不受当前 trainer 支持"):
+            validate_anima_finetune_config(config, "finetune")
 
     def test_legacy_cpu_offload_explicitly_enables_gradient_checkpointing(self):
         config = {
