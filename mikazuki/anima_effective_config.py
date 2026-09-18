@@ -32,11 +32,11 @@ ANIMA_FULL_ONLY_KEYS = {
     "train_qwen3_text_encoder", "qwen3_lr", "qwen3_gradient_checkpointing", "qwen3_output_dir",
     "anima_finetune_learning_rate", "anima_precision_mode", "anima_latent_cache_mode",
     "anima_text_encoder_cache_mode", "anima_checkpoint_mode", "anima_custom_optimizer_type",
-    "anima_custom_lr_scheduler_type", "cpu_offload_checkpointing", "fused_backward_pass", "deepspeed",
+    "anima_custom_lr_scheduler_type", "fused_backward_pass", "deepspeed",
     "zero_stage", "offload_optimizer_device", "offload_optimizer_nvme_path", "offload_param_device",
     "offload_param_nvme_path", "zero3_init_flag", "zero3_save_16bit_model",
-    "fp16_master_weights_and_gradients", "torch_compile", "dynamo_backend", "ddp_static_graph",
-    "dataset_config", "in_json", "masked_loss", "conditioning_data_dir",
+    "fp16_master_weights_and_gradients", "ddp_static_graph",
+    "masked_loss", "conditioning_data_dir",
 }
 
 
