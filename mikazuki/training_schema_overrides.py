@@ -171,19 +171,19 @@ def fixed_flux_family_schema(template: str, model_type: str, train_type: str, an
     if model_type == "anima" and anima_mode == "lora":
         source = source.replace(
             'network_train_unet_only: Schema.boolean().default(true).disabled().description("固定为仅训练 Anima DiT LoRA；字段名沿用 sd-scripts 历史 U-Net 命名")',
-            'anima_lora_target: Schema.union(["dit", "qwen3", "dit_qwen3"]).default("dit").description("LoRA 训练目标：仅 DiT、仅 Qwen3、或 DiT + Qwen3"),\n'
-            '            anima_lora_text_encoder_lr: Schema.string().default("5e-6").description("Qwen3 LoRA 学习率；仅 Qwen3/联合目标使用")',
+            'anima_lora_target: Schema.union(["dit", "qwen3", "dit_qwen3"]).default("dit").description("LoRA 训练目标。dit 是绝大多数角色/风格 LoRA 的默认；只有要改变文本编码器行为时才选 qwen3 或 dit_qwen3，后两者更吃显存且更易影响提示词泛化。"),\n'
+            '            anima_lora_text_encoder_lr: Schema.string().default("5e-6").description("Qwen3 LoRA 学习率，仅 qwen3/dit_qwen3 使用。建议显著低于 DiT LoRA LR，可从约 1e-6~5e-6 起做短跑，过高容易破坏文本表示。")',
             1,
         )
         source = source.replace(
             'lowram: Schema.boolean().default(false).description("低主机内存模式")',
-            'memory_mode: Schema.union(["auto", "lowram", "highvram"]).default("auto").description("模型加载模式：Auto / Low RAM / High VRAM")',
+            'memory_mode: Schema.union(["auto", "lowram", "highvram"]).default("auto").description("模型加载模式。Auto 为稳妥默认；Low RAM 减少主机内存占用但可能增加搬运；High VRAM 减少 CPU/GPU 来回搬运但需要更多显存。")',
             1,
         )
     elif model_type == "anima" and anima_mode == "finetune":
         source = source.replace(
             'highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式，减少缓存阶段频繁清理 CUDA cache；仅在显存余量充足时建议开启")',
-            'memory_mode: Schema.union(["auto", "highvram"]).default("auto").description("模型加载模式：Auto / High VRAM；当前 Anima Full trainer 未实现 Low RAM")',
+            'memory_mode: Schema.union(["auto", "highvram"]).default("auto").description("模型加载模式。Auto 为推荐默认；High VRAM 在显存明显有余量时减少缓存阶段的 CUDA 清理/搬运，可能更快但会提高峰值显存。Anima Full 当前没有 Low RAM 路径。")',
             1,
         )
     return _fixed_flux_family_schema(source, model_type, train_type, anima_mode)
