@@ -42,6 +42,24 @@ class DatasetSourceContractTests(unittest.TestCase):
                 is_file=lambda path: True, is_dir=lambda path: True, inspect_data_dir=_inspect,
             )
 
+    def test_arbitrary_dataset_class_bypasses_folder_contract(self):
+        config = {
+            "dataset_class": "package.module.CustomDataset",
+            "train_data_dir": "stale-images",
+            "dataset_config": "stale.toml",
+            "in_json": "stale.json",
+        }
+        validate_dataset_source(
+            config, "anima-lora",
+            is_file=lambda path: False,
+            is_dir=lambda path: False,
+            inspect_data_dir=lambda path: (_ for _ in ()).throw(AssertionError("folder inspector must not run")),
+        )
+        self.assertEqual(config["dataset_class"], "package.module.CustomDataset")
+        self.assertNotIn("train_data_dir", config)
+        self.assertNotIn("dataset_config", config)
+        self.assertNotIn("in_json", config)
+
     def test_without_dataset_config_requires_train_dir(self):
         with self.assertRaises(ValueError):
             validate_dataset_source(

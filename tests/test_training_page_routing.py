@@ -117,6 +117,25 @@ class TrainingPageRoutingTests(unittest.TestCase):
             self.assertIsNotNone(virtual_asset(page.data_asset))
             self.assertIsNotNone(virtual_asset(page.content_asset))
 
+
+    def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn('Je(Ee(c(o)("collapse")),1)', patched)
+        self.assertIn('onClick:h=>n.value=!0', patched)
+        self.assertNotIn('collapse:"\\u6298\\u53E0\\u5B50\\u9879"', patched)
+        self.assertIn('collapse:"\\u6536\\u8D77"', patched)
+
+    def test_frontend_patch_restores_explicit_schema_collapse(self):
+        # The pinned Schemastery renderer forces Schema.intersect children to
+        # extra.foldable=false, which suppresses child meta.collapse entirely.
+        # DTS only lets children that explicitly carry meta.collapse inherit
+        # their foldability. Conditional Schema.union branches stay non-foldable
+        # so union.vue cannot render empty selector/collapse rows.
+        self.assertIn('extra:{foldable:!1}', APP_BUNDLE)
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertNotIn('extra:{foldable:!1}', patched)
+        self.assertIn('extra:{foldable:h.meta.collapse?void 0:!1}', patched)
+
     def test_flux_full_schema_has_no_lora_network_hyperparameters(self):
         fields = _schema_field_names(FLUX_FULL_SCHEMA)
         forbidden = {

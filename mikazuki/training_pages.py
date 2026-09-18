@@ -151,7 +151,72 @@ def patch_frontend_app_js(content: str) -> str:
     Every replacement is anchored to the pinned frontend build and fails closed
     if upstream changes invalidate an assumption. Silent partial navigation
     patches are more dangerous than refusing startup after a frontend update.
+
+    The pinned Schemastery renderer flattens children of Schema.intersect by
+    forcing extra.foldable=false. That makes a child object's collapse metadata
+    unreachable: the heading renders, but its fields stay permanently expanded.
+    DTS keeps the flat intersect shape so trainer keys remain top-level TOML
+    keys. Only children that explicitly declare meta.collapse may inherit their
+    own foldability; conditional Schema.union branches must remain non-foldable
+    or union.vue renders empty selector/collapse rows.
     """
+    foldable_anchor = 'extra:{foldable:!1}'
+    foldable_count = content.count(foldable_anchor)
+    if foldable_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery foldability anchor expected once, "
+            f"found {foldable_count}"
+        )
+    content = content.replace(
+        foldable_anchor,
+        # Only explicit child groups with meta.collapse should inherit their
+        # own foldability. Keep conditional Schema.union branches non-foldable;
+        # union.vue otherwise renders an empty branch selector/collapse row.
+        'extra:{foldable:h.meta.collapse?void 0:!1}',
+        1,
+    )
+
+    # The pinned renderer only shows a visible "expand" button while a group is
+    # collapsed. Once expanded, collapsing again is hidden inside the ellipsis
+    # menu. Keep the same control visible in both states so the interaction is
+    # symmetric: collapsed -> 展开以编辑, expanded -> 收起.
+    collapsed_control_anchor = (
+        'e.collapsible?(x(),U(Pe,{key:1},[n.value?'
+        '(x(),ce(u,{key:0,onClick:i[0]||(i[0]=h=>n.value=!1)},'
+        '{default:G(()=>[Je(Ee(c(o)("expand")),1)]),_:1}))'
+        ':ye("",!0)],64)):ye("",!0)'
+    )
+    collapsed_control_replacement = (
+        'e.collapsible?(x(),U(Pe,{key:1},[n.value?'
+        '(x(),ce(u,{key:0,onClick:i[0]||(i[0]=h=>n.value=!1)},'
+        '{default:G(()=>[Je(Ee(c(o)("expand")),1)]),_:1}))'
+        ':(x(),ce(u,{key:1,onClick:h=>n.value=!0},'
+        '{default:G(()=>[Je(Ee(c(o)("collapse")),1)]),_:1}))],64)):ye("",!0)'
+    )
+    control_count = content.count(collapsed_control_anchor)
+    if control_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery visible collapse-control anchor expected once, "
+            f"found {control_count}"
+        )
+    content = content.replace(
+        collapsed_control_anchor,
+        collapsed_control_replacement,
+        1,
+    )
+
+    zh_collapse_anchor = 'collapse:"\\u6298\\u53E0\\u5B50\\u9879"'
+    zh_collapse_count = content.count(zh_collapse_anchor)
+    if zh_collapse_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery Chinese collapse label anchor expected once, "
+            f"found {zh_collapse_count}"
+        )
+    content = content.replace(
+        zh_collapse_anchor,
+        'collapse:"\\u6536\\u8D77"',
+        1,
+    )
     old_lora_children = (
         '{"text":"LoRA\\u8BAD\\u7EC3","link":"/lora/index.md","collapsible":false,"children":['
         '{"text":"\\u65B0\\u624B\\uFF08SD1.5\\uFF09","link":"/lora/basic.md"},'

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+import ast
 
 from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
 
@@ -38,6 +39,20 @@ def _infer_cache_mode(config: dict, key: str, disk_key: str) -> str:
     disk = _as_bool(config.pop(disk_key, False))
     enabled = _as_bool(config.pop(key, False))
     return "disk" if disk else "memory" if enabled else "off"
+
+
+def _parse_repr_list(value: object) -> list[str]:
+    if value in (None, ""):
+        return []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    try:
+        parsed = ast.literal_eval(str(value))
+    except (ValueError, SyntaxError):
+        return [str(value)]
+    if isinstance(parsed, (list, tuple)):
+        return [str(item) for item in parsed]
+    return [str(parsed)]
 
 
 def _infer_checkpoint_mode(config: dict) -> str:
@@ -81,6 +96,36 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
         config["lora_target"] = "unet" if unet_only else "text_encoder" if te_only else "unet_text_encoder"
 
     args = _items(config.pop("network_args", None))
+    if page_train_type == "anima-lora":
+        value, args = _extract_arg(args, "train_llm_adapter")
+        if value is not None:
+            config["anima_lora_train_llm_adapter"] = _as_bool(value)
+
+        for arg_key, field in (
+            ("rank_dropout", "anima_lora_rank_dropout"),
+            ("module_dropout", "anima_lora_module_dropout"),
+            ("network_reg_dims", "anima_lora_network_reg_dims"),
+            ("network_reg_lrs", "anima_lora_network_reg_lrs"),
+            ("loraplus_lr_ratio", "anima_lora_loraplus_lr_ratio"),
+            ("loraplus_unet_lr_ratio", "anima_lora_loraplus_unet_lr_ratio"),
+            ("loraplus_text_encoder_lr_ratio", "anima_lora_loraplus_text_encoder_lr_ratio"),
+        ):
+            value, args = _extract_arg(args, arg_key)
+            if value is not None:
+                config[field] = value
+
+        for arg_key, field in (
+            ("include_patterns", "anima_lora_include_patterns"),
+            ("exclude_patterns", "anima_lora_exclude_patterns"),
+        ):
+            value, args = _extract_arg(args, arg_key)
+            if value is not None:
+                config[field] = "\n".join(_parse_repr_list(value))
+
+        value, args = _extract_arg(args, "verbose")
+        if value is not None:
+            config["anima_lora_network_verbose"] = _as_bool(value)
+
     if page_train_type in {"flux-lora", "chroma-lora"}:
         train_t5_raw, args = _extract_arg(args, "train_t5xxl")
         train_t5 = _as_bool(train_t5_raw)
@@ -96,10 +141,58 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
         config["anima_lora_target"] = "dit" if unet_only else "qwen3" if te_only else "dit_qwen3"
         if "text_encoder_lr" in config:
             config["anima_lora_text_encoder_lr"] = str(config.pop("text_encoder_lr"))
+        if "learning_rate" in config:
+            config["learning_rate"] = str(config["learning_rate"])
+        for field in ("ip_noise_gamma", "logit_mean", "logit_std", "mode_scale"):
+            if field in config and config[field] not in (None, ""):
+                config[field] = str(config[field])
+
+        # Restore semantic controls rather than forcing imported configs into
+        # opaque raw booleans/custom args. Re-exporting the GUI state must
+        # compile to the same effective sd-scripts configuration.
+        config["anima_lora_checkpoint_mode"] = _infer_checkpoint_mode(config)
+
+        accelerate_compile = _as_bool(config.pop("torch_compile", False))
+        per_block_compile = _as_bool(config.pop("compile", False))
+        if per_block_compile:
+            config["anima_lora_compile_mode"] = "per_block"
+            config.pop("dynamo_backend", None)
+        elif accelerate_compile:
+            config["anima_lora_compile_mode"] = "accelerate"
+            for key in ("compile_backend", "compile_mode", "compile_dynamic", "compile_fullgraph", "compile_cache_size_limit"):
+                config.pop(key, None)
+        else:
+            config["anima_lora_compile_mode"] = "off"
+            config.pop("dynamo_backend", None)
+            for key in ("compile_backend", "compile_mode", "compile_dynamic", "compile_fullgraph", "compile_cache_size_limit"):
+                config.pop(key, None)
+
+        optimizer = str(config.get("optimizer_type") or "")
+        known_optimizers = {
+            "AdamW", "AdamW8bit", "PagedAdamW8bit", "RAdamScheduleFree",
+            "Lion", "Lion8bit", "PagedLion8bit", "SGDNesterov", "SGDNesterov8bit",
+            "DAdaptation", "DAdaptAdam", "DAdaptAdaGrad", "DAdaptAdanIP",
+            "DAdaptLion", "DAdaptSGD", "AdaFactor", "Prodigy",
+            "prodigyplus.ProdigyPlusScheduleFree", "pytorch_optimizer.CAME",
+        }
+        if optimizer and optimizer not in known_optimizers:
+            config["anima_lora_custom_optimizer_type"] = optimizer
+            config["optimizer_type"] = "Custom"
+
+        scheduler_type = config.pop("lr_scheduler_type", None)
+        if scheduler_type:
+            config["anima_lora_custom_lr_scheduler_type"] = str(scheduler_type)
+            config["lr_scheduler"] = "custom"
 
     if page_train_type == "anima-finetune":
         if "learning_rate" in config:
             config["anima_finetune_learning_rate"] = str(config.pop("learning_rate"))
+        for field in (
+            "self_attn_lr", "cross_attn_lr", "mlp_lr", "mod_lr", "llm_adapter_lr",
+            "qwen3_lr", "ip_noise_gamma", "logit_mean", "logit_std", "mode_scale",
+        ):
+            if field in config and config[field] not in (None, ""):
+                config[field] = str(config[field])
         config["anima_precision_mode"] = _infer_anima_precision_mode(config)
         config["anima_latent_cache_mode"] = _infer_cache_mode(config, "cache_latents", "cache_latents_to_disk")
         config["anima_text_encoder_cache_mode"] = _infer_cache_mode(

@@ -74,14 +74,17 @@ CHECKPOINT_MODES: Mapping[str, tuple[bool, bool, bool]] = {
     "unsloth": (True, False, True),
 }
 
-# anima_train_utils.compute_loss_weighting_for_anima genuinely implements only
-# these behaviours. The shared parser advertises additional SD3-style names,
-# but they currently fall back to uniform weighting in the Anima helper.
+# Loss weighting itself has special Anima formulas only for sigma_sqrt/cosmap,
+# but logit_normal/mode are still meaningful when timestep_sampling=sigma:
+# flux_train_utils uses them to change the actual timestep sampling density.
+# anima_ui_parity validates that those modes are never exposed as a no-op.
 SUPPORTED_ANIMA_WEIGHTING_SCHEMES = {
     "uniform",
     "none",
     "sigma_sqrt",
     "cosmap",
+    "logit_normal",
+    "mode",
 }
 
 
@@ -475,8 +478,7 @@ def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> No
     if weighting_scheme not in SUPPORTED_ANIMA_WEIGHTING_SCHEMES:
         allowed = ", ".join(sorted(SUPPORTED_ANIMA_WEIGHTING_SCHEMES))
         raise ValueError(
-            f"Anima: weighting_scheme={weighting_scheme!r} 当前没有对应的 Anima loss-weighting 实现；"
-            f"请选择 {allowed}。"
+            f"Anima: weighting_scheme={weighting_scheme!r} 不受当前 trainer 支持；请选择 {allowed}。"
         )
 
     # Raw checkpoint-offload modes imply gradient checkpointing in sd-scripts;
