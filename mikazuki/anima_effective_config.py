@@ -16,6 +16,7 @@ from mikazuki.anima_finetune_config import (
     validate_anima_finetune_config,
 )
 from mikazuki.anima_qwen_config import normalize_qwen_training_config
+from mikazuki.anima_ui_parity import normalize_anima_ui_parity
 
 
 ANIMA_VARIANTS = {"base", "2.9b"}
@@ -140,6 +141,7 @@ def _materialize_flow_shift(config: dict, toml_path: str | None, launch: bool) -
 
 def _normalize_validate_mode(config: dict, mode: str) -> bool:
     """Idempotent mode normalization used both before and after custom TOML."""
+    normalize_anima_ui_parity(config, mode)
     if config.get("max_train_steps") not in (None, "", 0, "0"):
         config.pop("max_train_epochs", None)
     if config.get("attn_mode") == "xformers":
