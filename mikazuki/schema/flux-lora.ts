@@ -52,7 +52,12 @@ Schema.intersect([
             model_type: Schema.const("anima").required(),
             timestep_sampling: Schema.union(["sigma", "uniform", "sigmoid", "shift", "flux_shift"]).default("sigmoid").description("Anima Rectified Flow 时间步采样"),
             sigmoid_scale: Schema.number().step(0.001).default(1.0).description("sigmoid / shift / flux_shift 缩放"),
-            discrete_flow_shift: Schema.number().step(0.001).default(1.0).description("Rectified Flow 离散流位移；主要用于 shift 采样"),
+            discrete_flow_shift: Schema.number().step(0.001).default(1.0).description("Rectified Flow 离散流位移；sigma/shift 会真实使用该值"),
+            ip_noise_gamma: Schema.string().description("Input perturbation noise gamma；留空关闭，真实作用于 Rectified Flow noisy input"),
+            ip_noise_gamma_random_strength: Schema.boolean().default(false).description("在 0~ip_noise_gamma 间随机采样 input perturbation 强度"),
+            show_timesteps: Schema.union(["off", "console", "image"]).default("off").description("诊断当前 timestep/weighting 分布并退出，不执行训练；console=直方图，image=matplotlib"),
+            show_timesteps_resolution: Schema.string().default("1024").description("show_timesteps 使用的假定图像分辨率；可填 1024 或 1024,768"),
+            show_timesteps_offset: Schema.number().default(0).description("show_timesteps 的 subset timestep_sampling offset；仅 sigmoid/shift/flux_shift 有效"),
             qwen3_max_token_length: Schema.number().min(1).step(1).default(512).description("Qwen3 最大 token 长度"),
             t5_max_token_length: Schema.number().min(1).step(1).default(512).description("T5 tokenizer 最大 token 长度"),
             attn_mode: Schema.union(["torch", "xformers", "flash"]).default("torch").description("Attention 实现；选择 xformers 时后端会自动启用 split_attn"),
@@ -74,6 +79,17 @@ Schema.intersect([
             bucket_reso_steps: Schema.number().default(64).description("arb 桶分辨率划分单位；Anima 要求可被 16 整除"),
         })
     ).description("数据集设置"),
+
+    Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            dataset_repeats: Schema.number().min(1).step(1).default(1).description("Caption dataset 重复次数；DreamBooth 子目录模式由目录重复数规则控制"),
+            cache_info: Schema.boolean().default(false).description("缓存 DreamBooth 数据集 caption/尺寸元信息，加快后续载入"),
+            debug_dataset: Schema.boolean().default(false).description("只可视化/检查数据集并退出，不执行训练"),
+            dataset_class: Schema.string().description("高级：任意 dataset class，格式 package.module.Class；填写后由 sd-scripts load_arbitrary_dataset 接管"),
+        }).description("Anima 高级数据集控制"),
+        Schema.object({}),
+    ]),
 
     Schema.union([
         Schema.object({
