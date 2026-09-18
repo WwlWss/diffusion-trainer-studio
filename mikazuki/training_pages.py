@@ -170,6 +170,48 @@ def patch_frontend_app_js(content: str) -> str:
         'extra:{foldable:void 0}',
         1,
     )
+
+    # The pinned renderer only shows a visible "expand" button while a group is
+    # collapsed. Once expanded, collapsing again is hidden inside the ellipsis
+    # menu. Keep the same control visible in both states so the interaction is
+    # symmetric: collapsed -> 展开以编辑, expanded -> 收起.
+    collapsed_control_anchor = (
+        'e.collapsible?(x(),U(Pe,{key:1},[n.value?'
+        '(x(),ce(u,{key:0,onClick:i[0]||(i[0]=h=>n.value=!1)},'
+        '{default:G(()=>[Je(Ee(c(o)("expand")),1)]),_:1}))'
+        ':ye("",!0)],64)):ye("",!0)'
+    )
+    collapsed_control_replacement = (
+        'e.collapsible?(x(),U(Pe,{key:1},[n.value?'
+        '(x(),ce(u,{key:0,onClick:i[0]||(i[0]=h=>n.value=!1)},'
+        '{default:G(()=>[Je(Ee(c(o)("expand")),1)]),_:1}))'
+        ':(x(),ce(u,{key:1,onClick:h=>n.value=!0},'
+        '{default:G(()=>[Je(Ee(c(o)("collapse")),1)]),_:1}))],64)):ye("",!0)'
+    )
+    control_count = content.count(collapsed_control_anchor)
+    if control_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery visible collapse-control anchor expected once, "
+            f"found {control_count}"
+        )
+    content = content.replace(
+        collapsed_control_anchor,
+        collapsed_control_replacement,
+        1,
+    )
+
+    zh_collapse_anchor = 'collapse:"\\u6298\\u53E0\\u5B50\\u9879"'
+    zh_collapse_count = content.count(zh_collapse_anchor)
+    if zh_collapse_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery Chinese collapse label anchor expected once, "
+            f"found {zh_collapse_count}"
+        )
+    content = content.replace(
+        zh_collapse_anchor,
+        'collapse:"\\u6536\\u8D77"',
+        1,
+    )
     old_lora_children = (
         '{"text":"LoRA\\u8BAD\\u7EC3","link":"/lora/index.md","collapsible":false,"children":['
         '{"text":"\\u65B0\\u624B\\uFF08SD1.5\\uFF09","link":"/lora/basic.md"},'
