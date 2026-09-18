@@ -201,9 +201,13 @@ def _validate_common_effective_controls(config: dict) -> None:
         config.pop("logit_std", None)
         config.pop("mode_scale", None)
 
-    if not config.get("show_timesteps"):
+    show_timesteps = str(config.get("show_timesteps") or "").lower()
+    if show_timesteps in {"", "off", "none"}:
+        config.pop("show_timesteps", None)
         config.pop("show_timesteps_resolution", None)
         config.pop("show_timesteps_offset", None)
+    elif show_timesteps not in {"console", "image"}:
+        raise ValueError("Anima: show_timesteps 只能是 off / console / image。")
 
 
 def _validate_lora_effective_controls(config: dict) -> None:
