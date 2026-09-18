@@ -534,15 +534,15 @@ Schema.intersect([
             Schema.object({
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("finetune").required(),
-                alpha_mask: Schema.boolean().default(false).description("使用图像 alpha 通道作为 loss mask；数据集图像必须实际包含 alpha"),
-                face_crop_aug_range: Schema.string().description("可选：人脸中心裁剪范围，例如 2.0,4.0"),
-                skip_cache_check: Schema.boolean().default(false).description("跳过已有 latent / text-encoder cache 内容有效性检查；仅建议在确认缓存与当前设置匹配时启用"),
-                masked_loss: Schema.boolean().default(false).description("启用 conditioning mask loss；需要 conditioning_data_dir"),
-            }).description("Anima 全参微调高级数据/Mask 设置"),
+                alpha_mask: Schema.boolean().default(false).description("把训练图的 alpha 通道当作 loss mask，仅对带有效 alpha 的素材有意义。普通 RGB/JPG 数据保持关闭。"),
+                face_crop_aug_range: Schema.string().description("人脸中心随机裁剪范围，例如 2.0,4.0；用于人脸数据增强。非头像/人脸数据通常留空。"),
+                skip_cache_check: Schema.boolean().default(false).description("跳过 latent/text cache 参数一致性检查；只在确认模型、分辨率、tokenizer、caption 设置都未变化时开启，否则可能复用错误缓存。"),
+                masked_loss: Schema.boolean().default(false).description("只在 conditioning/mask 指定区域计算主要 loss；用于局部编辑/掩码训练。普通整图训练保持关闭。"),
+            }).description("全参高级数据增强与 Mask（通常关闭）").collapse(),
             Schema.union([
                 Schema.object({
                     masked_loss: Schema.const(true).required(),
-                    conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("与训练图像对应的 conditioning / mask 数据目录"),
+                    conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("与训练图逐一对应的 mask/conditioning 目录；仅 masked_loss=true 使用，文件对应关系必须与 sd-scripts 数据集规则一致。"),
                 }),
                 Schema.object({}),
             ]),
