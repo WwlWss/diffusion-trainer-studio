@@ -45,6 +45,12 @@ def validate_prepared_config(
     if not exists(str(prepared.trainer_file)):
         raise ValueError(f"训练脚本不存在: {prepared.trainer_file}。请初始化/更新对应子模块。")
 
+    # sd-scripts handles show_timesteps before loading model/text encoder/VAE
+    # or constructing the dataset. Keep DTS equally side-effect-free and do not
+    # make this diagnostic mode pretend to require runtime assets it never uses.
+    if prepared.train_type in {"anima-lora", "anima-finetune"} and config.get("show_timesteps"):
+        return
+
     model = config.get("pretrained_model_name_or_path")
     if not model:
         raise ValueError("必须指定 pretrained_model_name_or_path。")
