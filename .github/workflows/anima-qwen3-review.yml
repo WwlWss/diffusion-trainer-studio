@@ -7,6 +7,7 @@ on:
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
+      - "mikazuki/anima_ui_parity.py"
       - "mikazuki/process.py"
       - "mikazuki/app/api.py"
       - "mikazuki/app/api_overlay.py"
@@ -43,6 +44,7 @@ on:
       - "tests/test_anima_finetune_trainer_coverage.py"
       - "tests/test_anima_process_advanced.py"
       - "tests/test_anima_gui_trainer_contract.py"
+      - "tests/test_anima_ui_parity.py"
       - "tests/test_effective_training_config.py"
       - "tests/test_training_semantic_contract.py"
       - "tests/test_frontend_effective_config_patch.py"
@@ -86,6 +88,7 @@ jobs:
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
+            mikazuki/anima_ui_parity.py \
             mikazuki/process.py \
             mikazuki/app/api.py \
             mikazuki/app/api_overlay.py \
@@ -115,6 +118,7 @@ jobs:
             tests/test_anima_finetune_trainer_coverage.py \
             tests/test_anima_process_advanced.py \
             tests/test_anima_gui_trainer_contract.py \
+            tests/test_anima_ui_parity.py \
             tests/test_effective_training_config.py \
             tests/test_training_semantic_contract.py \
             tests/test_frontend_effective_config_patch.py \
