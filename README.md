@@ -1,131 +1,161 @@
 <div align="center">
 
-<img src="https://github.com/Akegarasu/lora-scripts/assets/36563862/3b177f4a-d92a-4da4-85c8-a0d163061a40" width="200" height="200" alt="SD-Trainer" style="border-radius: 25px">
+<img src="assets/dts-logo.webp" width="200" height="200" alt="Diffusion Trainer Studio" style="border-radius: 25px">
 
-# SD-Trainer
+# Diffusion Trainer Studio
 
-_✨ Enjoy Stable Diffusion Train！ ✨_
+_✨ A unified training studio for diffusion models. ✨_
+
+**v2.0.0**
 
 </div>
 
 <p align="center">
-  <a href="https://github.com/Akegarasu/lora-scripts" style="margin: 2px;">
-    <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/Akegarasu/lora-scripts">
-  </a>
-  <a href="https://github.com/Akegarasu/lora-scripts" style="margin: 2px;">
-    <img alt="GitHub forks" src="https://img.shields.io/github/forks/Akegarasu/lora-scripts">
-  </a>
-  <a href="https://raw.githubusercontent.com/Akegarasu/lora-scripts/master/LICENSE" style="margin: 2px;">
-    <img src="https://img.shields.io/github/license/Akegarasu/lora-scripts" alt="license">
-  </a>
-  <a href="https://github.com/Akegarasu/lora-scripts/releases" style="margin: 2px;">
-    <img src="https://img.shields.io/github/v/release/Akegarasu/lora-scripts?color=blueviolet&include_prereleases" alt="release">
-  </a>
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio">GitHub</a>
+  ·
+  <a href="https://github.com/WwlWss/diffusion-trainer-studio/releases">Releases</a>
+  ·
+  <a href="README-zh.md">中文 README</a>
 </p>
 
-<p align="center">
-  <a href="https://github.com/Akegarasu/lora-scripts/releases">Download</a>
-  ·
-  <a href="https://github.com/Akegarasu/lora-scripts/blob/main/README.md">Documents</a>
-  ·
-  <a href="https://github.com/Akegarasu/lora-scripts/blob/main/README-zh.md">中文README</a>
-</p>
+Diffusion Trainer Studio (DTS) is a WebUI, training-script preset collection and one-click training environment for multiple diffusion-model families. The project has grown from the original SD-Trainer / LoRA-scripts workflow into an independently maintained training studio with dedicated LoRA and full-finetune paths, runtime configuration validation, expanded tagging tools and Anima support.
 
-LoRA-scripts (a.k.a SD-Trainer)
+> [!IMPORTANT]
+> Diffusion Trainer Studio is developed from [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts) and continues to use training infrastructure from [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts). Many parts of the codebase also retain their original upstream licenses and attribution. Thank you to **秋葉 / Akegarasu**, **kohya-ss**, and all upstream contributors for the foundations this project builds on.
 
-LoRA & Dreambooth training GUI & scripts preset & one key training environment for [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts.git)
+## Highlights in v2.0.0
 
-## ✨NEW: Train WebUI
+- New project identity: **Diffusion Trainer Studio**.
+- Dedicated training pages and backend contracts for SD / SDXL / Flux / Chroma / Anima workflows.
+- Anima and Anima 2.9B LoRA and full finetuning.
+- Optional Qwen3 text-encoder joint finetuning for Anima full training.
+- One authoritative effective-config pipeline shared by Preview, Import, Export and Start.
+- Expanded anime taggers including AnimeTimm, DanbooruTagQuery and PixAI while retaining the existing WD / CL workflows.
+- Runtime validation for model family, training target, cache, dataset and memory-mode combinations.
+- Contract and regression tests for training pages, schemas, APIs and trainer routing.
 
-The **REAL** Stable Diffusion Training Studio. Everything in one WebUI.
+The historical SD-Trainer v1.x changelog belongs to the upstream project and remains available from [Akegarasu/lora-scripts Releases](https://github.com/Akegarasu/lora-scripts/releases).
 
-Follow the installation guide below to install the GUI, then run `run_gui.ps1`(windows) or `run_gui.sh`(linux) to start the GUI.
+## Training workflows
 
-![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/d3fcf5ad-fb8f-4e1d-81f9-c903376c19c6)
+The WebUI currently exposes these main paths:
 
-| Tensorboard | WD 1.4 Tagger | Tag Editor |
-| ------------ | ------------ | ------------ |
-| ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/b2ac5c36-3edf-43a6-9719-cb00b757fc76) | ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/9504fad1-7d77-46a7-a68f-91fbbdbc7407) | ![image](https://github.com/Akegarasu/lora-scripts/assets/36563862/4597917b-caa8-4e90-b950-8b01738996f2) |
+| Family | LoRA / network training | Full / finetune path |
+| --- | --- | --- |
+| SD 1.5 / SD2 | Yes | DreamBooth |
+| SDXL | Yes | Yes |
+| Flux | Yes | Yes |
+| Chroma | Yes | — |
+| Anima / Anima 2.9B | Yes | Yes |
+| SD3 / SD3.5 | Yes | — |
 
+Anima has additional controls documented in [ANIMA.md](ANIMA.md), including 2.9B model selection, block swapping and optional Qwen3 joint training.
 
-# Usage
+## WebUI
 
-### Required Dependencies
+Everything is integrated into one browser UI. After installation, run `run_gui.ps1` on Windows or `bash run_gui.sh` on Linux. The default address is:
 
-Python 3.10 and Git
+`http://127.0.0.1:28000`
 
-### Clone repo with submodules
+The repository keeps the pinned prebuilt frontend distribution clean and injects project-specific training pages and behavior at runtime. This reduces divergence from the frontend upstream while allowing DTS to maintain its own backend contracts and UI navigation.
+
+## Installation
+
+### Requirements
+
+- Python 3.11 is the currently tested and recommended version for v2.0.0
+- Git
+- A CUDA-capable environment for GPU training
+
+### Clone with submodules
 
 ```sh
-git clone --recurse-submodules https://github.com/Akegarasu/lora-scripts
+git clone --recurse-submodules https://github.com/WwlWss/diffusion-trainer-studio
+cd diffusion-trainer-studio
 ```
 
-## ✨ SD-Trainer GUI
+If the repository was cloned without submodules, initialize them with:
+
+```sh
+git submodule sync --recursive
+git submodule update --init --recursive
+```
 
 ### Windows
 
-#### Installation
+For the normal installation path:
 
-Run `install.ps1` will automatically create a venv for you and install necessary deps. 
-If you are in China mainland, please use `install-cn.ps1`
+```powershell
+.\install.ps1
+```
 
-#### Train
+For the existing China-optimized installation path:
 
-run `run_gui.ps1`, then program will open [http://127.0.0.1:28000](http://127.0.0.1:28000) automanticlly
+```powershell
+.\install-cn.ps1
+```
 
-### Linux
+Then start the UI with:
 
-#### Installation
-
-Run `install.bash` will create a venv and install necessary deps. 
-
-#### Train
-
-run `bash run_gui.sh`, then program will open [http://127.0.0.1:28000](http://127.0.0.1:28000) automanticlly
-
-## Legacy training through run script manually
-
-### Windows
-
-#### Installation
-
-Run `install.ps1` will automatically create a venv for you and install necessary deps.
-
-#### Train
-
-Edit `train.ps1`, and run it.
+```powershell
+.\run_gui.ps1
+```
 
 ### Linux
 
-#### Installation
+Run:
 
-Run `install.bash` will create a venv and install necessary deps.
+```bash
+bash install.bash
+bash run_gui.sh
+```
 
-#### Train
+### Docker
 
-Training script `train.sh` **will not** activate venv for you. You should activate venv first.
+Build the current repository directly rather than relying on historical upstream images:
+
+```bash
+docker build -t diffusion-trainer-studio:latest .
+docker run --gpus all -p 28000:28000 -p 6006:6006 diffusion-trainer-studio:latest
+```
+
+The Mainland China Dockerfile remains available as `Dockerfile-for-Mainland-China`.
+
+## Traditional script workflow
+
+The repository still contains the original script-oriented entry points for users who do not want the WebUI.
+
+On Windows, edit and run `train.ps1`. On Linux, activate the environment, edit `train.sh`, and run it:
 
 ```sh
 source venv/bin/activate
+bash train.sh
 ```
 
-Edit `train.sh`, and run it.
-
-#### TensorBoard
-
-Run `tensorboard.ps1` will start TensorBoard at http://localhost:6006/
+TensorBoard can be started with the existing TensorBoard helper scripts and is normally available on port `6006`.
 
 ## Program arguments
 
-| Parameter Name                | Type  | Default Value | Description                                      |
-|-------------------------------|-------|---------------|--------------------------------------------------|
-| `--host`                      | str   | "127.0.0.1"   | Hostname for the server                          |
-| `--port`                      | int   | 28000         | Port to run the server                           |
-| `--listen`                    | bool  | false         | Enable listening mode for the server             |
-| `--skip-prepare-environment`  | bool  | false         | Skip the environment preparation step            |
-| `--disable-tensorboard`       | bool  | false         | Disable TensorBoard                              |
-| `--disable-tageditor`         | bool  | false         | Disable tag editor                               |
-| `--tensorboard-host`          | str   | "127.0.0.1"   | Host to run TensorBoard                          |
-| `--tensorboard-port`          | int   | 6006          | Port to run TensorBoard                          |
-| `--localization`              | str   |               | Localization settings for the interface          |
-| `--dev`                       | bool  | false         | Developer mode to disale some checks             |
+| Argument | Type | Default | Description |
+| --- | --- | --- | --- |
+| `--host` | str | `127.0.0.1` | Server host |
+| `--port` | int | `28000` | WebUI port |
+| `--listen` | bool | false | Enable listening mode |
+| `--skip-prepare-environment` | bool | false | Skip environment preparation |
+| `--disable-tensorboard` | bool | false | Disable TensorBoard |
+| `--disable-tageditor` | bool | false | Disable the tag editor |
+| `--tensorboard-host` | str | `127.0.0.1` | TensorBoard host |
+| `--tensorboard-port` | int | `6006` | TensorBoard port |
+| `--localization` | str | — | UI localization |
+| `--dev` | bool | false | Developer mode |
+
+## Project lineage and acknowledgements
+
+Diffusion Trainer Studio would not exist without its upstream projects. In particular:
+
+- [Akegarasu/lora-scripts](https://github.com/Akegarasu/lora-scripts) — original LoRA-scripts / SD-Trainer project by **秋葉 / Akegarasu**.
+- [kohya-ss/sd-scripts](https://github.com/kohya-ss/sd-scripts) — training scripts and model-family implementations used throughout the project.
+- [hanamizuki-ai/lora-gui-dist](https://github.com/hanamizuki-ai/lora-gui-dist) — pinned prebuilt frontend distribution.
+- [Schemastery](https://github.com/shigma/schemastery) — schema-driven UI foundation.
+
+Submodules and vendored/upstream-derived files keep their own license and attribution information. A DTS repository link should not be interpreted as an official support channel for any upstream project.

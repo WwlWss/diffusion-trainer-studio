@@ -5,11 +5,16 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 from mikazuki.app.models import APIResponse
+from mikazuki.gpu_runtime import validate_cuda_training_runtime
 from mikazuki.log import log
 from mikazuki.tasks import tm
+
+
+ACCELERATE_GPU_CONFIG = Path(__file__).resolve().parents[1] / "config" / "accelerate-gpu.yaml"
 
 
 def run_prepared_train(
@@ -22,11 +27,25 @@ def run_prepared_train(
     run_id: str | None = None,
 ):
     """Start Accelerate without mutating trainer configuration again."""
+    try:
+        selected_gpu_ids, gpu_names = validate_cuda_training_runtime(gpu_ids)
+    except RuntimeError as exc:
+        log.error(f"GPU preflight failed / GPU 启动检查失败: {exc}")
+        return APIResponse(status="error", message=str(exc))
+
+    if not ACCELERATE_GPU_CONFIG.is_file():
+        message = f"Missing DTS GPU Accelerate config: {ACCELERATE_GPU_CONFIG}"
+        log.error(message)
+        return APIResponse(status="error", message=message)
+
     log.info(f"Training started with effective config / 使用最终配置启动训练: {toml_path}")
+    log.info(f"CUDA training preflight passed / GPU 检查通过: {', '.join(gpu_names)}")
     args = [
         sys.executable,
         "-m",
         "accelerate.commands.launch",
+        "--config_file",
+        str(ACCELERATE_GPU_CONFIG),
         "--num_cpu_threads_per_process",
         str(cpu_threads),
         "--quiet",
@@ -40,11 +59,11 @@ def run_prepared_train(
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONWARNINGS"] = "ignore::FutureWarning,ignore::UserWarning"
 
-    if gpu_ids:
-        env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu_ids)
-        log.info(f"Using GPU(s) / 使用 GPU: {gpu_ids}")
-        if len(gpu_ids) > 1:
-            args[3:3] = ["--multi_gpu", "--num_processes", str(len(gpu_ids))]
+    if selected_gpu_ids:
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(selected_gpu_ids)
+        log.info(f"Using GPU(s) / 使用 GPU: {selected_gpu_ids}")
+        if len(selected_gpu_ids) > 1:
+            args[3:3] = ["--multi_gpu", "--num_processes", str(len(selected_gpu_ids))]
             if sys.platform == "win32":
                 env["USE_LIBUV"] = "0"
                 args[3:3] = ["--rdzv_backend", "c10d"]

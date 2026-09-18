@@ -163,7 +163,8 @@ def patch_frontend_app_js(content: str) -> str:
         '{"text":"Dreambooth \\u8BAD\\u7EC3","link":"/dreambooth/index.md"}'
     )
     new_lora_children = (
-        '{"text":"LoRA\\u8BAD\\u7EC3","link":"/lora/index.md","collapsible":false,"children":['
+        '{"text":"LoRA\\u8BAD\\u7EC3","collapsible":true,"children":['
+        '{"text":"LoRA \\u6982\\u89C8","link":"/lora/index.md"},'
         '{"text":"\\u65B0\\u624B\\uFF08SD1.5\\uFF09","link":"/lora/basic.md"},'
         '{"text":"SD1.5 / SD2 LoRA","link":"/lora/master.md"},'
         '{"text":"SDXL LoRA","link":"/lora/sdxl.md"},'
@@ -173,7 +174,7 @@ def patch_frontend_app_js(content: str) -> str:
         '{"text":"SD3.5","link":"/lora/sd3.md"},'
         '{"text":"\\u5DE5\\u5177","link":"/lora/tools.md"},'
         '{"text":"\\u53C2\\u6570\\u8BE6\\u89E3","link":"/lora/params.md"}]},'
-        '{"text":"\\u5168\\u53C2\\u5FAE\\u8C03","collapsible":false,"children":['
+        '{"text":"\\u5168\\u53C2\\u5FAE\\u8C03","collapsible":true,"children":['
         '{"text":"SD1.5 / SD2 DreamBooth","link":"/dreambooth/index.md"},'
         '{"text":"SDXL Finetune","link":"/finetune/sdxl.md"},'
         '{"text":"Flux Finetune","link":"/finetune/flux.md"},'

@@ -1,0 +1,81 @@
+name: Runtime dependency review
+
+on:
+  pull_request:
+    paths:
+      - "requirements.txt"
+      - "gui.py"
+      - "run_gui.ps1"
+      - "install.ps1"
+      - "install-cn.ps1"
+      - "install.bash"
+      - "config/accelerate-gpu.yaml"
+      - "mikazuki/launch_utils.py"
+      - "mikazuki/gpu_runtime.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/api.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/process.py"
+      - "mikazuki/tagger/interrogators/animetimm.py"
+      - "mikazuki/tagger/interrogators/onnx_gpu.py"
+      - "mikazuki/tagger/interrogators/wd14.py"
+      - "mikazuki/tagger/interrogators/cl.py"
+      - "mikazuki/tagger/interrogators/pixai.py"
+      - "mikazuki/tagger/interrogators/danbooru_query.py"
+      - "tests/test_runtime_dependency_contract.py"
+      - "tests/test_gpu_runtime_contract.py"
+      - ".github/workflows/runtime-dependency-review.yml"
+  workflow_dispatch:
+
+jobs:
+  dependency-contract:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Compile runtime bootstrap sources
+        run: |
+          python -m py_compile \
+            gui.py \
+            mikazuki/launch_utils.py \
+            mikazuki/gpu_runtime.py \
+            mikazuki/training_launcher.py \
+            mikazuki/tagger/interrogators/animetimm.py \
+            mikazuki/tagger/interrogators/onnx_gpu.py \
+            mikazuki/tagger/interrogators/wd14.py \
+            mikazuki/tagger/interrogators/cl.py \
+            mikazuki/tagger/interrogators/pixai.py \
+            mikazuki/tagger/interrogators/danbooru_query.py \
+            tests/test_runtime_dependency_contract.py \
+            tests/test_gpu_runtime_contract.py
+
+      - name: Syntax-check installer scripts
+        run: |
+          bash -n install.bash
+          pwsh -NoProfile -Command '$files=@("install.ps1","install-cn.ps1","run_gui.ps1"); foreach ($f in $files) { $tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors); if ($errors.Count -gt 0) { $errors | ForEach-Object { Write-Error $_ }; exit 1 } }'
+
+      - name: Run runtime dependency contract tests
+        run: |
+          python -m unittest tests.test_runtime_dependency_contract -v
+          python -m unittest tests.test_gpu_runtime_contract -v
+
+      - name: Verify declared dependencies resolve on supported Python
+        run: |
+          python -m pip install --upgrade pip
+          printf 'torch==2.7.0\ntorchvision==0.22.0\n' > /tmp/dts-torch-constraints.txt
+          python -m pip install --dry-run -c /tmp/dts-torch-constraints.txt -r requirements.txt
+
+      - name: Verify pinned ONNX Runtime resolves with DTS protobuf
+        run: python -m pip install --dry-run protobuf==3.20.3 onnxruntime-gpu==1.24.1
+
+      - name: Smoke-test TensorBoard protobuf runtime
+        run: |
+          python -m pip install protobuf==3.20.3 tensorboard==2.20.0
+          python -c "from tensorboard.compat.proto import summary_pb2; import tensorboard.main; print('TensorBoard protobuf runtime OK')"
+          python -m pip check

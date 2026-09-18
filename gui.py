@@ -9,7 +9,7 @@ from mikazuki.launch_utils import (base_dir_path, catch_exception, git_tag,
                                    prepare_environment, check_port_avaliable, find_avaliable_ports)
 from mikazuki.log import log
 
-parser = argparse.ArgumentParser(description="GUI for stable diffusion training")
+parser = argparse.ArgumentParser(description="Diffusion Trainer Studio GUI")
 parser.add_argument("--host", type=str, default="127.0.0.1")
 parser.add_argument("--port", type=int, default=28000, help="Port to run the server on")
 parser.add_argument("--listen", action="store_true")
@@ -51,12 +51,15 @@ def run_tag_editor():
 
 
 def launch():
-    log.info("Starting SD-Trainer Mikazuki GUI...")
+    log.info("Starting Diffusion Trainer Studio GUI...")
     log.info(f"Base directory: {base_dir_path()}, Working directory: {os.getcwd()}")
     log.info(f"{platform.system()} Python {platform.python_version()} {sys.executable}")
 
     if not args.skip_prepare_environment:
-        prepare_environment(disable_auto_mirror=args.disable_auto_mirror)
+        prepare_environment(
+            disable_auto_mirror=args.disable_auto_mirror,
+            prepare_onnxruntime=not args.skip_prepare_onnxruntime,
+        )
 
     if not check_port_avaliable(args.port):
         avaliable = find_avaliable_ports(30000, 30000+20)
@@ -65,7 +68,7 @@ def launch():
         else:
             log.error("port finding fallback error")
 
-    log.info(f"SD-Trainer Version: {git_tag(base_dir_path())}")
+    log.info(f"Diffusion Trainer Studio Version: {git_tag(base_dir_path())}")
 
     os.environ["MIKAZUKI_HOST"] = args.host
     os.environ["MIKAZUKI_PORT"] = str(args.port)

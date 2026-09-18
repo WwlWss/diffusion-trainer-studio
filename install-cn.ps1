@@ -1,51 +1,94 @@
-$Env:HF_HOME = "huggingface"
+$repoRoot = $PSScriptRoot
+if (-not $Env:HF_HUB_CACHE) {
+    $Env:HF_HUB_CACHE = Join-Path $repoRoot "huggingface\hub"
+}
 $Env:PIP_DISABLE_PIP_VERSION_CHECK = 1
 $Env:PIP_NO_CACHE_DIR = 1
 $Env:PIP_INDEX_URL = "https://pypi.tuna.tsinghua.edu.cn/simple"
+
 function InstallFail {
-    Write-Output "°²×°Ê§°Ü¡£"
-    Read-Host | Out-Null ;
-    Exit
+    param([string]$Message = "å®‰è£…å¤±è´¥ã€‚")
+    Write-Output $Message
+    Read-Host | Out-Null
+    Exit 1
 }
 
-function Check {
-    param (
-        $ErrorInfo
-    )
-    if (!($?)) {
-        Write-Output $ErrorInfo
-        InstallFail
+function Assert-NativeSuccess {
+    param([string]$Message)
+    if ($LASTEXITCODE -ne 0) {
+        InstallFail $Message
     }
 }
+
+function Get-PythonMinor {
+    param([string]$PythonExe)
+    return (& $PythonExe -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null)
+}
+
+function Assert-CompatiblePython {
+    param([string]$PythonExe)
+    $version = Get-PythonMinor $PythonExe
+    if ($LASTEXITCODE -ne 0 -or $version -notin @("3.10", "3.11", "3.12")) {
+        InstallFail "ä¸æ”¯æŒ Python $versionã€‚DTS v2.0.0 å®‰è£…å™¨æ”¯æŒ Python 3.10-3.12ï¼Œå…¶ä¸­ Python 3.11 ä¸ºå½“å‰ CI ä¸å‘å¸ƒæµ‹è¯•ç‰ˆæœ¬ã€‚"
+    }
+    if ($version -ne "3.11") {
+        Write-Warning "å½“å‰ Python $version å¯ç”±å®‰è£…å™¨ä½¿ç”¨ï¼Œä½† DTS v2.0.0 å½“å‰æ¨èå¹¶æµ‹è¯• Python 3.11ã€‚"
+    }
+}
+
 if (Test-Path -Path "python\python.exe") {
-    Write-Output "Ê¹ÓÃ python ÎÄ¼ş¼ĞÄÚµÄ python..."
+    Write-Output "ä½¿ç”¨ python æ–‡ä»¶å¤¹å†…çš„ python..."
+    Assert-CompatiblePython ".\python\python.exe"
     $py_path = (Get-Item "python").FullName
     $env:PATH = "$py_path;$env:PATH"
 }
 else {
     if (!(Test-Path -Path "venv")) {
-        Write-Output "ÕıÔÚ´´½¨ĞéÄâ»·¾³..."
-        python -m venv venv
-        Check "´´½¨ĞéÄâ»·¾³Ê§°Ü£¬Çë¼ì²é python ÊÇ·ñ°²×°Íê±ÏÒÔ¼° python °æ±¾ÊÇ·ñÎª64Î»°æ±¾µÄpython 3.10¡¢»òpythonµÄÄ¿Â¼ÊÇ·ñÔÚ»·¾³±äÁ¿PATHÄÚ¡£"
+        Write-Output "æ­£åœ¨åˆ›å»ºè™šæ‹Ÿç¯å¢ƒ..."
+        $py311 = Get-Command py -ErrorAction SilentlyContinue
+        if ($py311) {
+            py -3.11 -c "import sys" 2>$null
+            if ($LASTEXITCODE -eq 0) {
+                py -3.11 -m venv venv
+                Assert-NativeSuccess "åˆ›å»º Python 3.11 è™šæ‹Ÿç¯å¢ƒå¤±è´¥ã€‚"
+            }
+            else {
+                Assert-CompatiblePython "python"
+                python -m venv venv
+                Assert-NativeSuccess "åˆ›å»ºè™šæ‹Ÿç¯å¢ƒå¤±è´¥ã€‚"
+            }
+        }
+        else {
+            Assert-CompatiblePython "python"
+            python -m venv venv
+            Assert-NativeSuccess "åˆ›å»ºè™šæ‹Ÿç¯å¢ƒå¤±è´¥ã€‚"
+        }
     }
-    
-    Write-Output "¼ì²âµ½ĞéÄâ»·¾³£¬³¢ÊÔ¼¤»î..."
+
+    Assert-CompatiblePython ".\venv\Scripts\python.exe"
+    Write-Output "æ£€æµ‹åˆ°è™šæ‹Ÿç¯å¢ƒï¼Œå°è¯•æ¿€æ´»..."
     .\venv\Scripts\activate
-    Check "¼¤»îĞéÄâ»·¾³Ê§°Ü¡£"
+    if (-not $?) {
+        InstallFail "æ¿€æ´»è™šæ‹Ÿç¯å¢ƒå¤±è´¥ã€‚"
+    }
 }
 
-Write-Output "°²×°³ÌĞòËùĞèÒÀÀµ (ÒÑ½øĞĞ¹úÄÚ¼ÓËÙ£¬ÈôÔÚ¹úÍâ»òÎŞ·¨Ê¹ÓÃ¼ÓËÙÔ´Çë»»ÓÃ install.ps1 ½Å±¾)"
-Write-Output "ÊÜÏŞÓÚ¹úÄÚ¼ÓËÙ¾µÏñ£¬torch °²×°ÎŞ·¨Ê¹ÓÃ¾µÏñÔ´£¬°²×°½ÏÎª»ºÂı¡£"
-$install_torch = Read-Host "ÊÇ·ñĞèÒª°²×° Torch+xformers? [y/n] (Ä¬ÈÏÎª y)"
+Write-Output "å®‰è£…ç¨‹åºæ‰€éœ€ä¾èµ– (å·²è¿›è¡Œå›½å†…åŠ é€Ÿï¼Œè‹¥åœ¨å›½å¤–æˆ–æ— æ³•ä½¿ç”¨åŠ é€Ÿæºè¯·æ¢ç”¨ install.ps1 è„šæœ¬)"
+Write-Output "å—é™äºå›½å†…åŠ é€Ÿé•œåƒï¼Œtorch å®‰è£…æ— æ³•ä½¿ç”¨é•œåƒæºï¼Œå®‰è£…è¾ƒä¸ºç¼“æ…¢ã€‚"
+$install_torch = Read-Host "æ˜¯å¦éœ€è¦å®‰è£… Torch+xformers? [y/n] (é»˜è®¤ä¸º y)"
 if ($install_torch -eq "y" -or $install_torch -eq "Y" -or $install_torch -eq "") {
     python -m pip install torch==2.7.0+cu128 torchvision==0.22.0+cu128 --index-url https://download.pytorch.org/whl/cu128
-    Check "torch °²×°Ê§°Ü£¬ÇëÉ¾³ı venv ÎÄ¼ş¼ĞºóÖØĞÂÔËĞĞ¡£"
-    python -m pip install -U -I --no-deps xformers===0.0.30 --extra-index-url https://download.pytorch.org/whl/cu128
-    Check "xformers °²×°Ê§°Ü¡£"
+    Assert-NativeSuccess "torch å®‰è£…å¤±è´¥ï¼Œè¯·åˆ é™¤ venv æ–‡ä»¶å¤¹åé‡æ–°è¿è¡Œã€‚"
+    python -m pip install -U -I --no-deps xformers==0.0.30 --extra-index-url https://download.pytorch.org/whl/cu128
+    Assert-NativeSuccess "xformers å®‰è£…å¤±è´¥ã€‚"
 }
 
 python -m pip install --upgrade -r requirements.txt
-Check "ÑµÁ·½çÃæÒÀÀµ°²×°Ê§°Ü¡£"
+Assert-NativeSuccess "è®­ç»ƒç•Œé¢ä¾èµ–å®‰è£…å¤±è´¥ã€‚"
 
-Write-Output "°²×°Íê±Ï"
-Read-Host | Out-Null ;
+Write-Output "æ£€æŸ¥ä¾èµ–ä¸€è‡´æ€§..."
+python -m pip check
+Assert-NativeSuccess "ä¾èµ–ä¸€è‡´æ€§æ£€æŸ¥å¤±è´¥ï¼Œè¯·æŸ¥çœ‹ä¸Šæ–¹ pip è¾“å‡ºã€‚"
+
+Write-Output "å®‰è£…å®Œæ¯•"
+Read-Host | Out-Null

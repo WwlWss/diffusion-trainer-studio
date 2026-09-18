@@ -1,4 +1,19 @@
-$Env:HF_HOME = "huggingface"
+$repoRoot = $PSScriptRoot
+
+# Keep large Hub downloads inside the DTS checkout without relocating the user's
+# Hugging Face authentication token. This lets a normal `hf auth login` remain
+# valid across fresh DTS clones while preserving the existing local model cache.
+if (-not $Env:HF_HUB_CACHE) {
+    $Env:HF_HUB_CACHE = Join-Path $repoRoot "huggingface\hub"
+}
+
+# Preserve authentication created by older DTS/SD-Trainer versions that stored
+# the token under the repository-local HF_HOME.
+$legacyToken = Join-Path $repoRoot "huggingface\token"
+if (-not $Env:HF_TOKEN_PATH -and (Test-Path $legacyToken)) {
+    $Env:HF_TOKEN_PATH = $legacyToken
+}
+
 $Env:PYTHONUTF8 = "1"
 
 if (Test-Path -Path "venv\Scripts\activate") {

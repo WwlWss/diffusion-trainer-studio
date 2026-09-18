@@ -7,6 +7,7 @@ from PIL import Image
 from huggingface_hub import hf_hub_download
 
 from mikazuki.tagger.interrogators.base import Interrogator
+from mikazuki.tagger.interrogators.onnx_gpu import create_cuda_onnx_session
 
 
 class PixAITaggerInterrogator(Interrogator):
@@ -23,12 +24,10 @@ class PixAITaggerInterrogator(Interrogator):
         )
 
     def load(self) -> None:
-        import torch
-        from onnxruntime import InferenceSession
         model_path, tags_path = self.download()
-        self.model = InferenceSession(str(model_path), providers=["CUDAExecutionProvider", "CPUExecutionProvider"])
+        self.model = create_cuda_onnx_session(model_path)
         self.tags = pd.read_csv(tags_path)
-        print(f"Loaded {self.name} model from {model_path}")
+        print(f"Loaded {self.name} model from {model_path} with providers {self.model.get_providers()}")
 
     def _preprocess(self, image: Image.Image) -> np.ndarray:
         _, _, height, width = self.model.get_inputs()[0].shape

@@ -15,6 +15,21 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertNotIn("from mikazuki.app.api import router as api_router", APPLICATION)
         self.assertIn("from mikazuki.app.training_api import router", OVERLAY)
 
+    def test_branding_overlay_is_installed_after_training_api_import(self):
+        training_import = OVERLAY.index("from mikazuki.app.training_api import router")
+        branding_import = OVERLAY.index("from mikazuki.frontend_branding import install_frontend_branding_patch")
+        branding_install = OVERLAY.index("install_frontend_branding_patch()")
+        self.assertLess(training_import, branding_import)
+        self.assertLess(branding_import, branding_install)
+        self.assertIn('@app.get("/branding/logo.webp"', APPLICATION)
+
+    def test_application_serves_branded_shell_for_document_routes(self):
+        self.assertIn("from mikazuki.frontend_branding import patch_branding_index_html", APPLICATION)
+        self.assertIn("content = patch_branding_index_html(", APPLICATION)
+        self.assertIn("return _frontend_shell_response()", APPLICATION)
+        self.assertIn('if path.endswith(".html") or (leaf and "." not in leaf):', APPLICATION)
+        self.assertNotIn('return FileResponse(FRONTEND_DIST_DIR / "index.html")', APPLICATION)
+
     def test_preview_export_rehydrate_and_run_live_in_one_api_module(self):
         for route in (
             '@router.post("/training/preview")',
