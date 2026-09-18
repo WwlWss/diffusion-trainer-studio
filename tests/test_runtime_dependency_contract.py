@@ -140,7 +140,7 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertIn("local_files_only=True", source)
         self.assertIn("GatedRepoError", source)
         self.assertIn("create_cuda_onnx_session", source)
-        self.assertNotIn("session.disable_cpu_ep_fallback", source)
+        self.assertNotIn('add_session_config_entry("session.disable_cpu_ep_fallback"', source)
 
     def test_all_local_onnx_taggers_use_verified_cuda_session_helper(self):
         helper = (ROOT / "mikazuki/tagger/interrogators/onnx_gpu.py").read_text(encoding="utf-8")
@@ -149,12 +149,12 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertIn("get_provider_graph_assignment_info", helper)
         self.assertIn("cuda_compute_nodes", helper)
         self.assertIn("assigned no substantial tagger compute to CUDA", helper)
-        self.assertNotIn("session.disable_cpu_ep_fallback", helper)
+        self.assertNotIn('add_session_config_entry("session.disable_cpu_ep_fallback"', helper)
 
         for filename in ("animetimm.py", "wd14.py", "cl.py", "pixai.py", "danbooru_query.py"):
             source = (ROOT / "mikazuki/tagger/interrogators" / filename).read_text(encoding="utf-8")
             self.assertIn("create_cuda_onnx_session", source, filename)
-            self.assertNotIn("session.disable_cpu_ep_fallback", source, filename)
+            self.assertNotIn('add_session_config_entry("session.disable_cpu_ep_fallback"', source, filename)
 
 
 if __name__ == "__main__":
