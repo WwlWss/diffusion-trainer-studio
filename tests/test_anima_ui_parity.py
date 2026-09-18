@@ -236,12 +236,9 @@ class AnimaUiParityTests(unittest.TestCase):
             with self.subTest(field=field):
                 self.assertIn(field, SCHEMA)
 
+        self.assertIn("--llm_adapter_lr", ANIMA_ARGS)
         for arg in (
-            "--llm_adapter_lr", "--show_timesteps", "--show_timesteps_resolution",
-            "--show_timesteps_offset",
-        ):
-            self.assertIn(arg, ANIMA_ARGS)
-        for arg in (
+            "--show_timesteps", "--show_timesteps_resolution", "--show_timesteps_offset",
             "--ip_noise_gamma", "--ip_noise_gamma_random_strength",
             "--dataset_repeats", "--debug_dataset", "--dataset_class",
             "--text_encoder_batch_size", "--skip_cache_check",
