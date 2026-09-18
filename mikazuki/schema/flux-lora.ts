@@ -565,18 +565,22 @@ Schema.intersect([
             Schema.object({
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("finetune").required(),
-                alpha_mask: Schema.boolean().default(false).description("把训练图的 alpha 通道当作 loss mask，仅对带有效 alpha 的素材有意义。普通 RGB/JPG 数据保持关闭。"),
-                face_crop_aug_range: Schema.string().description("人脸中心随机裁剪范围，例如 2.0,4.0；用于人脸数据增强。非头像/人脸数据通常留空。"),
-                skip_cache_check: Schema.boolean().default(false).description("跳过 latent/text cache 参数一致性检查；只在确认模型、分辨率、tokenizer、caption 设置都未变化时开启，否则可能复用错误缓存。"),
-                masked_loss: Schema.boolean().default(false).description("只在 conditioning/mask 指定区域计算主要 loss；用于局部编辑/掩码训练。普通整图训练保持关闭。"),
-            }).description("全参高级数据增强与 Mask（通常关闭）").collapse(),
-            Schema.union([
+            }),
+            Schema.intersect([
                 Schema.object({
-                    masked_loss: Schema.const(true).required(),
-                    conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("与训练图逐一对应的 mask/conditioning 目录；仅 masked_loss=true 使用，文件对应关系必须与 sd-scripts 数据集规则一致。"),
+                    alpha_mask: Schema.boolean().default(false).description("把训练图的 alpha 通道当作 loss mask，仅对带有效 alpha 的素材有意义。普通 RGB/JPG 数据保持关闭。"),
+                    face_crop_aug_range: Schema.string().description("人脸中心随机裁剪范围，例如 2.0,4.0；用于人脸数据增强。非头像/人脸数据通常留空。"),
+                    skip_cache_check: Schema.boolean().default(false).description("跳过 latent/text cache 参数一致性检查；只在确认模型、分辨率、tokenizer、caption 设置都未变化时开启，否则可能复用错误缓存。"),
+                    masked_loss: Schema.boolean().default(false).description("只在 conditioning/mask 指定区域计算主要 loss；用于局部编辑/掩码训练。普通整图训练保持关闭。"),
                 }),
-                Schema.object({}),
-            ]),
+                Schema.union([
+                    Schema.object({
+                        masked_loss: Schema.const(true).required(),
+                        conditioning_data_dir: Schema.string().role('filepicker', { type: "folder" }).description("与训练图逐一对应的 mask/conditioning 目录；仅 masked_loss=true 使用，文件对应关系必须与 sd-scripts 数据集规则一致。"),
+                    }),
+                    Schema.object({}),
+                ]),
+            ]).description("全参高级数据增强与 Mask（通常关闭）").collapse(),
         ]),
         Schema.object({}),
     ]),
@@ -641,20 +645,22 @@ Schema.intersect([
                 anima_latent_cache_mode: Schema.union(["off", "memory", "disk"]).default("disk").description("VAE latent 缓存。Disk 是大多数全参训练的推荐默认；Memory 更快但吃 RAM；Off 允许像素级随机增强但每步都要跑 VAE。"),
                 anima_text_encoder_cache_mode: Schema.union(["off", "memory", "disk"]).default("disk").description("Qwen3 输出缓存。冻结 Qwen3 时通常选 Disk；训练 Qwen3 时必须 Off，因为文本编码器需要参与反向传播。"),
             }).description("Anima 全参微调精度与缓存"),
-            Schema.object({
-                persistent_data_loader_workers: Schema.boolean().default(true).description("跨 epoch 保留 DataLoader worker；通常开启可减少停顿，RAM 紧张或 worker 不稳定时关闭。"),
-                vae_batch_size: Schema.number().min(1).default(1).description("VAE 预缓存 batch；1 最稳。显存有余量时可提高到 2/4 加速首次缓存。"),
-                text_encoder_batch_size: Schema.number().min(1).description("Qwen3 预缓存 batch；留空跟随数据集 batch。只影响缓存阶段，可在显存充足时提高。"),
-                highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式，减少缓存阶段频繁清理 CUDA cache；仅在显存余量充足时建议开启"),
-                torch_compile: Schema.boolean().default(false).description("启用 Accelerate torch.compile。可能提高长训练吞吐，但首次编译慢且兼容性依赖环境；默认关闭，开启后先做短 smoke test。"),
-            }).description("全参性能高级选项（通常保持默认）").collapse(),
-            Schema.union([
+            Schema.intersect([
                 Schema.object({
-                    torch_compile: Schema.const(true).required(),
-                    dynamo_backend: Schema.union(["eager", "aot_eager", "inductor", "aot_ts_nvfuser", "nvprims_nvfuser", "cudagraphs", "ofi", "fx2trt", "onnxrt", "tensort", "ipex", "tvm"]).default("inductor").description("Accelerate dynamo backend"),
+                    persistent_data_loader_workers: Schema.boolean().default(true).description("跨 epoch 保留 DataLoader worker；通常开启可减少停顿，RAM 紧张或 worker 不稳定时关闭。"),
+                    vae_batch_size: Schema.number().min(1).default(1).description("VAE 预缓存 batch；1 最稳。显存有余量时可提高到 2/4 加速首次缓存。"),
+                    text_encoder_batch_size: Schema.number().min(1).description("Qwen3 预缓存 batch；留空跟随数据集 batch。只影响缓存阶段，可在显存充足时提高。"),
+                    highvram: Schema.boolean().default(false).description("启用 sd-scripts High VRAM 模式，减少缓存阶段频繁清理 CUDA cache；仅在显存余量充足时建议开启"),
+                    torch_compile: Schema.boolean().default(false).description("启用 Accelerate torch.compile。可能提高长训练吞吐，但首次编译慢且兼容性依赖环境；默认关闭，开启后先做短 smoke test。"),
                 }),
-                Schema.object({}),
-            ]),
+                Schema.union([
+                    Schema.object({
+                        torch_compile: Schema.const(true).required(),
+                        dynamo_backend: Schema.union(["eager", "aot_eager", "inductor", "aot_ts_nvfuser", "nvprims_nvfuser", "cudagraphs", "ofi", "fx2trt", "onnxrt", "tensort", "ipex", "tvm"]).default("inductor").description("Accelerate dynamo backend；通常使用 inductor。仅 torch_compile=true 时显示。"),
+                    }),
+                    Schema.object({}),
+                ]),
+            ]).description("全参性能高级选项（通常保持默认）").collapse(),
         ]),
         Schema.object({}),
     ]),
@@ -666,22 +672,26 @@ Schema.intersect([
             Schema.object({
                 model_type: Schema.const("anima").required(),
                 anima_training_mode: Schema.const("finetune").required(),
-                deepspeed: Schema.boolean().default(false).description("启用 DeepSpeed；Qwen3 联合训练第一版不支持。启用后 sd-scripts 会将 DataLoader workers 固定为 1"),
-            }).description("DeepSpeed（多卡/显存优化专家选项；单卡通常不用）").collapse(),
-            Schema.union([
+            }),
+            Schema.intersect([
                 Schema.object({
-                    deepspeed: Schema.const(true).required(),
-                    zero_stage: Schema.union([0, 1, 2, 3]).default(2).description("DeepSpeed ZeRO stage"),
-                    offload_optimizer_device: Schema.union(["cpu", "nvme"]).description("Optimizer offload；仅 ZeRO-2/3 可用"),
-                    offload_optimizer_nvme_path: Schema.string().description("Optimizer NVMe offload 路径；仅在 optimizer offload=nvme 时填写"),
-                    offload_param_device: Schema.union(["cpu", "nvme"]).description("Parameter offload；仅 ZeRO-3 可用"),
-                    offload_param_nvme_path: Schema.string().description("Parameter NVMe offload 路径；仅在 parameter offload=nvme 时填写"),
-                    zero3_init_flag: Schema.boolean().default(false).description("ZeRO-3 zero.Init；仅 stage 3 可用"),
-                    zero3_save_16bit_model: Schema.boolean().default(false).description("ZeRO-3 保存 16-bit model；仅 stage 3 可用"),
-                    fp16_master_weights_and_gradients: Schema.boolean().default(false).description("仅 ZeRO-2 + optimizer CPU offload + FP16 模式有效"),
+                    deepspeed: Schema.boolean().default(false).description("启用 DeepSpeed；Qwen3 联合训练第一版不支持。启用后 sd-scripts 会将 DataLoader workers 固定为 1"),
                 }),
-                Schema.object({}),
-            ]),
+                Schema.union([
+                    Schema.object({
+                        deepspeed: Schema.const(true).required(),
+                        zero_stage: Schema.union([0, 1, 2, 3]).default(2).description("DeepSpeed ZeRO stage"),
+                        offload_optimizer_device: Schema.union(["cpu", "nvme"]).description("Optimizer offload；仅 ZeRO-2/3 可用"),
+                        offload_optimizer_nvme_path: Schema.string().description("Optimizer NVMe offload 路径；仅在 optimizer offload=nvme 时填写"),
+                        offload_param_device: Schema.union(["cpu", "nvme"]).description("Parameter offload；仅 ZeRO-3 可用"),
+                        offload_param_nvme_path: Schema.string().description("Parameter NVMe offload 路径；仅在 parameter offload=nvme 时填写"),
+                        zero3_init_flag: Schema.boolean().default(false).description("ZeRO-3 zero.Init；仅 stage 3 可用"),
+                        zero3_save_16bit_model: Schema.boolean().default(false).description("ZeRO-3 保存 16-bit model；仅 stage 3 可用"),
+                        fp16_master_weights_and_gradients: Schema.boolean().default(false).description("仅 ZeRO-2 + optimizer CPU offload + FP16 模式有效"),
+                    }),
+                    Schema.object({}),
+                ]),
+            ]).description("DeepSpeed（多卡/显存优化专家选项；单卡通常不用）").collapse(),
         ]),
         Schema.object({}),
     ]),
