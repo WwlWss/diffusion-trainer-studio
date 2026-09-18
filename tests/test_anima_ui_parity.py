@@ -1,8 +1,10 @@
 import unittest
 from pathlib import Path
 
-from mikazuki.training_config import prepare_training_config
+from mikazuki.training_config import PreparedTrainingConfig, prepare_training_config
 from mikazuki.training_gui_args import apply_raw_gui_semantics
+from mikazuki.training_rehydrate import rehydrate_trainer_config
+from mikazuki.training_validation import validate_prepared_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -192,6 +194,62 @@ class AnimaUiParityTests(unittest.TestCase):
         self.assertTrue(compiled["compile"])
         self.assertFalse(compiled["torch_compile"])
         self.assertEqual(compiled["compile_backend"], "inductor")
+
+    def test_timestep_diagnostic_launch_does_not_require_training_assets(self):
+        prepared = PreparedTrainingConfig(
+            train_type="anima-lora",
+            trainer_file="./sd-scripts/anima_train_network.py",
+            config={"show_timesteps": "console", "timestep_sampling": "sigmoid"},
+        )
+        validate_prepared_config(
+            prepared,
+            True,
+            exists=lambda path: path == "./sd-scripts/anima_train_network.py",
+            is_file=lambda path: False,
+            is_dir=lambda path: False,
+            inspect_data_dir=lambda path: (False, "must not inspect data"),
+            validate_model=lambda path, train_type: (_ for _ in ()).throw(AssertionError("model validation must not run")),
+        )
+
+    def test_anima_lora_rehydrate_round_trips_new_semantic_controls(self):
+        effective = {
+            "learning_rate": 5e-5,
+            "network_module": "networks.lora_anima",
+            "network_train_unet_only": True,
+            "gradient_checkpointing": True,
+            "cpu_offload_checkpointing": True,
+            "unsloth_offload_checkpointing": False,
+            "compile": True,
+            "compile_backend": "inductor",
+            "compile_mode": "default",
+            "network_args": [
+                "train_llm_adapter=true",
+                "rank_dropout=0.1",
+                "module_dropout=0.2",
+                "include_patterns=['blocks\\\\.0', 'blocks\\\\.1']",
+                "network_reg_dims=blocks.0=16,blocks.1=8",
+                "loraplus_lr_ratio=2.0",
+                "custom_future_arg=keep-me",
+            ],
+            "timestep_sampling": "sigmoid",
+        }
+        gui = rehydrate_trainer_config(effective, "anima-lora")
+        self.assertEqual(gui["anima_lora_checkpoint_mode"], "cpu")
+        self.assertEqual(gui["anima_lora_compile_mode"], "per_block")
+        self.assertTrue(gui["anima_lora_train_llm_adapter"])
+        self.assertEqual(gui["anima_lora_rank_dropout"], "0.1")
+        self.assertEqual(gui["anima_lora_module_dropout"], "0.2")
+        self.assertEqual(gui["anima_lora_include_patterns"], "blocks\\.0\nblocks\\.1")
+        self.assertEqual(gui["anima_lora_network_reg_dims"], "blocks.0=16,blocks.1=8")
+        self.assertEqual(gui["anima_lora_loraplus_lr_ratio"], "2.0")
+        self.assertIn("custom_future_arg=keep-me", gui["network_args_custom"])
+
+        prepared = self.prepare(gui, "anima-lora")
+        self.assertTrue(prepared.config["cpu_offload_checkpointing"])
+        self.assertTrue(prepared.config["compile"])
+        self.assertIn("train_llm_adapter=true", prepared.config["network_args"])
+        self.assertIn("rank_dropout=0.1", prepared.config["network_args"])
+        self.assertIn("custom_future_arg=keep-me", prepared.config["network_args"])
 
     def test_timestep_diagnostic_off_is_not_written_to_trainer_toml(self):
         off = self.prepare(
