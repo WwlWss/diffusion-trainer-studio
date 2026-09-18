@@ -171,6 +171,24 @@ Schema.intersect([
     ]),
 
     Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            anima_training_mode: Schema.const("lora").required(),
+            initial_epoch: Schema.number().min(0).step(1).description("从指定 epoch 计数继续；与 resume state 不同，不恢复 optimizer"),
+            initial_step: Schema.number().min(0).step(1).description("从指定 global step 计数继续；与 resume state 不同"),
+            skip_until_initial_step: Schema.boolean().default(false).description("从数据流中跳过 initial_step 之前的数据"),
+            validation_split: Schema.number().min(0).max(1).step(0.01).description("从训练数据划分验证集比例；Anima LoRA trainer 有真实 validation hook"),
+            validation_seed: Schema.number().description("验证集划分随机种子"),
+            validate_every_n_steps: Schema.number().min(1).step(1).description("每 N optimizer step 运行验证"),
+            validate_every_n_epochs: Schema.number().min(1).step(1).description("每 N epoch 运行验证"),
+            max_validation_steps: Schema.number().min(1).step(1).description("单次验证最多 batch/step 数"),
+            training_comment: Schema.string().description("写入 LoRA metadata 的训练备注"),
+            no_metadata: Schema.boolean().default(false).description("不写入训练 metadata"),
+        }).description("Anima LoRA 续训与验证"),
+        Schema.object({}),
+    ]),
+
+    Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
             SHARED_SCHEMAS.LR_OPTIMIZER,
