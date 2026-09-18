@@ -201,6 +201,14 @@ def _validate_common_effective_controls(config: dict) -> None:
         config.pop("logit_std", None)
         config.pop("mode_scale", None)
 
+    gamma = config.get("ip_noise_gamma")
+    if gamma in (None, "", 0, 0.0):
+        config.pop("ip_noise_gamma", None)
+        config.pop("ip_noise_gamma_random_strength", None)
+    else:
+        if float(gamma) < 0:
+            raise ValueError("Anima: ip_noise_gamma 不能为负数。")
+
     show_timesteps = str(config.get("show_timesteps") or "").lower()
     if show_timesteps in {"", "off", "none"}:
         config.pop("show_timesteps", None)
