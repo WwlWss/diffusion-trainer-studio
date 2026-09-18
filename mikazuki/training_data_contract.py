@@ -42,6 +42,15 @@ def validate_dataset_source(
     """Validate the selected dataset source without modifying user files."""
     normalize_optional_dataset_paths(config)
 
+    dataset_class = config.get("dataset_class")
+    if dataset_class:
+        # Arbitrary dataset classes are loaded directly by sd-scripts and own
+        # their source/path validation. Requiring train_data_dir here would
+        # make the GUI field impossible to launch through the unified /run API.
+        for key in ("dataset_config", "train_data_dir", "reg_data_dir", "in_json"):
+            config.pop(key, None)
+        return
+
     dataset_config = config.get("dataset_config")
     if dataset_config:
         if effective_train_type not in DATASET_CONFIG_TRAIN_TYPES:
