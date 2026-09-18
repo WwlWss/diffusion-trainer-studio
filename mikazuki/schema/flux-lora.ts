@@ -146,6 +146,37 @@ Schema.intersect([
     ]),
 
     Schema.union([
+        Schema.intersect([
+            Schema.object({
+                model_type: Schema.const("anima").required(),
+            }).description("模型输出与发布"),
+            Schema.object({
+                metadata_title: Schema.string().description("写入模型文件的标题；不影响训练。发布模型时建议填写。"),
+                metadata_author: Schema.string().description("作者/组织信息；不影响训练。"),
+                metadata_description: Schema.string().role('textarea').description("模型说明；可记录用途、数据范围和推荐设置，不影响训练。"),
+                metadata_license: Schema.string().description("许可证标识；发布时按实际授权填写。"),
+                metadata_tags: Schema.string().description("模型标签；便于模型管理/分发平台索引。"),
+                metadata_usage_hint: Schema.string().description("简短使用提示，例如推荐 prompt/strength；不影响训练。"),
+                metadata_thumbnail: Schema.string().role('filepicker', { type: "file" }).description("嵌入 metadata 的缩略图；发布需要时再填。"),
+                metadata_merged_from: Schema.string().description("记录来源/合并自哪些模型；只有确有来源关系时填写。"),
+                metadata_trigger_phrase: Schema.string().description("触发词说明；角色/风格 LoRA 发布时有用，全参模型通常可留空。"),
+                metadata_preprocessor: Schema.string().description("记录预处理器信息；一般留空，只有工作流需要追踪时填写。"),
+                metadata_is_negative_embedding: Schema.boolean().default(false).description("仅负向 embedding 使用；Anima 模型/LoRA 几乎始终保持 false。"),
+            }).description("模型 Metadata（发布时再填写）").collapse(),
+            Schema.object({
+                huggingface_repo_id: Schema.string().description("训练时自动上传的目标 repo，例如 user/model-name。平时本地训练留空；认证使用 hf auth/HF_TOKEN，GUI 不保存 token。"),
+                huggingface_repo_type: Schema.union(["model", "dataset"]).default("model").description("输出 checkpoint 通常选 model；只有明确把训练产物当 dataset 仓库管理时才选 dataset。"),
+                huggingface_path_in_repo: Schema.string().description("Repo 内子目录；默认根目录即可，多实验共用一个 repo 时再填写。"),
+                huggingface_repo_visibility: Schema.union(["public", "private"]).default("private").description("创建 repo 时的可见性；实验阶段建议 private，确认可公开后再切 public。"),
+                async_upload: Schema.boolean().default(false).description("后台上传 checkpoint，减少训练等待但可能增加网络/磁盘并发；网络稳定且 checkpoint 较大时可开启。"),
+                save_state_to_huggingface: Schema.boolean().default(false).description("同时上传 optimizer/scheduler 等 resume state；只在需要跨机器精确续训时开启，文件体积会明显增加。"),
+                resume_from_huggingface: Schema.boolean().default(false).description("从 HF 上的 state 精确续训；必须同时填写 resume。普通从本地 checkpoint 继续训练时保持关闭。"),
+            }).description("Hugging Face 保存/恢复（不用云端训练时保持折叠）").collapse(),
+        ]),
+        Schema.object({}),
+    ]),
+
+    Schema.union([
         Schema.object({
             model_type: Schema.union(["flux", "chroma"]).required(),
             max_train_epochs: Schema.number().min(1).default(20).description("最大训练 epoch（轮数）"),
@@ -551,47 +582,10 @@ Schema.intersect([
     ]),
 
     Schema.union([
-        Schema.object({
-            model_type: Schema.const("anima").required(),
-            metadata_title: Schema.string().description("写入模型文件的标题；不影响训练。发布模型时建议填写。"),
-            metadata_author: Schema.string().description("作者/组织信息；不影响训练。"),
-            metadata_description: Schema.string().role('textarea').description("模型说明；可记录用途、数据范围和推荐设置，不影响训练。"),
-            metadata_license: Schema.string().description("许可证标识；发布时按实际授权填写。"),
-            metadata_tags: Schema.string().description("模型标签；便于模型管理/分发平台索引。"),
-            metadata_usage_hint: Schema.string().description("简短使用提示，例如推荐 prompt/strength；不影响训练。"),
-            metadata_thumbnail: Schema.string().role('filepicker', { type: "file" }).description("嵌入 metadata 的缩略图；发布需要时再填。"),
-            metadata_merged_from: Schema.string().description("记录来源/合并自哪些模型；只有确有来源关系时填写。"),
-            metadata_trigger_phrase: Schema.string().description("触发词说明；角色/风格 LoRA 发布时有用，全参模型通常可留空。"),
-            metadata_preprocessor: Schema.string().description("记录预处理器信息；一般留空，只有工作流需要追踪时填写。"),
-            metadata_is_negative_embedding: Schema.boolean().default(false).description("仅负向 embedding 使用；Anima 模型/LoRA 几乎始终保持 false。"),
-        }).description("模型 Metadata（发布时再填写）").collapse(),
-        Schema.object({}),
-    ]),
-
-    Schema.union([
-        Schema.object({
-            model_type: Schema.const("anima").required(),
-            huggingface_repo_id: Schema.string().description("训练时自动上传的目标 repo，例如 user/model-name。平时本地训练留空；认证使用 hf auth/HF_TOKEN，GUI 不保存 token。"),
-            huggingface_repo_type: Schema.union(["model", "dataset"]).default("model").description("输出 checkpoint 通常选 model；只有明确把训练产物当 dataset 仓库管理时才选 dataset。"),
-            huggingface_path_in_repo: Schema.string().description("Repo 内子目录；默认根目录即可，多实验共用一个 repo 时再填写。"),
-            huggingface_repo_visibility: Schema.union(["public", "private"]).default("private").description("创建 repo 时的可见性；实验阶段建议 private，确认可公开后再切 public。"),
-            async_upload: Schema.boolean().default(false).description("后台上传 checkpoint，减少训练等待但可能增加网络/磁盘并发；网络稳定且 checkpoint 较大时可开启。"),
-            save_state_to_huggingface: Schema.boolean().default(false).description("同时上传 optimizer/scheduler 等 resume state；只在需要跨机器精确续训时开启，文件体积会明显增加。"),
-            resume_from_huggingface: Schema.boolean().default(false).description("从 HF 上的 state 精确续训；必须同时填写 resume。普通从本地 checkpoint 继续训练时保持关闭。"),
-        }).description("Hugging Face 保存/恢复（不用云端训练时保持折叠）").collapse(),
-        Schema.object({}),
-    ]),
-
-    Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
             SHARED_SCHEMAS.OTHER,
         ]),
-        Schema.object({
-            model_type: Schema.const("anima").required(),
-            seed: Schema.number().default(1337).description("训练随机种子；固定后有助于复现实验。通常保持一个固定值即可，只有做多 seed 对照实验时更换。"),
-            ui_custom_params: Schema.string().role('textarea').description("专家级 TOML 覆盖，优先级高于 GUI。仅用于尚未做成控件的有效 sd-scripts 参数；写错可能改变/覆盖现有设置，普通训练不要填写。"),
-        }).description("其他高级设置").collapse(),
         Schema.object({}),
     ]),
 
@@ -665,6 +659,8 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
+    SHARED_SCHEMAS.DISTRIBUTED_TRAINING,
+
     Schema.union([
         Schema.intersect([
             Schema.object({
@@ -690,8 +686,6 @@ Schema.intersect([
         Schema.object({}),
     ]),
 
-    SHARED_SCHEMAS.DISTRIBUTED_TRAINING,
-
     Schema.union([
         Schema.object({
             model_type: Schema.const("anima").required(),
@@ -699,5 +693,18 @@ Schema.intersect([
             ddp_static_graph: Schema.boolean().default(false).description("DDP static_graph；只有模型图在各 iteration 稳定时才建议启用"),
         }).description("DDP 高级选项（多卡训练才需要）").collapse(),
         Schema.object({}),
-    ])
+    ]),
+
+    Schema.union([
+        Schema.intersect([
+            Schema.object({
+                model_type: Schema.const("anima").required(),
+            }).description("其他设置"),
+            Schema.object({
+                seed: Schema.number().default(1337).description("训练随机种子；固定后有助于复现实验。通常保持一个固定值即可，只有做多 seed 对照实验时更换。"),
+                ui_custom_params: Schema.string().role('textarea').description("专家级 TOML 覆盖，优先级高于 GUI。仅用于尚未做成控件的有效 sd-scripts 参数；写错可能改变/覆盖现有设置，普通训练不要填写。"),
+            }).description("其他高级设置").collapse(),
+        ]),
+        Schema.object({}),
+    ]),
 ]);
