@@ -47,6 +47,9 @@ _FLOAT_FIELDS = {
     # Namespace-based config loader never receives quoted numeric strings.
     "self_attn_lr", "cross_attn_lr", "mlp_lr", "mod_lr", "llm_adapter_lr",
     "qwen3_lr", "logit_mean", "logit_std", "mode_scale", "ip_noise_gamma",
+    "anima_lora_rank_dropout", "anima_lora_module_dropout",
+    "anima_lora_loraplus_lr_ratio", "anima_lora_loraplus_unet_lr_ratio",
+    "anima_lora_loraplus_text_encoder_lr_ratio",
 }
 _OPTIONAL_EMPTY_FIELDS = {
     "vae", "reg_data_dir", "network_weights", "noise_offset", "multires_noise_iterations",
