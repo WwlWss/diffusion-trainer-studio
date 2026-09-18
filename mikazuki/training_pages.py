@@ -156,7 +156,9 @@ def patch_frontend_app_js(content: str) -> str:
     forcing extra.foldable=false. That makes a child object's collapse metadata
     unreachable: the heading renders, but its fields stay permanently expanded.
     DTS keeps the flat intersect shape so trainer keys remain top-level TOML
-    keys, and only restores the renderer's fallback to each child's meta.collapse.
+    keys. Only children that explicitly declare meta.collapse may inherit their
+    own foldability; conditional Schema.union branches must remain non-foldable
+    or union.vue renders empty selector/collapse rows.
     """
     foldable_anchor = 'extra:{foldable:!1}'
     foldable_count = content.count(foldable_anchor)
@@ -167,7 +169,10 @@ def patch_frontend_app_js(content: str) -> str:
         )
     content = content.replace(
         foldable_anchor,
-        'extra:{foldable:void 0}',
+        # Only explicit child groups with meta.collapse should inherit their
+        # own foldability. Keep conditional Schema.union branches non-foldable;
+        # union.vue otherwise renders an empty branch selector/collapse row.
+        'extra:{foldable:h.meta.collapse?void 0:!1}',
         1,
     )
 
