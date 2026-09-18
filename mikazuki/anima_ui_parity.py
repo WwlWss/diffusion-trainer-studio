@@ -217,6 +217,23 @@ def _validate_common_effective_controls(config: dict) -> None:
     elif show_timesteps not in {"console", "image"}:
         raise ValueError("Anima: show_timesteps 只能是 off / console / image。")
 
+    repo_id = config.get("huggingface_repo_id")
+    if not repo_id:
+        for key in (
+            "huggingface_repo_type",
+            "huggingface_path_in_repo",
+            "huggingface_repo_visibility",
+            "async_upload",
+            "save_state_to_huggingface",
+            "resume_from_huggingface",
+        ):
+            config.pop(key, None)
+    elif _as_bool(config.get("resume_from_huggingface")) and not config.get("resume"):
+        raise ValueError(
+            "Anima: resume_from_huggingface=true 时必须同时填写 resume "
+            "（例如 repo_id/path:revision:model）。"
+        )
+
 
 def _validate_lora_effective_controls(config: dict) -> None:
     blocks = int(config.get("blocks_to_swap") or 0)
