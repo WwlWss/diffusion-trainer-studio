@@ -519,6 +519,38 @@ Schema.intersect([
     ]),
 
     Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            metadata_title: Schema.string().description("SAI metadata 标题"),
+            metadata_author: Schema.string().description("SAI metadata 作者"),
+            metadata_description: Schema.string().role('textarea').description("SAI metadata 描述"),
+            metadata_license: Schema.string().description("SAI metadata 许可证"),
+            metadata_tags: Schema.string().description("SAI metadata 标签"),
+            metadata_usage_hint: Schema.string().description("SAI metadata 使用提示"),
+            metadata_thumbnail: Schema.string().role('filepicker', { type: "file" }).description("SAI metadata 缩略图"),
+            metadata_merged_from: Schema.string().description("SAI metadata：模型来源/合并来源"),
+            metadata_trigger_phrase: Schema.string().description("SAI metadata 触发词"),
+            metadata_preprocessor: Schema.string().description("SAI metadata 预处理器"),
+            metadata_is_negative_embedding: Schema.boolean().default(false).description("标记为 negative embedding；通常 Anima 模型保持关闭"),
+        }).description("Anima 模型 Metadata"),
+        Schema.object({}),
+    ]),
+
+    Schema.union([
+        Schema.object({
+            model_type: Schema.const("anima").required(),
+            huggingface_repo_id: Schema.string().description("可选：保存 checkpoint 到 Hugging Face repo；使用本机 hf auth / HF_TOKEN，不在 GUI 保存 token"),
+            huggingface_repo_type: Schema.union(["model", "dataset"]).default("model").description("Hugging Face repo type"),
+            huggingface_path_in_repo: Schema.string().description("Repo 内保存路径"),
+            huggingface_repo_visibility: Schema.union(["public", "private"]).default("private").description("Repo 可见性"),
+            async_upload: Schema.boolean().default(false).description("异步上传 checkpoint"),
+            save_state_to_huggingface: Schema.boolean().default(false).description("同时上传 Accelerate training state"),
+            resume_from_huggingface: Schema.boolean().default(false).description("从 Hugging Face 上的 state 恢复；需同时设置 resume"),
+        }).description("Anima Hugging Face 保存/恢复"),
+        Schema.object({}),
+    ]),
+
+    Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
             SHARED_SCHEMAS.OTHER,
