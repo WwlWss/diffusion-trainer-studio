@@ -443,10 +443,6 @@ async def create_toml_file(request: Request):
             return APIResponseFail(message="当前页面不支持 dataset_config。")
         if not os.path.isfile(dataset_config):
             return APIResponseFail(message=f"dataset_config 文件不存在: {dataset_config}")
-    elif config.get("dataset_class"):
-        # sd-scripts arbitrary datasets own their loading/validation contract.
-        # Requiring train_data_dir here would make the GUI control cosmetic.
-        pass
     elif effective_train_type not in {"sdxl-finetune"}:
         if not train_data_dir or not train_utils.validate_data_dir(train_data_dir):
             return APIResponseFail(message="训练数据集路径不存在或没有图片，请检查目录。")
