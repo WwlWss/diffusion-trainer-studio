@@ -1,6 +1,8 @@
 import unittest
 from pathlib import Path
 
+import toml
+
 from mikazuki.training_config import PreparedTrainingConfig, prepare_training_config
 from mikazuki.training_gui_args import apply_raw_gui_semantics
 from mikazuki.training_rehydrate import rehydrate_trainer_config
@@ -161,6 +163,47 @@ class AnimaUiParityTests(unittest.TestCase):
         ):
             self.assertNotIn(semantic, prepared.config)
 
+    def test_collapsed_full_fields_still_materialize_into_effective_toml(self):
+        # Collapse is presentation metadata only. Values from low-frequency
+        # sections must reach the same effective trainer config/TOML after the
+        # user expands, edits, and collapses the section again.
+        prepared = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "anima_finetune_learning_rate": "1e-5",
+                "anima_precision_mode": "mixed_bf16",
+                "anima_latent_cache_mode": "off",
+                "anima_text_encoder_cache_mode": "off",
+                "anima_checkpoint_mode": "standard",
+                "optimizer_type": "AdamW8bit",
+                "lr_scheduler": "constant",
+                "timestep_sampling": "sigmoid",
+                "llm_adapter_lr": "2.5e-6",
+                "ip_noise_gamma": "0.08",
+                "dataset_repeats": 3,
+                "metadata_title": "collapse-contract",
+                "huggingface_repo_id": "user/test-model",
+                "huggingface_repo_visibility": "private",
+                "seed": 4242,
+            },
+            "anima-finetune",
+        )
+        effective = prepared.config
+        self.assertEqual(effective["llm_adapter_lr"], 2.5e-6)
+        self.assertEqual(effective["ip_noise_gamma"], 0.08)
+        self.assertEqual(effective["dataset_repeats"], 3)
+        self.assertEqual(effective["metadata_title"], "collapse-contract")
+        self.assertEqual(effective["huggingface_repo_id"], "user/test-model")
+        self.assertEqual(effective["seed"], 4242)
+
+        dumped = toml.dumps(effective)
+        self.assertIn("llm_adapter_lr = 2.5e-6", dumped)
+        self.assertIn("ip_noise_gamma = 0.08", dumped)
+        self.assertIn("dataset_repeats = 3", dumped)
+        self.assertIn('metadata_title = "collapse-contract"', dumped)
+        self.assertIn('huggingface_repo_id = "user/test-model"', dumped)
+        self.assertIn("seed = 4242", dumped)
+
     def test_lora_checkpoint_and_compile_modes_materialize_raw_args(self):
         cpu = self.prepare(
             {
@@ -176,6 +219,21 @@ class AnimaUiParityTests(unittest.TestCase):
         self.assertTrue(cpu["gradient_checkpointing"])
         self.assertTrue(cpu["cpu_offload_checkpointing"])
         self.assertFalse(cpu["unsloth_offload_checkpointing"])
+
+        unsloth = self.prepare(
+            {
+                "anima_model_variant": "base",
+                "learning_rate": "5e-5",
+                "anima_lora_target": "dit",
+                "timestep_sampling": "sigmoid",
+                "anima_lora_checkpoint_mode": "unsloth",
+                "anima_lora_compile_mode": "off",
+            },
+            "anima-lora",
+        ).config
+        self.assertTrue(unsloth["gradient_checkpointing"])
+        self.assertFalse(unsloth["cpu_offload_checkpointing"])
+        self.assertTrue(unsloth["unsloth_offload_checkpointing"])
 
         compiled = self.prepare(
             {
