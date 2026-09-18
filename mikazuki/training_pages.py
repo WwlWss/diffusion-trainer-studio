@@ -151,7 +151,25 @@ def patch_frontend_app_js(content: str) -> str:
     Every replacement is anchored to the pinned frontend build and fails closed
     if upstream changes invalidate an assumption. Silent partial navigation
     patches are more dangerous than refusing startup after a frontend update.
+
+    The pinned Schemastery renderer flattens children of Schema.intersect by
+    forcing extra.foldable=false. That makes a child object's collapse metadata
+    unreachable: the heading renders, but its fields stay permanently expanded.
+    DTS keeps the flat intersect shape so trainer keys remain top-level TOML
+    keys, and only restores the renderer's fallback to each child's meta.collapse.
     """
+    foldable_anchor = 'extra:{foldable:!1}'
+    foldable_count = content.count(foldable_anchor)
+    if foldable_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery foldability anchor expected once, "
+            f"found {foldable_count}"
+        )
+    content = content.replace(
+        foldable_anchor,
+        'extra:{foldable:void 0}',
+        1,
+    )
     old_lora_children = (
         '{"text":"LoRA\\u8BAD\\u7EC3","link":"/lora/index.md","collapsible":false,"children":['
         '{"text":"\\u65B0\\u624B\\uFF08SD1.5\\uFF09","link":"/lora/basic.md"},'
