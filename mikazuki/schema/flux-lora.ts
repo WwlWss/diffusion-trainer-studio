@@ -428,6 +428,7 @@ Schema.intersect([
                 network_alpha: Schema.number().min(1).default(1).description("LoRA 缩放系数。Anima 官方示例为 1；改变 alpha 会改变有效更新幅度，应与 LR 一起评估。没有经验时保持 1。"),
                 network_dropout: Schema.number().min(0).max(1).step(0.01).default(0).description("LoRA neuron dropout；0=关闭。小数据集过拟合时可尝试 0.05~0.1，过高会削弱学习能力。"),
                 anima_lora_train_llm_adapter: Schema.boolean().default(false).description("同时给 DiT 内嵌 LLM Adapter 建 LoRA。需要强化文本条件适配时开启；普通视觉风格/角色 LoRA 通常先关闭，避免增加可训练模块。"),
+                network_train_unet_only: Schema.boolean().default(true).disabled().description("固定为仅训练 Anima DiT LoRA；字段名沿用 sd-scripts 历史 U-Net 命名"),
             }).description("Anima LoRA 网络设置"),
             Schema.object({
                 anima_lora_rank_dropout: Schema.string().description("按 rank 随机丢弃 LoRA 维度；留空=关闭。可作为正则化尝试，常见 0.05~0.2；小数据集有过拟合迹象时才考虑。"),
@@ -447,9 +448,6 @@ Schema.intersect([
                 base_weights: Schema.string().role('textarea').description("基础 LoRA 路径，一行一个；仅 enable_base_weight=true 时使用。"),
                 base_weights_multiplier: Schema.string().role('textarea').description("基础 LoRA 合并倍率；可填一个值应用全部，或与路径数量一致。通常从 1.0 开始。"),
             }).description("LoRA 网络高级选项（大多数训练保持默认/留空）").collapse(),
-            Schema.object({
-                network_train_unet_only: Schema.boolean().default(true).disabled().description("兼容 sd-scripts 历史字段，由 DTS 的 Anima LoRA 目标选择自动管理。"),
-            }).hidden(),
         ]),
         Schema.object({}),
     ]),
