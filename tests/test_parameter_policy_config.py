@@ -10,8 +10,8 @@ from mikazuki.parameter_policy import (
     serialize_parameter_policy,
     validate_parameter_policy,
 )
+from mikazuki.parameter_policy_bootstrap import bootstrap_parameter_policy_optimizer_profile
 from mikazuki.training_rehydrate import rehydrate_trainer_config
-from mikazuki.training_request import bootstrap_parameter_policy_optimizer_profile
 
 
 def _component_config():
@@ -84,6 +84,7 @@ class ParameterPolicyConfigTests(unittest.TestCase):
             build_parameter_policy_sidecar(
                 {"parameter_policy_config": "evil.json"},
                 "lora-master",
+                resolve_backend=lambda config, requested: (requested, f"trainer/{requested}.py"),
             )
 
     def test_muon_requires_fallback(self):
@@ -291,6 +292,7 @@ class ParameterPolicyConfigTests(unittest.TestCase):
                 "lora_target": "unet",
             },
             "lora-master",
+            resolve_backend=lambda config, requested: (requested, f"trainer/{requested}.py"),
         )
         profile = profiles["legacy_main"]
         self.assertEqual(profile["type"], "Prodigy")
@@ -308,6 +310,7 @@ class ParameterPolicyConfigTests(unittest.TestCase):
                 "ui_custom_params": 'optimizer_type = "Lion"',
             },
             "lora-master",
+            resolve_backend=lambda config, requested: (requested, f"trainer/{requested}.py"),
         )
         self.assertEqual(profiles["legacy_main"]["type"], "Lion")
 
