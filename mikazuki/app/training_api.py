@@ -15,6 +15,7 @@ from mikazuki.anima_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
+from mikazuki.training_config import PAGE_BACKEND_MAP
 from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 from mikazuki.training_request import (
@@ -109,9 +110,11 @@ async def rehydrate_training_config(request: Request):
         if effective.get("format") == "dts-training-bundle-v1":
             bundle = effective
             bundle_train_type = str(bundle.get("train_type") or "")
-            if bundle_train_type and bundle_train_type != str(page_type):
+            bundle_backend = str(PAGE_BACKEND_MAP.get(bundle_train_type, bundle_train_type))
+            page_backend = str(PAGE_BACKEND_MAP.get(str(page_type), str(page_type)))
+            if bundle_backend and bundle_backend != page_backend:
                 raise ValueError(
-                    f"Training bundle 属于 {bundle_train_type!r} 页面，不能导入当前 {page_type!r} 页面。"
+                    f"Training bundle backend={bundle_backend!r}，不能导入当前 backend={page_backend!r} 页面。"
                 )
             toml_text = bundle.get("toml")
             if not isinstance(toml_text, str):
