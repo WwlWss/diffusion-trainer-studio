@@ -76,10 +76,17 @@ Schema.intersect([
     // 日志设置
     SHARED_SCHEMAS.LOG_SETTINGS,
 
-    // caption 选项
-    Schema.object(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS).description("caption（Tag）选项"),
+    // tokenizer / encoding 全局设置：Standard 与 Multi 共用
+    Schema.object({
+        weighted_captions: Schema.boolean().description("使用带权重的 token；这是全局 encoding 选项，不属于某个 Group"),
+        max_token_length: Schema.number().default(255).description("最大 token 长度；Standard 与 Multi 共用"),
+    }).description("Caption 全局编码"),
 
-    SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+    SHARED_SCHEMAS.CAPTION_MODE_SHARED(
+        Schema.object(
+            UpdateSchema(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS, {}, ["weighted_captions", "max_token_length"])
+        ).description("Standard Caption")
+    ),
 
     // 噪声设置
     SHARED_SCHEMAS.NOISE_SETTINGS,
