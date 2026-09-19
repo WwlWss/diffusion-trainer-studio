@@ -104,7 +104,10 @@ def rehydrate_trainer_config(
         policy = validate_parameter_policy(raw_policy)
         parameter_policy_gui = rehydrate_parameter_policy(policy)
     else:
-        parameter_policy_gui = {"optimization_mode": "standard"}
+        # Step 2 has no public Parameter Policy GUI yet. Keep Standard rehydrate
+        # byte-for-byte semantic surface unchanged and add policy GUI state only
+        # when a real policy sidecar is present.
+        parameter_policy_gui = {}
 
     multi_caption_path = config.pop("multi_caption_config", None)
     if multi_caption_path:
