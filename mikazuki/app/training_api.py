@@ -59,17 +59,19 @@ def _prepared_payload(prepared) -> dict:
         "toml": toml_text,
         "sidecars": {path: content for path, content in prepared.sidecars.items()},
     }
-    return {
+    payload = {
         "train_type": prepared.train_type,
         "trainer": prepared.trainer_file,
         "effective_config": prepared.config,
         "toml": toml_text,
         "warnings": prepared.warnings,
         "sidecars": sidecars,
-        "runtime_ready": not bool(prepared.runtime_blockers),
-        "runtime_blockers": list(prepared.runtime_blockers),
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
+    if prepared.config.get("parameter_policy_config"):
+        payload["runtime_ready"] = not bool(prepared.runtime_blockers)
+        payload["runtime_blockers"] = list(prepared.runtime_blockers)
+    return payload
 
 
 def _write_text_atomic(path: str, content: str) -> None:
