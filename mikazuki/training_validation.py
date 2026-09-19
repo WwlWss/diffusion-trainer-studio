@@ -26,6 +26,19 @@ def validate_prepared_config(
     """
     config = prepared.config
 
+    # Multi-Caption selects and processes text dynamically per exposure. V1
+    # therefore cannot share a single cached Text Encoder embedding per image.
+    # Keep latent caching allowed: image latents are independent of captions.
+    if config.get("multi_caption_config"):
+        if config.get("cache_text_encoder_outputs") or config.get("cache_text_encoder_outputs_to_disk"):
+            raise ValueError(
+                "Multi-Caption 当前不支持 Text Encoder Output Cache；"
+                "请关闭 cache_text_encoder_outputs / cache_text_encoder_outputs_to_disk。"
+                "Latent Cache 可以继续使用。"
+            )
+        if config.get("dataset_class"):
+            raise ValueError("Multi-Caption v1 不支持自定义 dataset_class。")
+
     if not check_paths:
         normalize_optional_dataset_paths(config)
         for key in ("llm_adapter_path", "t5_tokenizer_path"):
