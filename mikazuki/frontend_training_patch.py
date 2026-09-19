@@ -85,7 +85,7 @@ def patch_training_layout_js(content: str) -> str:
     content = _replace_once(
         content,
         'E=()=>{const _=x(),g=`${new Date().getTime()}.toml`;P(g,_)}',
-        'E=async()=>{try{const R=await __requestEffective(T(),"/api/training/export"),g=`${new Date().getTime()}.dts.json`;P(g,R.bundle||JSON.stringify({format:"dts-training-bundle-v1",train_type:t,toml:R.toml||"",sidecars:{}}))}catch(_){ElMessage.error(_.message||String(_))}}',
+        'E=async()=>{try{const R=await __requestEffective(T(),"/api/training/export"),H=R.sidecars&&R.sidecars.length>0,g=`${new Date().getTime()}${H?".dts.json":".toml"}`;P(g,H?(R.bundle||JSON.stringify({format:"dts-training-bundle-v1",train_type:t,toml:R.toml||"",sidecars:{}})):(R.toml||""))}catch(_){ElMessage.error(_.message||String(_))}}',
         "effective config export",
     )
 
