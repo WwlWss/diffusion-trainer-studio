@@ -84,7 +84,6 @@ class ParameterPolicyConfigTests(unittest.TestCase):
             build_parameter_policy_sidecar(
                 {"parameter_policy_config": "evil.json"},
                 "lora-master",
-                resolve_backend=lambda config, requested: (requested, f"trainer/{requested}.py"),
             )
 
     def test_muon_requires_fallback(self):
