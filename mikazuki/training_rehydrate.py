@@ -69,7 +69,12 @@ def _infer_checkpoint_mode(config: dict) -> str:
     return "standard" if gradient else "off"
 
 
-def rehydrate_trainer_config(\n    effective_config: dict,\n    page_train_type: str,\n    *,\n    sidecars: dict[str, str] | None = None,\n) -> dict:
+def rehydrate_trainer_config(
+    effective_config: dict,
+    page_train_type: str,
+    *,
+    sidecars: dict[str, str] | None = None,
+) -> dict:
     """Inverse-map an exported trainer TOML into current-page GUI state.
 
     The inverse is semantic rather than byte-for-byte historical state: values
