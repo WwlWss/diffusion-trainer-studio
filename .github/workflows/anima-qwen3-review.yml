@@ -11,6 +11,7 @@ on:
       - "mikazuki/parameter_routing.py"
       - "mikazuki/parameter_policy.py"
       - "mikazuki/parameter_policy_bootstrap.py"
+      - "mikazuki/parameter_policy_compat.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -116,6 +117,7 @@ jobs:
             mikazuki/parameter_routing.py \
             mikazuki/parameter_policy.py \
             mikazuki/parameter_policy_bootstrap.py \
+            mikazuki/parameter_policy_compat.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -165,6 +167,9 @@ jobs:
             tests/test_parameter_routing.py \
             tests/test_parameter_policy_config.py \
             tests/test_parameter_policy_request_contract.py \
+            tests/test_parameter_policy_bootstrap.py \
+            tests/test_parameter_policy_compat.py \
+            tests/test_parameter_policy_step3_regression.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -261,6 +266,9 @@ jobs:
 
       - name: Parameter Policy model scan primitives
         run: python -m unittest tests.test_model_component_profiles tests.test_parameter_routing -v
+
+      - name: Parameter Policy Step 3 final boundaries
+        run: python -m unittest tests.test_parameter_policy_step3_regression -v
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
