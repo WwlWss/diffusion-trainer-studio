@@ -7,8 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 
-STEP3_HOST_MODULES = (
-    "mikazuki/optimizer_profiles.py",
+STEP3_DEPENDENCY_LIGHT_MODULES = (
     "mikazuki/model_component_profiles.py",
     "mikazuki/parameter_policy.py",
     "mikazuki/parameter_routing.py",
@@ -55,7 +54,7 @@ def _import_roots(relative_path: str) -> set[str]:
 
 class ParameterPolicyStep3RegressionTests(unittest.TestCase):
     def test_step3_host_modules_do_not_import_heavy_ml_runtime_dependencies(self):
-        for relative_path in STEP3_HOST_MODULES:
+        for relative_path in STEP3_DEPENDENCY_LIGHT_MODULES:
             with self.subTest(path=relative_path):
                 imported = _import_roots(relative_path)
                 self.assertFalse(
@@ -141,6 +140,17 @@ class ParameterPolicyStep3RegressionTests(unittest.TestCase):
         self.assertIn(
             "test_component_start_disables_launch_staging_and_fails_before_materialization",
             request_test,
+        )
+
+    def test_optimizer_registry_provider_resolution_is_covered_separately(self):
+        capability_test = _source("tests/test_optimizer_profile_capabilities.py")
+        self.assertIn(
+            "test_muon_resolver_returns_exact_pinned_provider_class",
+            capability_test,
+        )
+        self.assertIn(
+            "test_missing_pinned_muon_provider_fails_closed_without_fallback",
+            capability_test,
         )
 
     def test_step3_modules_do_not_construct_optimizer_runtime_objects(self):
