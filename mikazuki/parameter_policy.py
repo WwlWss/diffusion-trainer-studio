@@ -21,7 +21,7 @@ from mikazuki.optimizer_profiles import (
     get_optimizer_capability,
     normalize_optimizer_profile,
 )
-from mikazuki.training_gui_args import apply_raw_gui_semantics, parse_ui_custom_params
+from mikazuki.training_gui_args import parse_ui_custom_params
 
 
 PARAMETER_POLICY_VERSION = 1
@@ -397,24 +397,17 @@ def parse_legacy_optimizer_args(raw_args: object) -> dict[str, Any]:
 
 
 def bootstrap_legacy_optimizer_profile(
-    raw_gui_config: Mapping[str, Any],
-    page_train_type: str | None,
+    effective_legacy_config: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Create a profile-only bootstrap from current legacy GUI optimizer semantics.
+    """Create a profile-only bootstrap from a compiled Standard config.
 
-    Step 2 deliberately does not invent model Components.  Step 3 will assign
-    this profile to actual semantic Components discovered from the selected
-    model family.
+    Callers must first run the normal backend-specific Standard semantic
+    compiler. This keeps bootstrap faithful to Anima/Flux/SDXL and custom-TOML
+    normalization without importing the training compiler back into this low-
+    level host contract.
     """
 
-    compiled = apply_raw_gui_semantics(
-        dict(raw_gui_config),
-        page_train_type=page_train_type,
-    )
-    overrides = compiled.pop("__ui_custom_overrides", None)
-    if isinstance(overrides, Mapping):
-        compiled.update(dict(overrides))
-
+    compiled = dict(effective_legacy_config)
     optimizer_type = str(compiled.get("optimizer_type") or "").strip()
     if not optimizer_type:
         if _as_bool(compiled.get("use_8bit_adam")):
