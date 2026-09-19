@@ -71,7 +71,16 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
     def test_sgd_nesterov_preserves_legacy_defaults(self):
         self.assertIn('kwargs.setdefault("momentum", 0.9)', self.source)
         self.assertIn("nesterov=True", self.source)
-        self.assertIn("explicitly sets nesterov=False", self.source)
+        self.assertIn('"sets nesterov=False."', self.source)
+
+    def test_composite_base_init_guard_allows_only_pytorch_initialization(self):
+        self.assertIn("self._initializing_composite_base = True", self.source)
+        self.assertIn("super().__init__(flat_parameters, defaults={})", self.source)
+        self.assertIn("self._initializing_composite_base = False", self.source)
+        self.assertIn(
+            'if getattr(self, "_initializing_composite_base", False):',
+            self.source,
+        )
 
     def test_composite_param_groups_are_child_group_objects_not_copies(self):
         expected = (
