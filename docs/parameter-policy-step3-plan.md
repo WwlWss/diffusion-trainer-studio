@@ -246,12 +246,13 @@ For each trainer-provided root:
 4. form an alias record from root + module path + local parameter role;
 5. capture both a qualified module type (`type(module).__module__ + "." + __qualname__`) and the short class name;
 6. capture the ordered ancestor module type/class lineage for the module; nested SD/SDXL Linear/Conv modules cannot be classified reliably from the leaf class alone;
-7. if `adapter_targets` contains `id(module)`, attach that metadata to **this alias**;
-8. aggregate by `id(parameter)`, never by name;
-9. preserve every alias;
-10. sort roots/aliases deterministically before producing descriptors.
+7. resolve adapter metadata from the current module or the nearest registered ancestor module; actual LoRA parameters live below the adapter in `lora_down` / `lora_up`;
+8. if multiple registered ancestors disagree about original-target metadata, fail scanning closed;
+9. aggregate by `id(parameter)`, never by name;
+10. preserve every alias;
+11. sort roots/aliases deterministically before producing descriptors.
 
-Adapter metadata is intentionally keyed by adapter **module identity**, not parameter identity or string name. Step 4 may provide this registry without requiring Step 3 to guess from `lora_name`.
+Adapter metadata is intentionally keyed by adapter **module identity**, not parameter identity or string name. Step 4 registers the adapter once; Step 3 propagates that metadata to descendant parameter aliases without guessing from `lora_name`.
 
 The scanner must never:
 
@@ -718,10 +719,14 @@ No PyTorch installation is added.
 
 ### Commit 3 — parameter scanner and pure router
 
+Detailed design: `docs/parameter-policy-step3-commit3-plan.md`.
+
 - descriptor/alias data model;
-- identity scan;
+- alias-preserving identity scan;
+- ancestor-propagated LoRA target metadata;
 - primary/fallback/frozen/unavailable routing;
-- ownership audit;
+- aggregated ownership/presence audit;
+- deterministic tensor/numel statistics;
 - router tests.
 
 ### Commit 4 — bootstrap and compatibility gate
