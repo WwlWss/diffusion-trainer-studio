@@ -59,7 +59,6 @@ def _prepared_payload(prepared) -> dict:
         "toml": toml_text,
         "sidecars": {path: content for path, content in prepared.sidecars.items()},
     }
-    parameter_policy_active = bool(prepared.config.get("parameter_policy_config"))
     return {
         "train_type": prepared.train_type,
         "trainer": prepared.trainer_file,
