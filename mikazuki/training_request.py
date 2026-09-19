@@ -211,7 +211,7 @@ def prepare_request_config(
     prepared.warnings.extend(prompt_warnings)
     if policy is not None:
         blockers = parameter_policy_runtime_blockers(policy)
-        prepared.warnings.extend(blockers)
+        prepared.runtime_blockers.extend(blockers)
         if launch:
             raise ValueError(blockers[0])
     if materialize:
