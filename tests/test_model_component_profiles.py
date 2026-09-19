@@ -380,6 +380,24 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertNotIn("clip_l.adapter", flux_dit_t5.available_components)
         self.assertIn("t5xxl.adapter", flux_dit_t5.available_components)
 
+        flux_te_only = resolve_training_target_profile(
+            "flux-lora",
+            {"network_train_text_encoder_only": True},
+        )
+        self.assertFalse(
+            any(item.startswith("transformer.") for item in flux_te_only.available_components)
+        )
+        self.assertIn("clip_l.adapter", flux_te_only.available_components)
+
+        with self.assertRaises(ValueError):
+            resolve_training_target_profile(
+                "flux-lora",
+                {
+                    "network_train_unet_only": True,
+                    "network_train_text_encoder_only": True,
+                },
+            )
+
         chroma = resolve_training_target_profile(
             "chroma-lora",
             {
@@ -477,6 +495,29 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertNotIn("clip_l.adapter", sd3_unet_t5.available_components)
         self.assertNotIn("clip_g.adapter", sd3_unet_t5.available_components)
         self.assertIn("t5xxl.adapter", sd3_unet_t5.available_components)
+
+        sd3_te_only = resolve_training_target_profile(
+            "sd3-lora",
+            {
+                "network_train_text_encoder_only": True,
+                "network_args": ["train_t5xxl=True"],
+            },
+        )
+        self.assertFalse(
+            any(item.startswith("mmdit.") for item in sd3_te_only.available_components)
+        )
+        self.assertIn("clip_l.adapter", sd3_te_only.available_components)
+        self.assertIn("clip_g.adapter", sd3_te_only.available_components)
+        self.assertIn("t5xxl.adapter", sd3_te_only.available_components)
+
+        with self.assertRaises(ValueError):
+            resolve_training_target_profile(
+                "sd3-lora",
+                {
+                    "network_train_unet_only": True,
+                    "network_train_text_encoder_only": True,
+                },
+            )
 
     def test_target_profile_records_unavailable_reasons(self):
         target = resolve_training_target_profile(

@@ -752,9 +752,22 @@ def _resolve_flux_lora_target(
     chroma: bool,
 ) -> TrainingTargetProfile:
     unet_only = _bool(config.get("network_train_unet_only"), field="network_train_unet_only")
-    available = {
-        component_id for component_id in profile.components if component_id.startswith("transformer.")
-    }
+    te_only = _bool(
+        config.get("network_train_text_encoder_only"),
+        field="network_train_text_encoder_only",
+    )
+    if unet_only and te_only:
+        raise ValueError(
+            "Flux/Chroma LoRA target cannot enable both unet-only and text-encoder-only modes."
+        )
+
+    available: set[str] = set()
+    if not te_only:
+        available.update(
+            component_id
+            for component_id in profile.components
+            if component_id.startswith("transformer.")
+        )
     if not chroma and not unet_only:
         available.add("clip_l.adapter")
     if _network_bool(config, "train_t5xxl"):
@@ -792,9 +805,22 @@ def _resolve_sd3_lora_target(
     config: Mapping[str, Any],
 ) -> TrainingTargetProfile:
     unet_only = _bool(config.get("network_train_unet_only"), field="network_train_unet_only")
-    available = {
-        component_id for component_id in profile.components if component_id.startswith("mmdit.")
-    }
+    te_only = _bool(
+        config.get("network_train_text_encoder_only"),
+        field="network_train_text_encoder_only",
+    )
+    if unet_only and te_only:
+        raise ValueError(
+            "SD3 LoRA target cannot enable both unet-only and text-encoder-only modes."
+        )
+
+    available: set[str] = set()
+    if not te_only:
+        available.update(
+            component_id
+            for component_id in profile.components
+            if component_id.startswith("mmdit.")
+        )
     if not unet_only:
         available.update({"clip_l.adapter", "clip_g.adapter"})
     if _network_bool(config, "train_t5xxl"):
