@@ -17,7 +17,7 @@
         caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 整条 caption dropout 概率"),
         caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("该 Group 每 N epoch 丢弃 caption"),
         caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 按 tag dropout 的概率"),
-    }).description("Group Caption Processing");
+    }).description("Group Caption Processing（展开后单独配置该 Group）").collapse();
 
     // stable/dev/Anima all delegate selected text to the same sd-scripts
     // process_caption() contract. Keep the GUI capability set identical across
