@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import uuid
@@ -94,7 +95,14 @@ def _validated_bundle_sidecars(raw: object) -> dict[str, str]:
             raise ValueError(f"Training bundle sidecar 路径不安全: {raw_path!r}")
         if not any(path.startswith(prefix) for prefix in _ALLOWED_BUNDLE_SIDECAR_ROOTS):
             raise ValueError(f"Training bundle sidecar 路径不属于 DTS 托管目录: {raw_path!r}")
-        sidecars[path] = str(raw_content)
+        if not isinstance(raw_content, str):
+            raise ValueError(f"Training bundle sidecar 内容必须是文本: {raw_path!r}")
+        expected = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()[:24]
+        if pure.stem != expected:
+            raise ValueError(
+                f"Training bundle sidecar 内容 hash 与路径不匹配: {raw_path!r}"
+            )
+        sidecars[path] = raw_content
     return sidecars
 
 
