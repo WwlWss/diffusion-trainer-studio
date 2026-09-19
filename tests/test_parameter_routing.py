@@ -6,6 +6,7 @@ from mikazuki.parameter_routing import (
     AdapterTargetMetadata,
     ParameterScanError,
     _resolve_parameter_ownership_pass,
+    _route_trainable_ownership,
     classify_parameter_class,
     scan_parameter_roots,
 )
@@ -778,6 +779,254 @@ class ParameterOwnershipTests(unittest.TestCase):
                 "transformer.single_blocks.0.z.weight",
             ],
         )
+
+
+def _muon_profiles():
+    return {
+        "muon": {"type": "Muon", "args": {}},
+        "fallback": {"type": "AdamW", "args": {}},
+    }
+
+
+def _flux_double_descriptors(*, include_bias=True):
+    weight = FakeParameter((4, 4))
+    params = [("weight", weight)]
+    bias = None
+    if include_bias:
+        bias = FakeParameter((4,))
+        params.append(("bias", bias))
+    root = _nested_linear(
+        ("double_blocks", "0", "linear1"),
+        weight,
+    )
+    leaf = root._children[0][1]._children[0][1]._children[0][1]
+    leaf._local_parameters = params
+    return scan_parameter_roots({"transformer": root}), weight, bias
+
+
+def _route_3d(policy, *, train_type, effective_config, descriptors):
+    ownership = _resolve_parameter_ownership_pass(
+        policy,
+        train_type=train_type,
+        effective_config=effective_config,
+        descriptors=descriptors,
+    )
+    return ownership, _route_trainable_ownership(ownership)
+
+
+class OptimizerEligibilityRoutingTests(unittest.TestCase):
+    def test_ordinary_optimizer_routes_primary_without_eligibility(self):
+        descriptors, parameter = _flux_single_descriptor()
+        ownership, routed = _route_3d(
+            _policy({"transformer.double_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertFalse(any(issue.severity == "error" for issue in ownership.issues))
+        self.assertEqual(len(routed.assignments), 1)
+        assignment = routed.assignments[0]
+        self.assertIs(assignment.parameter, parameter)
+        self.assertEqual(assignment.route_kind, "primary")
+        self.assertEqual(assignment.optimizer_profile, "main")
+        self.assertEqual(assignment.learning_rate, 1e-4)
+        self.assertEqual(routed.unroutable, ())
+
+    def test_pure_muon_component_needs_no_fallback_when_all_real_parameters_are_eligible(self):
+        descriptors, _, _ = _flux_double_descriptors(include_bias=False)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+        _, routed = _route_3d(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(routed.assignments), 1)
+        self.assertEqual(routed.assignments[0].route_kind, "primary")
+        self.assertEqual(routed.assignments[0].optimizer_profile, "muon")
+        self.assertEqual(routed.assignments[0].learning_rate, 2e-4)
+        self.assertFalse(any(issue.code == "missing_fallback" for issue in routed.issues))
+
+    def test_mixed_muon_component_splits_weight_to_primary_and_bias_to_fallback(self):
+        descriptors, weight, bias = _flux_double_descriptors(include_bias=True)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                    "fallback_optimizer_profile": "fallback",
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+        _, routed = _route_3d(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(routed.assignments), 2)
+        by_parameter = {item.parameter_id: item for item in routed.assignments}
+        self.assertEqual(by_parameter[id(weight)].route_kind, "primary")
+        self.assertEqual(by_parameter[id(weight)].optimizer_profile, "muon")
+        self.assertEqual(by_parameter[id(bias)].route_kind, "fallback")
+        self.assertEqual(by_parameter[id(bias)].optimizer_profile, "fallback")
+        self.assertEqual(by_parameter[id(bias)].learning_rate, 2e-4)
+        self.assertEqual(
+            dict(routed.fallback_usage),
+            {"transformer.double_stream": 1},
+        )
+        self.assertEqual(routed.unroutable, ())
+
+    def test_explicit_fallback_learning_rate_overrides_component_lr(self):
+        descriptors, _, bias = _flux_double_descriptors(include_bias=True)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                    "fallback_optimizer_profile": "fallback",
+                    "fallback_learning_rate": 7e-5,
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+        _, routed = _route_3d(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+        fallback = next(
+            item for item in routed.assignments if item.parameter_id == id(bias)
+        )
+        self.assertEqual(fallback.route_kind, "fallback")
+        self.assertEqual(fallback.learning_rate, 7e-5)
+
+    def test_missing_fallback_errors_only_for_real_ineligible_parameters(self):
+        descriptors, weight, bias = _flux_double_descriptors(include_bias=True)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+        _, routed = _route_3d(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        by_parameter = {item.parameter_id: item for item in routed.assignments}
+        self.assertIn(id(weight), by_parameter)
+        self.assertNotIn(id(bias), by_parameter)
+        self.assertEqual(len(routed.unroutable), 1)
+        self.assertIs(routed.unroutable[0].parameter, bias)
+        issue = next(issue for issue in routed.issues if issue.code == "missing_fallback")
+        self.assertEqual(issue.component_id, "transformer.double_stream")
+        self.assertEqual(issue.count, 1)
+
+        eligible_only, _, _ = _flux_double_descriptors(include_bias=False)
+        _, eligible_routed = _route_3d(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=eligible_only,
+        )
+        self.assertFalse(
+            any(issue.code == "missing_fallback" for issue in eligible_routed.issues)
+        )
+        self.assertEqual(eligible_routed.unroutable, ())
+
+    def test_alias_eligibility_conflict_keeps_one_physical_parameter_out_of_all_routes(self):
+        shared = FakeParameter((4, 4))
+        hidden = _nested_linear(
+            ("model", "layers", "0", "self_attn", "q_proj"),
+            shared,
+        )
+        embedding = _nested_linear(("embed_tokens",), shared)
+        qwen_root = module(
+            children=[
+                ("hidden", hidden),
+                ("embedding_alias", embedding),
+            ]
+        )
+        descriptors = scan_parameter_roots({"qwen3": qwen_root})
+        policy = _policy(
+            {
+                "qwen3": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 1e-4,
+                    "fallback_optimizer_profile": "fallback",
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+
+        ownership, routed = _route_3d(
+            policy,
+            train_type="anima-finetune",
+            effective_config={"train_qwen3_text_encoder": True},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(ownership.trainable), 1)
+        self.assertEqual(routed.assignments, ())
+        self.assertEqual(len(routed.unroutable), 1)
+        issue = next(
+            issue for issue in routed.issues if issue.code == "alias_eligibility_conflict"
+        )
+        self.assertEqual(issue.parameter_id, id(shared))
+        self.assertEqual(issue.count, 2)
+        self.assertTrue(any("eligible" in example for example in issue.examples))
+        self.assertTrue(any("ineligible" in example for example in issue.examples))
+
+    def test_frozen_and_unavailable_assignments_never_enter_optimizer_routing(self):
+        frozen_descriptors, _ = _flux_single_descriptor()
+        frozen_ownership = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=frozen_descriptors,
+        )
+        frozen_routed = _route_trainable_ownership(frozen_ownership)
+        self.assertEqual(frozen_routed.assignments, ())
+        self.assertEqual(frozen_routed.unroutable, ())
+
+        te_param = FakeParameter((4, 4))
+        te_root = module(
+            children=[("encoder", module(cls=Linear, parameters=[("weight", te_param)]))]
+        )
+        unavailable_descriptors = scan_parameter_roots({"text_encoder_1": te_root})
+        unavailable_ownership = _resolve_parameter_ownership_pass(
+            _policy({"unet.transformer": {"train": False}}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=unavailable_descriptors,
+        )
+        unavailable_routed = _route_trainable_ownership(unavailable_ownership)
+        self.assertEqual(unavailable_routed.assignments, ())
+        self.assertEqual(unavailable_routed.unroutable, ())
 
 
 if __name__ == "__main__":

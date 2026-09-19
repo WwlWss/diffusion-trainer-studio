@@ -22,6 +22,7 @@ from mikazuki.model_component_profiles import (
     get_model_component_profile,
     resolve_training_target_profile,
 )
+from mikazuki.optimizer_profiles import get_optimizer_capability
 from mikazuki.parameter_policy import validate_parameter_policy
 
 
@@ -164,6 +165,14 @@ class _OwnershipPass:
     observed_components: frozenset[str]
     unassigned: tuple[ParameterDescriptor, ...]
     conflicts: tuple[ParameterDescriptor, ...]
+
+
+@dataclass(frozen=True)
+class _OptimizerRoutingPass:
+    assignments: tuple[RoutingAssignment, ...]
+    issues: tuple[RoutingIssue, ...]
+    unroutable: tuple[ParameterDescriptor, ...]
+    fallback_usage: Mapping[str, int]
 
 
 @dataclass
@@ -770,8 +779,10 @@ def _routing_assignment(
     *,
     component_id: str,
     parameter_class: ParameterClass,
-    route_kind: Literal["frozen", "unavailable"],
+    route_kind: RouteKind,
     reason: str,
+    optimizer_profile: str | None = None,
+    learning_rate: float | None = None,
 ) -> RoutingAssignment:
     return RoutingAssignment(
         parameter=descriptor.parameter,
@@ -780,8 +791,8 @@ def _routing_assignment(
         parameter_class=parameter_class,
         component_id=component_id,
         route_kind=route_kind,
-        optimizer_profile=None,
-        learning_rate=None,
+        optimizer_profile=optimizer_profile,
+        learning_rate=learning_rate,
         reason=reason,
     )
 
@@ -1143,6 +1154,194 @@ def _resolve_parameter_ownership_pass(
         ),
         conflicts=tuple(
             sorted(_unique_descriptors(conflicts), key=_descriptor_sort_key)
+        ),
+    )
+
+
+def _route_trainable_ownership(
+    ownership: _OwnershipPass,
+) -> _OptimizerRoutingPass:
+    """Route Commit 3C trainable candidates to primary/fallback profiles.
+
+    This is Commit 3D only. Component presence, unused-fallback warnings,
+    statistics, and the public final RoutingPlan are completed in Commit 3E.
+    """
+
+    assignments: list[RoutingAssignment] = []
+    issues: list[RoutingIssue] = []
+    unroutable: list[ParameterDescriptor] = []
+    missing_fallback: dict[str, list[ParameterDescriptor]] = {}
+    fallback_usage: dict[str, int] = {}
+
+    optimizer_profiles = ownership.policy["optimizer_profiles"]
+
+    for candidate in ownership.trainable:
+        descriptor = candidate.descriptor
+        component_id = candidate.component_id
+        route = candidate.route
+
+        primary_name = route["optimizer_profile"]
+        primary_profile = optimizer_profiles[primary_name]
+        capability = get_optimizer_capability(primary_profile["type"])
+
+        eligibility_policy = capability.eligibility_policy
+        if eligibility_policy is None:
+            assignments.append(
+                _routing_assignment(
+                    descriptor,
+                    component_id=component_id,
+                    parameter_class=candidate.parameter_class,
+                    route_kind="primary",
+                    optimizer_profile=primary_name,
+                    learning_rate=route["learning_rate"],
+                    reason=(
+                        f"Optimizer Profile {primary_name!r} does not require "
+                        "parameter eligibility routing."
+                    ),
+                )
+            )
+            continue
+
+        decisions: list[tuple[ParameterAlias, bool, str]] = []
+        for alias in descriptor.aliases:
+            decision = ownership.profile.eligibility_check(
+                eligibility_policy,
+                alias,
+                component_id,
+            )
+            if (
+                not isinstance(decision, tuple)
+                or len(decision) != 2
+                or not isinstance(decision[0], bool)
+                or not isinstance(decision[1], str)
+            ):
+                raise ValueError(
+                    f"Model Component Profile {ownership.profile.train_type!r} "
+                    f"returned invalid eligibility decision for "
+                    f"{alias.qualified_name!r}."
+                )
+            decisions.append((alias, decision[0], decision[1]))
+
+        eligibility_values = {eligible for _, eligible, _ in decisions}
+        if len(eligibility_values) != 1:
+            unroutable.append(descriptor)
+            examples = tuple(
+                f"{alias.qualified_name} => "
+                f"{'eligible' if eligible else 'ineligible'}"
+                for alias, eligible, _ in sorted(
+                    decisions,
+                    key=lambda item: _alias_sort_key(item[0]),
+                )[:5]
+            )
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="alias_eligibility_conflict",
+                    message=(
+                        f"Aliases for {descriptor.canonical_name!r} disagree on "
+                        f"optimizer eligibility policy {eligibility_policy!r}."
+                    ),
+                    component_id=component_id,
+                    parameter_id=descriptor.parameter_id,
+                    count=len(decisions),
+                    examples=examples,
+                )
+            )
+            continue
+
+        eligible = next(iter(eligibility_values))
+        reasons = sorted({reason for _, _, reason in decisions})
+        eligibility_reason = "; ".join(reasons)
+
+        if eligible:
+            assignments.append(
+                _routing_assignment(
+                    descriptor,
+                    component_id=component_id,
+                    parameter_class=candidate.parameter_class,
+                    route_kind="primary",
+                    optimizer_profile=primary_name,
+                    learning_rate=route["learning_rate"],
+                    reason=(
+                        f"Eligible for {capability.name} via "
+                        f"{eligibility_policy}: {eligibility_reason}"
+                    ),
+                )
+            )
+            continue
+
+        fallback_name = route.get("fallback_optimizer_profile")
+        if fallback_name:
+            fallback_profile = optimizer_profiles[fallback_name]
+            fallback_capability = get_optimizer_capability(fallback_profile["type"])
+            if fallback_capability.requires_parameter_eligibility:
+                raise ValueError(
+                    f"Canonical Parameter Policy unexpectedly routed Component "
+                    f"{component_id!r} to fallback Profile {fallback_name!r}, "
+                    "which still requires parameter eligibility."
+                )
+
+            fallback_lr = route.get(
+                "fallback_learning_rate",
+                route["learning_rate"],
+            )
+            assignments.append(
+                _routing_assignment(
+                    descriptor,
+                    component_id=component_id,
+                    parameter_class=candidate.parameter_class,
+                    route_kind="fallback",
+                    optimizer_profile=fallback_name,
+                    learning_rate=fallback_lr,
+                    reason=(
+                        f"Ineligible for primary Profile {primary_name!r} "
+                        f"({capability.name}) via {eligibility_policy}: "
+                        f"{eligibility_reason} Routed to fallback "
+                        f"Profile {fallback_name!r}."
+                    ),
+                )
+            )
+            fallback_usage[component_id] = fallback_usage.get(component_id, 0) + 1
+            continue
+
+        unroutable.append(descriptor)
+        missing_fallback.setdefault(component_id, []).append(descriptor)
+
+    for component_id in sorted(missing_fallback):
+        descriptors = missing_fallback[component_id]
+        route = next(
+            candidate.route
+            for candidate in ownership.trainable
+            if candidate.component_id == component_id
+        )
+        primary_name = route["optimizer_profile"]
+        primary_profile = optimizer_profiles[primary_name]
+        capability = get_optimizer_capability(primary_profile["type"])
+        issues.append(
+            _aggregate_issue(
+                code="missing_fallback",
+                message=(
+                    f"Component {component_id!r} uses eligibility-constrained "
+                    f"Optimizer Profile {primary_name!r} ({capability.name}), but "
+                    "real ineligible parameters were found and no fallback "
+                    "Optimizer Profile is configured."
+                ),
+                component_id=component_id,
+                descriptors=descriptors,
+            )
+        )
+
+    return _OptimizerRoutingPass(
+        assignments=tuple(sorted(assignments, key=_assignment_sort_key)),
+        issues=tuple(sorted(issues, key=_issue_sort_key)),
+        unroutable=tuple(
+            sorted(_unique_descriptors(unroutable), key=_descriptor_sort_key)
+        ),
+        fallback_usage=MappingProxyType(
+            {
+                component_id: fallback_usage[component_id]
+                for component_id in sorted(fallback_usage)
+            }
         ),
     )
 

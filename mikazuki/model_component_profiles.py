@@ -491,7 +491,10 @@ def _eligibility_for_profile(
     component_id: str,
 ) -> EligibilityDecision:
     if policy != "model_hidden_2d_weight":
-        return False, f"Unknown parameter eligibility policy {policy!r}."
+        raise ValueError(
+            f"Model Component Profile does not support parameter eligibility "
+            f"policy {policy!r}."
+        )
     if not _matrix(alias):
         return False, "Parameter is not a 2D matrix weight."
 

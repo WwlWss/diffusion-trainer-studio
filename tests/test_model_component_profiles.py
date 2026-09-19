@@ -519,6 +519,16 @@ class ModelComponentProfileTests(unittest.TestCase):
                 },
             )
 
+    def test_unknown_parameter_eligibility_policy_fails_closed(self):
+        profile = get_model_component_profile("flux-finetune")
+        alias = Alias("transformer", "double_blocks.0.linear1")
+        with self.assertRaisesRegex(ValueError, "does not support"):
+            profile.eligibility_check(
+                "future_unknown_policy",
+                alias,
+                "transformer.double_stream",
+            )
+
     def test_target_profile_records_unavailable_reasons(self):
         target = resolve_training_target_profile(
             "sdxl-finetune",
