@@ -12,6 +12,8 @@ on:
       - "mikazuki/parameter_policy.py"
       - "mikazuki/parameter_policy_bootstrap.py"
       - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "docs/parameter-policy-step5-plan.md"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -122,6 +124,7 @@ jobs:
             mikazuki/parameter_policy.py \
             mikazuki/parameter_policy_bootstrap.py \
             mikazuki/parameter_policy_compat.py \
+            mikazuki/parameter_policy_runtime.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -181,6 +184,7 @@ jobs:
             tests/test_parameter_policy_adapter_metadata.py \
             tests/test_parameter_policy_anima_metadata.py \
             tests/test_parameter_policy_step4_routing.py \
+            tests/test_parameter_policy_runtime.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
