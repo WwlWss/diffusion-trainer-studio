@@ -21,7 +21,7 @@ from mikazuki.optimizer_profiles import (
     get_optimizer_capability,
     normalize_optimizer_profile,
 )
-from mikazuki.training_gui_args import apply_raw_gui_semantics
+from mikazuki.training_gui_args import apply_raw_gui_semantics, parse_ui_custom_params
 
 
 PARAMETER_POLICY_VERSION = 1
@@ -109,34 +109,8 @@ def _normalize_component_id(raw_id: object) -> str:
     return component_id
 
 
-def _parse_ui_custom_params_text(payload: object) -> dict[str, Any]:
-    """Parse ui_custom_params without mutating the caller's config.
-
-    Keep this parser local and deliberately tiny so Parameter Policy can protect
-    host-owned fields before the existing raw-GUI compiler applies last-write-
-    wins overrides.  The main parser remains authoritative for actual training.
-    """
-
-    if payload in (None, ""):
-        return {}
-    if not isinstance(payload, str):
-        raise ValueError("ui_custom_params 必须是 TOML 文本。")
-    try:
-        try:
-            import tomllib as toml_reader
-        except ImportError:
-            import toml as toml_reader  # type: ignore[no-redef]
-
-        parsed = toml_reader.loads(payload)
-    except Exception as exc:
-        raise ValueError(f"ui_custom_params TOML 解析失败: {exc}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError("ui_custom_params 必须解析为 TOML 顶层键值。")
-    return parsed
-
-
 def _validate_component_mode_custom_overrides(config: Mapping[str, Any]) -> None:
-    overrides = _parse_ui_custom_params_text(config.get("ui_custom_params"))
+    overrides = parse_ui_custom_params(config.get("ui_custom_params"))
     nested = config.get("__ui_custom_overrides")
     if isinstance(nested, Mapping):
         overrides = {**overrides, **dict(nested)}
