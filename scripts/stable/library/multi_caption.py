@@ -16,7 +16,7 @@ import random
 from typing import Any, Iterable
 
 
-@dataclass(frozen=True)
+@dataclass
 class CaptionProcessingOptions:
     caption_separator: str = ","
     secondary_separator: str | None = None
@@ -61,9 +61,10 @@ class ResolvedCaption:
 class MultiCaptionResolver:
     CACHE_LIMIT = 8192
 
-    def __init__(self, config_path: str, policy: dict[str, Any], image_infos: Iterable[Any]):
+    def __init__(self, config_path: str, policy: dict[str, Any], image_infos: Iterable[Any], *, deterministic: bool = False):
         self.config_path = str(config_path)
         self.policy = policy
+        self.deterministic = bool(deterministic)
         if policy.get("version") != 1:
             raise ValueError(f"Multi-Caption: unsupported policy version {policy.get('version')!r}")
         if (policy.get("selection") or {}).get("mode") != "weighted_one":
@@ -103,7 +104,7 @@ class MultiCaptionResolver:
             self._prepare_json_records(infos)
 
     @classmethod
-    def from_file(cls, config_path: str, image_infos: Iterable[Any]) -> "MultiCaptionResolver":
+    def from_file(cls, config_path: str, image_infos: Iterable[Any], *, deterministic: bool = False) -> "MultiCaptionResolver":
         path = Path(config_path)
         if not path.is_file():
             raise ValueError(f"Multi-Caption config does not exist: {config_path}")
@@ -113,7 +114,7 @@ class MultiCaptionResolver:
             raise ValueError(f"Multi-Caption config could not be read: {config_path}: {exc}") from exc
         if not isinstance(policy, dict):
             raise ValueError("Multi-Caption config must contain a JSON object")
-        return cls(config_path, policy, image_infos)
+        return cls(config_path, policy, image_infos, deterministic=deterministic)
 
     def _candidate_paths(self, image_path: str, extension: str) -> list[str]:
         base_name = os.path.splitext(image_path)[0]
@@ -161,7 +162,11 @@ class MultiCaptionResolver:
                 for path in self._candidate_paths(image_path, extension):
                     content = self._read_text(path)
                     if content is not None:
-                        value = content.splitlines()[0].strip() if content.splitlines() else ""
+                        lines = content.splitlines()
+                        if group.processing.enable_wildcard:
+                            value = "\n".join(line.strip() for line in lines if line.strip())
+                        else:
+                            value = lines[0].strip() if lines else ""
                         break
                 result[group.name] = value
         else:
@@ -287,31 +292,51 @@ class MultiCaptionResolver:
                 continue
             valid.append((group, caption.strip()))
         if not valid:
-            return None
+            raise ValueError(
+                f"Multi-Caption: no enabled non-empty caption group is available for image {image_path!r}"
+            )
 
-        group, caption = random.choices(
-            valid,
-            weights=[item[0].weight for item in valid],
-            k=1,
-        )[0]
+        if self.deterministic:
+            seed_material = f"{image_path}\0" + "\0".join(
+                f"{item[0].name}:{item[0].weight:g}" for item in valid
+            )
+            rng = random.Random(seed_material)
+            group, caption = rng.choices(
+                valid,
+                weights=[item[0].weight for item in valid],
+                k=1,
+            )[0]
+        else:
+            group, caption = random.choices(
+                valid,
+                weights=[item[0].weight for item in valid],
+                k=1,
+            )[0]
         return ResolvedCaption(group.name, caption, group.processing)
 
 
-def configure_multi_caption_dataset_groups(config_path: str, *dataset_groups: Any) -> MultiCaptionResolver:
-    groups = [group for group in dataset_groups if group is not None]
-    datasets = []
+def configure_multi_caption_dataset_groups(
+    config_path: str,
+    train_dataset_group: Any,
+    val_dataset_group: Any | None = None,
+) -> MultiCaptionResolver:
+    groups = [group for group in (train_dataset_group, val_dataset_group) if group is not None]
     image_infos = []
     for group in groups:
         if not hasattr(group, "datasets"):
             raise ValueError("Multi-Caption v1 does not support custom dataset_class / MinimalDataset")
         for dataset in group.datasets:
-            datasets.append(dataset)
             image_infos.extend(
                 info for info in dataset.image_data.values()
                 if not bool(getattr(info, "is_reg", False))
             )
 
-    resolver = MultiCaptionResolver.from_file(config_path, image_infos)
-    for dataset in datasets:
-        dataset.set_multi_caption_resolver(resolver)
-    return resolver
+    train_resolver = MultiCaptionResolver.from_file(config_path, image_infos, deterministic=False)
+    for dataset in train_dataset_group.datasets:
+        dataset.set_multi_caption_resolver(train_resolver)
+
+    if val_dataset_group is not None:
+        val_resolver = MultiCaptionResolver.from_file(config_path, image_infos, deterministic=True)
+        for dataset in val_dataset_group.datasets:
+            dataset.set_multi_caption_resolver(val_resolver)
+    return train_resolver
