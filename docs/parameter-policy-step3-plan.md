@@ -535,7 +535,8 @@ Active `block_lr` is not approximated in Step 3; it is a compatibility blocker.
 
 - all U-Net components inherit the legacy U-Net LR;
 - text encoder uses its existing separate LR when present, otherwise the legacy base LR;
-- disabled text-encoder training becomes Train Off.
+- disabled-from-start text-encoder training becomes Train Off;
+- an explicit nonnegative `stop_text_encoder_training` is **not** flattened to Train=true: it is a compatibility blocker because it represents a mid-run freeze.
 
 ### Flux Full
 
@@ -565,6 +566,7 @@ Step 3 must fail closed for active semantics that Component v1 does not yet repr
 Initial blocker set:
 
 - SDXL Full `block_lr`;
+- SD DreamBooth explicit nonnegative `stop_text_encoder_training` (mid-run text-encoder freeze);
 - SD/SDXL LoRA block LR weighting in `network_args`:
   - `down_lr_weight`;
   - `mid_lr_weight`;
@@ -731,9 +733,12 @@ Detailed design: `docs/parameter-policy-step3-commit3-plan.md`.
 
 ### Commit 4 — bootstrap and compatibility gate
 
+Detailed design: `docs/parameter-policy-step3-commit4-plan.md`.
+
 - full Standard -> Component bootstrap;
+- exact legacy LR precedence, including multi-TE LR lists;
 - legacy LR=0 migration;
-- compatibility blockers;
+- compatibility blockers, including DreamBooth temporal TE freeze;
 - pure bootstrap/compatibility tests;
 - no request/runtime ownership rewrite.
 
