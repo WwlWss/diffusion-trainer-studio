@@ -1,19 +1,26 @@
-"""Optional exposure-time Multi-Caption resolver for the stable dataset tree.
+"""Exposure-time Multi-Caption resolver shared by stable/dev trainers.
 
-This module is deliberately independent from DTS host modules so stable trainer
-scripts remain directly runnable. Standard training never imports or constructs
-this resolver unless --multi_caption_config is present.
+The resolver compiles source captions into a temporary SQLite index once during
+Dataset construction.  DataLoader workers therefore pickle only a small
+resolver object instead of a potentially multi-gigabyte JSON dictionary, and
+Separate Files / Multi-Line modes do not reopen caption files on every exposure.
 """
 
 from __future__ import annotations
 
+import atexit
 from collections import OrderedDict
+import copy
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from pathlib import Path
 import random
+import sqlite3
+import tempfile
 from typing import Any, Iterable
+import uuid
 
 
 @dataclass
@@ -58,10 +65,24 @@ class ResolvedCaption:
     processing: CaptionProcessingOptions
 
 
-class MultiCaptionResolver:
-    CACHE_LIMIT = 8192
+def _cleanup_index(path: str) -> None:
+    try:
+        Path(path).unlink(missing_ok=True)
+    except OSError:
+        pass
 
-    def __init__(self, config_path: str, policy: dict[str, Any], image_infos: Iterable[Any], *, deterministic: bool = False):
+
+class MultiCaptionResolver:
+    CACHE_LIMIT = 2048
+
+    def __init__(
+        self,
+        config_path: str,
+        policy: dict[str, Any],
+        image_infos: Iterable[Any],
+        *,
+        deterministic: bool = False,
+    ):
         self.config_path = str(config_path)
         self.policy = policy
         self.deterministic = bool(deterministic)
@@ -78,33 +99,38 @@ class MultiCaptionResolver:
         raw_groups = policy.get("groups")
         if not isinstance(raw_groups, dict) or not raw_groups:
             raise ValueError("Multi-Caption: at least one caption group is required")
-        self.groups = []
+        self.groups: list[CaptionGroup] = []
+        self._groups_by_name: dict[str, CaptionGroup] = {}
         for name, raw in raw_groups.items():
             raw = dict(raw or {})
-            source = dict(raw.get("source") or {})
             group = CaptionGroup(
                 name=str(name),
                 enabled=bool(raw.get("enabled", True)),
                 weight=float(raw.get("weight", 1.0)),
-                source=source,
+                source=dict(raw.get("source") or {}),
                 processing=CaptionProcessingOptions.from_dict(raw.get("processing")),
             )
             if group.weight < 0:
                 raise ValueError(f"Multi-Caption: group {group.name!r} has negative weight")
             self.groups.append(group)
+            self._groups_by_name[group.name] = group
 
-        self._candidate_cache: OrderedDict[str, dict[str, str | None]] = OrderedDict()
-        self._records: dict[str, dict[str, Any]] | None = None
-        self._json_root: Path | None = None
         self._image_key_mode = str(self.storage.get("image_key_mode") or "relative_path")
-        self._dataset_lookup_keys: dict[str, str] = {}
+        self._json_root: Path | None = None
+        self._conn: sqlite3.Connection | None = None
+        self._candidate_cache: OrderedDict[str, dict[str, str]] = OrderedDict()
 
         infos = [info for info in image_infos if not bool(getattr(info, "is_reg", False))]
-        if self.storage_mode in {"json", "jsonl"}:
-            self._prepare_json_records(infos)
+        self._db_path = self._build_index(infos)
 
     @classmethod
-    def from_file(cls, config_path: str, image_infos: Iterable[Any], *, deterministic: bool = False) -> "MultiCaptionResolver":
+    def from_file(
+        cls,
+        config_path: str,
+        image_infos: Iterable[Any],
+        *,
+        deterministic: bool = False,
+    ) -> "MultiCaptionResolver":
         path = Path(config_path)
         if not path.is_file():
             raise ValueError(f"Multi-Caption config does not exist: {config_path}")
@@ -115,6 +141,28 @@ class MultiCaptionResolver:
         if not isinstance(policy, dict):
             raise ValueError("Multi-Caption config must contain a JSON object")
         return cls(config_path, policy, image_infos, deterministic=deterministic)
+
+    def clone(self, *, deterministic: bool) -> "MultiCaptionResolver":
+        cloned = copy.deepcopy(self)
+        cloned.deterministic = bool(deterministic)
+        cloned._conn = None
+        cloned._candidate_cache = OrderedDict()
+        return cloned
+
+    def __getstate__(self):
+        state = dict(self.__dict__)
+        state["_conn"] = None
+        state["_candidate_cache"] = OrderedDict()
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._conn = None
+        self._candidate_cache = OrderedDict()
+
+    @staticmethod
+    def _identity(image_path: str) -> str:
+        return os.path.normcase(os.path.abspath(image_path))
 
     def _candidate_paths(self, image_path: str, extension: str) -> list[str]:
         base_name = os.path.splitext(image_path)[0]
@@ -137,55 +185,29 @@ class MultiCaptionResolver:
         except UnicodeDecodeError as exc:
             raise ValueError(f"Multi-Caption caption file is not UTF-8: {path}") from exc
 
-    def _cache_get(self, image_path: str) -> dict[str, str | None] | None:
-        value = self._candidate_cache.get(image_path)
-        if value is not None:
-            self._candidate_cache.move_to_end(image_path)
-        return value
+    @staticmethod
+    def _json_pointer(record: Any, key: str) -> Any:
+        # A leading slash opts into RFC 6901-style traversal. Plain keys retain
+        # backward-compatible top-level lookup, including keys containing dots.
+        if not key.startswith("/"):
+            return record.get(key) if isinstance(record, dict) else None
+        current = record
+        for token in key.split("/")[1:]:
+            token = token.replace("~1", "/").replace("~0", "~")
+            if isinstance(current, dict):
+                current = current.get(token)
+            elif isinstance(current, list):
+                try:
+                    current = current[int(token)]
+                except (ValueError, IndexError):
+                    return None
+            else:
+                return None
+            if current is None:
+                return None
+        return current
 
-    def _cache_put(self, image_path: str, value: dict[str, str | None]) -> None:
-        self._candidate_cache[image_path] = value
-        self._candidate_cache.move_to_end(image_path)
-        while len(self._candidate_cache) > self.CACHE_LIMIT:
-            self._candidate_cache.popitem(last=False)
-
-    def _load_file_candidates(self, image_path: str) -> dict[str, str | None]:
-        cached = self._cache_get(image_path)
-        if cached is not None:
-            return cached
-
-        result: dict[str, str | None] = {}
-        if self.storage_mode == "files":
-            for group in self.groups:
-                extension = str(group.source.get("extension") or "")
-                value = None
-                for path in self._candidate_paths(image_path, extension):
-                    content = self._read_text(path)
-                    if content is not None:
-                        lines = content.splitlines()
-                        if group.processing.enable_wildcard:
-                            value = "\n".join(line.strip() for line in lines if line.strip())
-                        else:
-                            value = lines[0].strip() if lines else ""
-                        break
-                result[group.name] = value
-        else:
-            extension = str(self.storage.get("extension") or ".txt")
-            content = None
-            for path in self._candidate_paths(image_path, extension):
-                content = self._read_text(path)
-                if content is not None:
-                    break
-            physical_lines = [] if content is None else content.splitlines()
-            for group in self.groups:
-                line = int(group.source.get("line") or 0)
-                value = physical_lines[line - 1].strip() if 1 <= line <= len(physical_lines) else None
-                result[group.name] = value
-
-        self._cache_put(image_path, result)
-        return result
-
-    def _make_lookup_key(self, image_path: str) -> str:
+    def _make_json_lookup_key(self, image_path: str) -> str:
         path = Path(image_path)
         if self._image_key_mode == "filename":
             return path.name
@@ -195,33 +217,135 @@ class MultiCaptionResolver:
         if root is None:
             raise ValueError("Multi-Caption JSON root was not initialized")
         try:
-            key = os.path.relpath(str(path.resolve()), str(root.resolve()))
+            resolved_path = path.resolve()
+            resolved_root = root.resolve()
+            key = os.path.relpath(str(resolved_path), str(resolved_root))
         except OSError:
             key = os.path.relpath(str(path), str(root))
         return key.replace("\\", "/")
 
-    def _prepare_json_records(self, image_infos: list[Any]) -> None:
+    def _new_index_path(self) -> Path:
+        root = Path(tempfile.gettempdir()) / "dts-mc"
+        root.mkdir(parents=True, exist_ok=True)
+        # Keep Windows paths short. The file is run-local and removed at normal
+        # interpreter exit; stale crash leftovers are harmless and overwritten
+        # by neither another job nor another process.
+        return root / f"{uuid.uuid4().hex[:16]}.sqlite3"
+
+    def _insert(self, conn: sqlite3.Connection, image_key: str, group_name: str, caption: Any) -> None:
+        if caption is None:
+            return
+        if isinstance(caption, list):
+            caption = self._groups_by_name[group_name].processing.caption_separator.join(
+                str(item) for item in caption
+            )
+        value = str(caption).strip()
+        if not value:
+            return
+        conn.execute(
+            "INSERT OR REPLACE INTO captions(image_key, group_name, caption) VALUES (?, ?, ?)",
+            (image_key, group_name, value),
+        )
+
+    def _build_index(self, image_infos: list[Any]) -> str:
+        target = self._new_index_path()
+        conn = sqlite3.connect(str(target))
+        try:
+            conn.execute("PRAGMA journal_mode=OFF")
+            conn.execute("PRAGMA synchronous=OFF")
+            conn.execute(
+                "CREATE TABLE captions ("
+                "image_key TEXT NOT NULL, "
+                "group_name TEXT NOT NULL, "
+                "caption TEXT NOT NULL, "
+                "PRIMARY KEY(image_key, group_name))"
+            )
+
+            if self.storage_mode in {"files", "multiline"}:
+                self._index_files(conn, image_infos)
+            else:
+                self._index_json(conn, image_infos)
+
+            conn.execute("CREATE INDEX captions_image_key ON captions(image_key)")
+            conn.commit()
+        except Exception:
+            conn.close()
+            target.unlink(missing_ok=True)
+            raise
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+        atexit.register(_cleanup_index, str(target))
+        return str(target)
+
+    def _index_files(self, conn: sqlite3.Connection, image_infos: list[Any]) -> None:
+        seen: set[str] = set()
+        for info in image_infos:
+            image_path = str(getattr(info, "absolute_path", "") or "")
+            image_key = self._identity(image_path)
+            if image_key in seen:
+                continue
+            seen.add(image_key)
+
+            if self.storage_mode == "files":
+                for group in self.groups:
+                    extension = str(group.source.get("extension") or "")
+                    content = None
+                    for path in self._candidate_paths(image_path, extension):
+                        content = self._read_text(path)
+                        if content is not None:
+                            break
+                    if content is None:
+                        continue
+                    lines = content.splitlines()
+                    if group.processing.enable_wildcard:
+                        value = "\n".join(line.strip() for line in lines if line.strip())
+                    else:
+                        value = lines[0].strip() if lines else ""
+                    self._insert(conn, image_key, group.name, value)
+            else:
+                extension = str(self.storage.get("extension") or ".txt")
+                content = None
+                for path in self._candidate_paths(image_path, extension):
+                    content = self._read_text(path)
+                    if content is not None:
+                        break
+                physical_lines = [] if content is None else content.splitlines()
+                for group in self.groups:
+                    line = int(group.source.get("line") or 0)
+                    value = physical_lines[line - 1].strip() if 1 <= line <= len(physical_lines) else None
+                    self._insert(conn, image_key, group.name, value)
+
+    def _index_json(self, conn: sqlite3.Connection, image_infos: list[Any]) -> None:
         source = Path(str(self.storage.get("path") or ""))
         if not source.is_file():
             raise ValueError(f"Multi-Caption dedicated JSON/JSONL does not exist: {source}")
         configured_root = self.storage.get("root")
         self._json_root = Path(str(configured_root)).resolve() if configured_root else source.parent.resolve()
 
-        lookup_owner: dict[str, str] = {}
+        wanted: dict[str, str] = {}
         for info in image_infos:
             image_path = str(getattr(info, "absolute_path", "") or "")
-            key = self._make_lookup_key(image_path)
-            previous = lookup_owner.get(key)
-            if previous is not None and previous != image_path:
+            lookup = self._make_json_lookup_key(image_path)
+            identity = self._identity(image_path)
+            previous = wanted.get(lookup)
+            if previous is not None and previous != identity:
                 raise ValueError(
-                    f"Multi-Caption image lookup key collision {key!r}: {previous!r} and {image_path!r}. "
+                    f"Multi-Caption image lookup key collision {lookup!r}. "
                     "Use relative_path mode or a less ambiguous key."
                 )
-            lookup_owner[key] = image_path
-            self._dataset_lookup_keys[image_path] = key
+            wanted[lookup] = identity
 
-        wanted = set(lookup_owner)
-        records: dict[str, dict[str, Any]] = {}
+        def insert_record(lookup: str, record: dict[str, Any]) -> None:
+            identity = wanted.get(lookup)
+            if identity is None:
+                return
+            for group in self.groups:
+                key = str(group.source.get("key") or "")
+                self._insert(conn, identity, group.name, self._json_pointer(record, key))
+
         if self.storage_mode == "json":
             try:
                 raw = json.loads(source.read_text(encoding="utf-8"))
@@ -229,12 +353,13 @@ class MultiCaptionResolver:
                 raise ValueError(f"Multi-Caption JSON could not be read: {source}: {exc}") from exc
             if not isinstance(raw, dict):
                 raise ValueError("Multi-Caption JSON must map image keys to objects")
-            for key in wanted:
-                value = raw.get(key)
-                if value is not None:
-                    if not isinstance(value, dict):
-                        raise ValueError(f"Multi-Caption JSON record {key!r} must be an object")
-                    records[key] = value
+            for lookup in wanted:
+                record = raw.get(lookup)
+                if record is not None:
+                    if not isinstance(record, dict):
+                        raise ValueError(f"Multi-Caption JSON record {lookup!r} must be an object")
+                    insert_record(lookup, record)
+            del raw
         else:
             image_field = str(self.storage.get("image_key_field") or "image")
             seen: set[str] = set()
@@ -249,40 +374,44 @@ class MultiCaptionResolver:
                             raise ValueError(f"Multi-Caption JSONL invalid line {lineno}: {exc}") from exc
                         if not isinstance(record, dict):
                             raise ValueError(f"Multi-Caption JSONL line {lineno} must be an object")
-                        key = str(record.get(image_field) or "")
-                        if not key:
+                        lookup = str(record.get(image_field) or "")
+                        if not lookup:
                             raise ValueError(f"Multi-Caption JSONL line {lineno} is missing {image_field!r}")
-                        if key in seen:
-                            raise ValueError(f"Multi-Caption JSONL duplicate image key: {key!r}")
-                        seen.add(key)
-                        if key in wanted:
-                            records[key] = record
+                        if lookup in seen:
+                            raise ValueError(f"Multi-Caption JSONL duplicate image key: {lookup!r}")
+                        seen.add(lookup)
+                        insert_record(lookup, record)
             except OSError as exc:
                 raise ValueError(f"Multi-Caption JSONL could not be read: {source}: {exc}") from exc
-        self._records = records
 
-    def _load_json_candidates(self, image_path: str) -> dict[str, str | None]:
-        if self._records is None:
-            raise ValueError("Multi-Caption JSON records were not initialized")
-        key = self._dataset_lookup_keys.get(image_path)
-        if key is None:
-            key = self._make_lookup_key(image_path)
-        record = self._records.get(key) or {}
-        result: dict[str, str | None] = {}
-        for group in self.groups:
-            value = record.get(str(group.source.get("key") or ""))
-            if isinstance(value, list):
-                value = ", ".join(str(item) for item in value)
-            result[group.name] = None if value is None else str(value).strip()
+    def _connection(self) -> sqlite3.Connection:
+        if self._conn is None:
+            if not os.path.isfile(self._db_path):
+                raise ValueError("Multi-Caption caption index disappeared before training completed")
+            self._conn = sqlite3.connect(self._db_path)
+        return self._conn
+
+    def _candidates(self, image_path: str) -> dict[str, str]:
+        image_key = self._identity(image_path)
+        cached = self._candidate_cache.get(image_key)
+        if cached is not None:
+            self._candidate_cache.move_to_end(image_key)
+            return cached
+
+        rows = self._connection().execute(
+            "SELECT group_name, caption FROM captions WHERE image_key = ?",
+            (image_key,),
+        ).fetchall()
+        result = {str(name): str(caption) for name, caption in rows}
+        self._candidate_cache[image_key] = result
+        self._candidate_cache.move_to_end(image_key)
+        while len(self._candidate_cache) > self.CACHE_LIMIT:
+            self._candidate_cache.popitem(last=False)
         return result
 
-    def choose(self, *, image_path: str, image_key: str | None = None) -> ResolvedCaption | None:
+    def choose(self, *, image_path: str, image_key: str | None = None) -> ResolvedCaption:
         del image_key
-        candidates = (
-            self._load_json_candidates(image_path)
-            if self.storage_mode in {"json", "jsonl"}
-            else self._load_file_candidates(image_path)
-        )
+        candidates = self._candidates(image_path)
         valid: list[tuple[CaptionGroup, str]] = []
         for group in self.groups:
             if not group.enabled or group.weight <= 0:
@@ -291,27 +420,21 @@ class MultiCaptionResolver:
             if caption is None or not caption.strip():
                 continue
             valid.append((group, caption.strip()))
+
         if not valid:
             raise ValueError(
                 f"Multi-Caption: no enabled non-empty caption group is available for image {image_path!r}"
             )
 
+        weights = [item[0].weight for item in valid]
         if self.deterministic:
-            seed_material = f"{image_path}\0" + "\0".join(
+            material = (image_path + "\0" + "\0".join(
                 f"{item[0].name}:{item[0].weight:g}" for item in valid
-            )
-            rng = random.Random(seed_material)
-            group, caption = rng.choices(
-                valid,
-                weights=[item[0].weight for item in valid],
-                k=1,
-            )[0]
+            )).encode("utf-8")
+            seed = int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
+            group, caption = random.Random(seed).choices(valid, weights=weights, k=1)[0]
         else:
-            group, caption = random.choices(
-                valid,
-                weights=[item[0].weight for item in valid],
-                k=1,
-            )[0]
+            group, caption = random.choices(valid, weights=weights, k=1)[0]
         return ResolvedCaption(group.name, caption, group.processing)
 
 
@@ -336,7 +459,7 @@ def configure_multi_caption_dataset_groups(
         dataset.set_multi_caption_resolver(train_resolver)
 
     if val_dataset_group is not None:
-        val_resolver = MultiCaptionResolver.from_file(config_path, image_infos, deterministic=True)
+        val_resolver = train_resolver.clone(deterministic=True)
         for dataset in val_dataset_group.datasets:
             dataset.set_multi_caption_resolver(val_resolver)
     return train_resolver
