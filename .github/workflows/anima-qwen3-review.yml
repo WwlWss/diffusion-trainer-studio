@@ -71,11 +71,14 @@ on:
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/stable/train_network.py"
+      - "scripts/stable/networks/lora.py"
       - "scripts/stable/train_db.py"
       - "scripts/stable/sdxl_train.py"
       - "scripts/dev/library/multi_caption.py"
       - "scripts/dev/library/train_util.py"
       - "scripts/dev/train_network.py"
+      - "scripts/dev/networks/lora_flux.py"
+      - "scripts/dev/networks/lora_sd3.py"
       - "scripts/dev/flux_train.py"
       - "scripts/dev/sd3_train.py"
       - "tests/test_multi_caption*.py"
@@ -150,11 +153,14 @@ jobs:
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
             scripts/stable/train_network.py \
+            scripts/stable/networks/lora.py \
             scripts/stable/train_db.py \
             scripts/stable/sdxl_train.py \
             scripts/dev/library/multi_caption.py \
             scripts/dev/library/train_util.py \
             scripts/dev/train_network.py \
+            scripts/dev/networks/lora_flux.py \
+            scripts/dev/networks/lora_sd3.py \
             scripts/dev/flux_train.py \
             scripts/dev/sd3_train.py \
             tests/test_multi_caption_config.py \
@@ -172,6 +178,9 @@ jobs:
             tests/test_parameter_policy_bootstrap.py \
             tests/test_parameter_policy_compat.py \
             tests/test_parameter_policy_step3_regression.py \
+            tests/test_parameter_policy_adapter_metadata.py \
+            tests/test_parameter_policy_anima_metadata.py \
+            tests/test_parameter_policy_step4_routing.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -271,6 +280,12 @@ jobs:
 
       - name: Parameter Policy Step 3 final boundaries
         run: python -m unittest tests.test_parameter_policy_step3_regression -v
+
+      - name: Parameter Policy Step 4 end-to-end routing
+        run: python -m unittest tests.test_parameter_policy_step4_routing -v
+
+      - name: Validate Anima Parameter Policy metadata patch
+        run: python tools/apply_anima_parameter_policy_metadata_patch.py --check
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
