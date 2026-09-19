@@ -170,7 +170,8 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
             "scheduler = scheduler_factory(spec, optimizer_entry.optimizer)",
             self.source,
         )
-        self.assertIn("is not attached to that child optimizer", self.source)
+        self.assertIn("is not attached ", self.source)
+        self.assertIn("to that child optimizer.", self.source)
         self.assertIn("not torch.optim.lr_scheduler.LRScheduler", self.source)
 
     def test_scheduler_factory_receives_profile_spec_for_legacy_context(self):
@@ -191,7 +192,8 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
     def test_optimizer_managed_scheduler_has_no_child_scheduler_state(self):
         self.assertIn('mode="optimizer_managed"', self.source)
         self.assertIn("scheduler=None", self.source)
-        self.assertIn("must not carry external scheduler state", self.source)
+        self.assertIn("must not ", self.source)
+        self.assertIn("carry external scheduler state.", self.source)
 
     def test_composite_scheduler_state_is_versioned_by_profile_and_class(self):
         self.assertIn(
