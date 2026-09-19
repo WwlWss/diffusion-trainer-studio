@@ -13,10 +13,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import subprocess
+import tarfile
 import uuid
 
 from mikazuki.anima_qwen_config import trainer_supports_qwen_training
-from mikazuki.anima_qwen_runtime import _extend_joint_block_swap_support, _source_is_clean
+from mikazuki.anima_qwen_runtime import _extend_joint_block_swap_support
 from tools import apply_anima_multi_caption_patch as multi_patch
 from tools import apply_anima_qwen3_sd_scripts_patch as qwen_patch
 
@@ -126,30 +128,48 @@ def materialize_anima_runtime_tree(
     source = Path(source_dir).resolve()
     if not source.is_dir():
         raise RuntimeError(f"sd-scripts directory does not exist: {source}")
-    qwen_patch.verify_head(source)
-    if not _source_is_clean(source):
+    if shutil.which("git") is None:
         raise RuntimeError(
-            "sd-scripts has tracked local modifications. Reset/update the submodule before starting "
-            "an optional Anima runtime feature; staging is built only from the reviewed pinned source."
+            "Anima optional runtime features require Git so DTS can materialize the reviewed pinned "
+            "sd-scripts commit. Install Git and initialize the sd-scripts submodule."
         )
+    qwen_patch.verify_head(source)
 
     root = Path(cache_root) if cache_root is not None else _CACHE_ROOT
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
-    feature_slug = "-".join(features)
-    target = root / (
-        f"anima-{qwen_patch.EXPECTED_SD_SCRIPTS_HEAD[:8]}-{feature_slug}-{_cache_key(features)}"
-    )
+    # Keep the staged path deliberately short for Windows installations near
+    # MAX_PATH. Feature/head/revision details live in the marker, not the name.
+    target = root / f"a-{_cache_key(features)}"
     if _is_valid_materialized_tree(target, features):
         return target
 
     temp = root / f".{target.name}.{uuid.uuid4().hex}.tmp"
     try:
-        shutil.copytree(
-            source,
-            temp,
-            ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc"),
+        temp.mkdir(parents=True, exist_ok=False)
+        archive = temp / ".pinned-source.tar"
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(source),
+                "archive",
+                "--format=tar",
+                "--output",
+                str(archive),
+                qwen_patch.EXPECTED_SD_SCRIPTS_HEAD,
+            ],
+            capture_output=True,
+            text=True,
         )
+        if completed.returncode != 0:
+            raise RuntimeError(
+                "Unable to archive pinned sd-scripts source: "
+                + (completed.stderr.strip() or completed.stdout.strip() or "git archive failed")
+            )
+        with tarfile.open(archive, "r") as tf:
+            tf.extractall(temp)
+        archive.unlink(missing_ok=True)
 
         # Fixed order is part of the contract. Qwen owns optimizer/model/save
         # blocks; Multi-Caption owns Dataset/arg/dataset-construction blocks.
