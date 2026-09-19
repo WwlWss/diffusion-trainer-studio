@@ -243,14 +243,25 @@ def _map_flux_family_lora_components(
             fallback=base,
         )
 
-    rows = {
-        component_id: _target_route(target, component_id, unet_lr)
-        for component_id in (
-            "transformer.double_stream.adapter",
-            "transformer.single_stream.adapter",
-            "transformer.input_conditioning.adapter",
-        )
-    }
+    if train_type == "sd3-lora":
+        rows = {
+            component_id: _target_route(target, component_id, unet_lr)
+            for component_id in (
+                "mmdit.attention.adapter",
+                "mmdit.mlp.adapter",
+                "mmdit.modulation_norm.adapter",
+                "mmdit.other.adapter",
+            )
+        }
+    else:
+        rows = {
+            component_id: _target_route(target, component_id, unet_lr)
+            for component_id in (
+                "transformer.double_stream.adapter",
+                "transformer.single_stream.adapter",
+                "transformer.input_conditioning.adapter",
+            )
+        }
 
     if train_type in {"flux-lora", "chroma-lora"}:
         text_lrs: tuple[float, ...] | None = None
@@ -310,26 +321,7 @@ def _map_flux_family_lora_components(
                 ),
             }
         )
-        # SD3 owns MMDiT component IDs rather than Flux transformer IDs.
-        mmdit_rows = {
-            component_id: rows.pop(source_id)
-            for component_id, source_id in (
-                ("mmdit.attention.adapter", "transformer.double_stream.adapter"),
-                ("mmdit.mlp.adapter", "transformer.single_stream.adapter"),
-                (
-                    "mmdit.modulation_norm.adapter",
-                    "transformer.input_conditioning.adapter",
-                ),
-            )
-        }
-        # The fourth SD3 MMDiT component uses the same legacy U-Net LR.
-        mmdit_rows["mmdit.other.adapter"] = _target_route(
-            target,
-            "mmdit.other.adapter",
-            unet_lr,
-        )
-        mmdit_rows.update(rows)
-        return mmdit_rows
+        return rows
 
     raise AssertionError(f"Unhandled Flux-family LoRA backend {train_type!r}.")
 

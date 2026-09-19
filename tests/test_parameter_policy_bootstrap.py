@@ -420,6 +420,23 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
         ):
             self.assertEqual(rows[component_id]["learning_rate"], 1e-4)
 
+    def test_sd3_mmdit_components_use_real_sd3_target_ids(self):
+        rows = _bootstrap_component_rows(
+            {
+                "learning_rate": 1e-4,
+                "unet_lr": 2e-4,
+            },
+            "sd3-lora",
+        )
+        for component_id in (
+            "mmdit.attention.adapter",
+            "mmdit.mlp.adapter",
+            "mmdit.modulation_norm.adapter",
+            "mmdit.other.adapter",
+        ):
+            self.assertTrue(rows[component_id]["train"])
+            self.assertEqual(rows[component_id]["learning_rate"], 2e-4)
+
     def test_sd3_unet_only_does_not_parse_stale_text_encoder_lrs(self):
         rows = _bootstrap_component_rows(
             {
