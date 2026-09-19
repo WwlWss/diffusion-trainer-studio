@@ -25,7 +25,22 @@ parameter_policy_torch.py will construct child optimizers from Runtime Spec and 
 
 ## 5C - scheduler and ScheduleFree
 
-Add a real LRScheduler facade, external scheduler factory injection, and schedule-free train/eval lifecycle.
+Implemented contract:
+
+- CompositeLRScheduler is a real PyTorch LRScheduler type but deliberately skips
+  LRScheduler.__init__ so child schedulers are not advanced twice.
+- Each external-scheduler Profile gets one child scheduler from the injected
+  legacy scheduler factory.
+- ScheduleFree Profiles are optimizer-managed and receive no external scheduler.
+- CompositeOptimizer forwards train()/eval() and starts ScheduleFree children in
+  train mode, matching existing dev trainer behavior.
+- Composite _step_count propagates Accelerate's direct accumulation adjustment
+  to external child scheduler counters.
+- Scheduler state is versioned per Profile and validates mode, optimizer
+  topology, scheduler class, step count, and epoch before child state mutation.
+
+RAdamScheduleFree, AdamWScheduleFree, and SGDScheduleFree are promoted from
+restricted to supported only with this lifecycle/no-external-scheduler contract.
 
 ## 5D - Accelerate and resume smoke
 

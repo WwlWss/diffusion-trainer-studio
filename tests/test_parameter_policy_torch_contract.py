@@ -55,6 +55,7 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
             "bitsandbytes",
             "lion_pytorch",
             "pytorch_optimizer",
+            "schedulefree",
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, top_level_imports)
@@ -96,6 +97,93 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
         self.assertIn("def add_param_group(", self.source)
         self.assertIn("topology is immutable after construction", self.source)
 
+    def test_schedulefree_factory_requires_lifecycle_and_is_optimizer_managed(self):
+        self.assertIn('"schedulefree"', self.source)
+        for optimizer_type in (
+            "RAdamScheduleFree",
+            "AdamWScheduleFree",
+            "SGDScheduleFree",
+        ):
+            with self.subTest(optimizer_type=optimizer_type):
+                self.assertIn(f'"{optimizer_type}"', self.source)
+        self.assertIn("the required train()/eval() lifecycle", self.source)
+        self.assertIn('mode="optimizer_managed"', self.source)
+        self.assertIn('spec.lr_semantics != "optimizer_managed"', self.source)
+
+    def test_composite_optimizer_forwards_train_and_eval(self):
+        self.assertIn("def train(self):", self.source)
+        self.assertIn('train_fn = getattr(entry.optimizer, "train", None)', self.source)
+        self.assertIn("def eval(self):", self.source)
+        self.assertIn('eval_fn = getattr(entry.optimizer, "eval", None)', self.source)
+        self.assertIn("composite.train()", self.source)
+
+    def test_composite_scheduler_is_real_lrscheduler_without_base_init(self):
+        scheduler = next(
+            node
+            for node in self.tree.body
+            if isinstance(node, ast.ClassDef) and node.name == "CompositeLRScheduler"
+        )
+        self.assertTrue(
+            any(
+                isinstance(base, ast.Attribute)
+                and isinstance(base.value, ast.Attribute)
+                and isinstance(base.value.value, ast.Attribute)
+                and isinstance(base.value.value.value, ast.Name)
+                and base.value.value.value.id == "torch"
+                and base.value.value.attr == "optim"
+                and base.value.attr == "lr_scheduler"
+                and base.attr == "LRScheduler"
+                for base in scheduler.bases
+            )
+        )
+        init = next(
+            node
+            for node in scheduler.body
+            if isinstance(node, ast.FunctionDef) and node.name == "__init__"
+        )
+        self.assertFalse(
+            any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "__init__"
+                and isinstance(node.func.value, ast.Call)
+                and isinstance(node.func.value.func, ast.Name)
+                and node.func.value.func.id == "super"
+                for node in ast.walk(init)
+            )
+        )
+        self.assertIn("has already executed its own provider-defined initialization", self.source)
+
+    def test_external_scheduler_factory_receives_each_child_optimizer(self):
+        self.assertIn("scheduler = scheduler_factory(optimizer_entry.optimizer)", self.source)
+        self.assertIn("is not attached to that child optimizer", self.source)
+        self.assertIn("not torch.optim.lr_scheduler.LRScheduler", self.source)
+
+    def test_scheduler_step_count_propagates_accelerate_direct_increment(self):
+        self.assertIn("@_step_count.setter", self.source)
+        self.assertIn("delta = value - old", self.source)
+        self.assertIn("entry.scheduler._step_count = child_value + delta", self.source)
+
+    def test_optimizer_managed_scheduler_has_no_child_scheduler_state(self):
+        self.assertIn('mode="optimizer_managed"', self.source)
+        self.assertIn("scheduler=None", self.source)
+        self.assertIn("must not carry external scheduler state", self.source)
+
+    def test_composite_scheduler_state_is_versioned_by_profile_and_class(self):
+        self.assertIn(
+            'COMPOSITE_SCHEDULER_STATE_KIND = "dts_parameter_policy_composite_scheduler"',
+            self.source,
+        )
+        self.assertIn("COMPOSITE_SCHEDULER_STATE_VERSION = 1", self.source)
+        self.assertIn('"scheduler_type": entry.scheduler_type', self.source)
+        self.assertIn('"step_count": self._step_count', self.source)
+        self.assertIn('"last_epoch": self.last_epoch', self.source)
+
+    def test_scheduler_lr_logging_preserves_profile_group_order(self):
+        self.assertIn("def get_last_lr_by_profile(self)", self.source)
+        self.assertIn("for entry in self.entries:", self.source)
+        self.assertIn("len(values) != len(self.optimizer.param_groups)", self.source)
+
     def test_state_schema_is_versioned_and_nested_by_profile(self):
         self.assertIn(
             'COMPOSITE_OPTIMIZER_STATE_KIND = "dts_parameter_policy_composite_optimizer"',
@@ -127,6 +215,9 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
             "PagedLion8bit",
             "SGDNesterov",
             "SGDNesterov8bit",
+            "RAdamScheduleFree",
+            "AdamWScheduleFree",
+            "SGDScheduleFree",
             "Muon",
         ):
             with self.subTest(optimizer_type=optimizer_type):
