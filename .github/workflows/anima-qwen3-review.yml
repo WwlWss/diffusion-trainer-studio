@@ -8,6 +8,7 @@ on:
       - "mikazuki/multi_caption_config.py"
       - "mikazuki/optimizer_profiles.py"
       - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_bootstrap.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -108,6 +109,7 @@ jobs:
             mikazuki/multi_caption_config.py \
             mikazuki/optimizer_profiles.py \
             mikazuki/parameter_policy.py \
+            mikazuki/parameter_policy_bootstrap.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
