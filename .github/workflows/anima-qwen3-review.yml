@@ -7,6 +7,7 @@ on:
       - "mikazuki/anima_runtime.py"
       - "mikazuki/multi_caption_config.py"
       - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -74,6 +75,7 @@ on:
       - "scripts/dev/sd3_train.py"
       - "tests/test_multi_caption*.py"
       - "tests/test_optimizer_profile_capabilities.py"
+      - "tests/test_parameter_policy*.py"
       - "tests/test_anima_multi_caption_runtime.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -105,6 +107,7 @@ jobs:
             mikazuki/anima_runtime.py \
             mikazuki/multi_caption_config.py \
             mikazuki/optimizer_profiles.py \
+            mikazuki/parameter_policy.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -150,6 +153,8 @@ jobs:
             tests/test_multi_caption_backend_matrix.py \
             tests/test_anima_multi_caption_runtime.py \
             tests/test_optimizer_profile_capabilities.py \
+            tests/test_parameter_policy_config.py \
+            tests/test_parameter_policy_request_contract.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -240,6 +245,9 @@ jobs:
 
       - name: Optimizer capability registry
         run: python -m unittest tests.test_optimizer_profile_capabilities -v
+
+      - name: Parameter Policy host contract
+        run: python -m unittest discover -s tests -p 'test_parameter_policy*.py' -v
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
