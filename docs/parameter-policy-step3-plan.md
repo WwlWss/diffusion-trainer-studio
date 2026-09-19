@@ -167,6 +167,8 @@ class ParameterAlias:
     module_path: str
     module_type: str
     module_class: str
+    ancestor_module_types: tuple[str, ...]
+    ancestor_module_classes: tuple[str, ...]
     parameter_role: str
     parameter_class: ParameterClass
     adapter_target: AdapterTargetMetadata | None = None
@@ -243,10 +245,11 @@ For each trainer-provided root:
 3. for each module, walk only `named_parameters(recurse=False, remove_duplicate=False)`;
 4. form an alias record from root + module path + local parameter role;
 5. capture both a qualified module type (`type(module).__module__ + "." + __qualname__`) and the short class name;
-6. if `adapter_targets` contains `id(module)`, attach that metadata to **this alias**;
-7. aggregate by `id(parameter)`, never by name;
-8. preserve every alias;
-9. sort roots/aliases deterministically before producing descriptors.
+6. capture the ordered ancestor module type/class lineage for the module; nested SD/SDXL Linear/Conv modules cannot be classified reliably from the leaf class alone;
+7. if `adapter_targets` contains `id(module)`, attach that metadata to **this alias**;
+8. aggregate by `id(parameter)`, never by name;
+9. preserve every alias;
+10. sort roots/aliases deterministically before producing descriptors.
 
 Adapter metadata is intentionally keyed by adapter **module identity**, not parameter identity or string name. Step 4 may provide this registry without requiring Step 3 to guess from `lora_name`.
 
