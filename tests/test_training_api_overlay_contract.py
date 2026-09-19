@@ -62,7 +62,9 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
     def test_export_payload_contains_portable_bundle(self):
         self.assertIn('"format": "dts-training-bundle-v1"', TRAINING_API)
         self.assertIn('"bundle": json.dumps(bundle', TRAINING_API)
-        self.assertIn('sidecars = {str(key): str(value)', TRAINING_API)
+        self.assertIn("_validated_bundle_sidecars", TRAINING_API)
+        self.assertIn("hashlib.sha256(raw_content.encode", TRAINING_API)
+        self.assertIn("materialize_sidecars(sidecars)", TRAINING_API)
 
 
 if __name__ == "__main__":
