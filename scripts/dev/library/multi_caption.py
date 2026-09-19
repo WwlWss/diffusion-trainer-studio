@@ -14,6 +14,7 @@ import copy
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -110,8 +111,10 @@ class MultiCaptionResolver:
                 source=dict(raw.get("source") or {}),
                 processing=CaptionProcessingOptions.from_dict(raw.get("processing")),
             )
-            if group.weight < 0:
-                raise ValueError(f"Multi-Caption: group {group.name!r} has negative weight")
+            if not math.isfinite(group.weight) or group.weight < 0:
+                raise ValueError(
+                    f"Multi-Caption: group {group.name!r} weight must be a finite non-negative number"
+                )
             self.groups.append(group)
             self._groups_by_name[group.name] = group
 
