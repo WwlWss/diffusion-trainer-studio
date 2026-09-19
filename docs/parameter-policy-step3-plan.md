@@ -166,8 +166,10 @@ class ParameterAlias:
     full_name: str
     module_path: str
     module_type: str
+    module_class: str
     parameter_role: str
     parameter_class: ParameterClass
+    adapter_target: AdapterTargetMetadata | None = None
 
 @dataclass(frozen=True)
 class ParameterDescriptor:
@@ -178,7 +180,6 @@ class ParameterDescriptor:
     ndim: int
     dtype: str
     requires_grad: bool
-    adapter_target: AdapterTargetMetadata | None = None
 
 @dataclass(frozen=True)
 class RoutingAssignment:
@@ -187,24 +188,43 @@ class RoutingAssignment:
     route_kind: Literal["primary", "fallback", "frozen", "unavailable"]
     optimizer_profile: str | None
     learning_rate: float | None
+    reason: str
 
 @dataclass(frozen=True)
 class RoutingIssue:
+    severity: Literal["error", "warning"]
     code: str
     message: str
     parameter_id: int | None = None
+    component_id: str | None = None
+
+@dataclass(frozen=True)
+class RoutingStats:
+    total_tensors: int
+    total_numel: int
+    by_component: Mapping[str, int]
+    by_route: Mapping[str, int]
+    by_parameter_class: Mapping[str, int]
 
 @dataclass(frozen=True)
 class RoutingPlan:
     assignments: tuple[RoutingAssignment, ...]
     issues: tuple[RoutingIssue, ...]
-    stats: Mapping[str, Any]
+    stats: RoutingStats
+
+    @property
+    def is_valid(self) -> bool:
+        return not any(issue.severity == "error" for issue in self.issues)
 ```
 
 Public entry points:
 
 ```python
-scan_parameter_roots(roots, *, adapter_targets=None)
+scan_parameter_roots(
+    roots: Mapping[str, Any],
+    *,
+    adapter_targets: Mapping[int, AdapterTargetMetadata] | None = None,
+)
 build_parameter_routing_plan(
     policy,
     *,
@@ -218,12 +238,17 @@ build_parameter_routing_plan(
 
 For each trainer-provided root:
 
-1. walk `named_modules(remove_duplicate=False)`;
-2. for each module, walk only `named_parameters(recurse=False, remove_duplicate=False)`;
-3. form an alias record from root + module path + local parameter role;
-4. aggregate by `id(parameter)`, never by name;
-5. preserve every alias;
-6. sort roots/aliases deterministically before producing descriptors.
+1. accept an explicit `Mapping[root_id, module]`; root IDs are trainer-owned semantic roots such as `unet`, `transformer`, `text_encoder_1`, `qwen3`;
+2. walk `named_modules(remove_duplicate=False)`;
+3. for each module, walk only `named_parameters(recurse=False, remove_duplicate=False)`;
+4. form an alias record from root + module path + local parameter role;
+5. capture both a qualified module type (`type(module).__module__ + "." + __qualname__`) and the short class name;
+6. if `adapter_targets` contains `id(module)`, attach that metadata to **this alias**;
+7. aggregate by `id(parameter)`, never by name;
+8. preserve every alias;
+9. sort roots/aliases deterministically before producing descriptors.
+
+Adapter metadata is intentionally keyed by adapter **module identity**, not parameter identity or string name. Step 4 may provide this registry without requiring Step 3 to guess from `lora_name`.
 
 The scanner must never:
 
@@ -236,9 +261,11 @@ Routing is a startup operation.
 
 ### Alias conflicts
 
-A shared parameter is legal only if all aliases classify to the same effective component and target state.
+A shared parameter is legal only if all aliases agree on the same effective component, target state, and optimizer-eligibility result.
 
-If aliases imply different components, roots, or incompatible ownership, the plan records a hard conflict and fails closed.
+Adapter target metadata is alias-scoped for the same reason: a shared parameter must not silently inherit one arbitrary alias's original-target metadata.
+
+If aliases imply different components, roots, target metadata, availability, or eligibility, the plan records a hard conflict and fails closed.
 
 ## 6. Structural parameter classification
 
@@ -256,6 +283,8 @@ Order:
 Normalization detection covers the repository's real names such as LayerNorm, GroupNorm, RMSNorm and QKNorm-style modules.
 
 This classification alone does **not** make a matrix Muon-eligible.
+
+Component classification and structural parameter classification are separate axes. A profile should classify the architectural owner first; `ParameterClass` must not become an optimizer-shaped substitute for Component IDs. For example, a bias owned by an attention projection remains in that attention/transformer Component and is later rejected by Muon eligibility, allowing fallback routing to do real work.
 
 ## 7. Muon eligibility
 
@@ -284,25 +313,36 @@ For LoRA, eligibility must eventually depend on the **original target module met
 
 ## 8. Routing algorithm
 
-For each descriptor:
+Routing has a policy-level pre-pass and a descriptor-level pass.
+
+Policy pre-pass:
+
+1. every Component ID present in the sidecar must exist in the active Model Component Profile;
+2. resolve higher-level Training Target availability for every declared row;
+3. reject `Train=true` on a target-unavailable Component;
+4. do not yet assume that a profile-declared Component exists in the actual loaded model.
+
+Descriptor pass:
 
 1. classify every alias with the Model Component Profile;
-2. require alias consensus;
-3. resolve Training Target availability;
-4. find the corresponding Component policy row;
-5. if target unavailable:
-   - `Train=true` => hard error (Component policy cannot expand trainer capability);
-   - otherwise route as `unavailable`;
-6. if policy row is missing for an available real component => `unassigned` hard error;
-7. if `Train=false` => `frozen`;
-8. resolve primary Optimizer Profile;
-9. if primary has no eligibility policy => `primary`;
-10. otherwise evaluate the model-profile eligibility policy:
+2. require alias consensus for component, target state, adapter metadata, and eligibility;
+3. derive the set of **actually present** Components from classified descriptors;
+4. if a present + target-available Component has no policy row => `unassigned` hard error;
+5. if `Train=false` => `frozen`;
+6. resolve primary Optimizer Profile;
+7. if primary has no eligibility policy => `primary`;
+8. otherwise evaluate the model-profile eligibility policy:
     - eligible => `primary`;
     - ineligible + fallback exists => `fallback`;
     - ineligible + no fallback => hard error;
-11. fallback LR resolves to explicit `fallback_learning_rate` when present, otherwise the Component `learning_rate`;
-12. audit global ownership.
+9. fallback LR resolves to explicit `fallback_learning_rate` when present, otherwise the Component `learning_rate`;
+10. audit global ownership.
+
+Presence audit:
+
+- a valid profile Component that is absent from the actual descriptors and has `Train=false` is allowed;
+- an absent Component with `Train=true` is a hard `component_absent` error, preventing optional/mismatched model structures from silently training nothing;
+- target-unavailable + `Train=false` remains representable and does not require model presence.
 
 The router does not mutate parameters.
 
@@ -314,9 +354,10 @@ A plan is routing-valid only when:
 - Duplicate/conflicting ownership = 0;
 - Unknown component = 0;
 - Train=true on unavailable component = 0;
-- Missing required fallback for an actually ineligible parameter = 0.
+- Missing required fallback for an actually ineligible parameter = 0;
+- Train=true Component with zero matched parameters = 0.
 
-A declared fallback that is never used is allowed and may produce an informational warning later.
+A declared fallback that is never used is allowed and is represented as a warning, not an error.
 
 ## 9. Initial Component Profile IDs
 
@@ -324,7 +365,7 @@ These IDs become the stable internal contract for later UI/runtime work.
 
 ### SD DreamBooth
 
-- `unet.transformer_matrix`
+- `unet.transformer`
 - `unet.conv_resnet`
 - `unet.norm_bias_other`
 - `unet.base_other`
@@ -332,7 +373,7 @@ These IDs become the stable internal contract for later UI/runtime work.
 
 ### SDXL Full
 
-- `unet.transformer_matrix`
+- `unet.transformer`
 - `unet.conv_resnet`
 - `unet.norm_bias_other`
 - `unet.base_other`
@@ -343,14 +384,14 @@ The profile is aligned with the repository's `BasicTransformerBlock`, `CrossAtte
 
 ### Flux Full
 
-- `transformer.double_stream.matrix`
-- `transformer.single_stream.matrix`
-- `transformer.modulation_norm_bias`
+- `transformer.double_stream`
+- `transformer.single_stream`
+- `transformer.modulation_norm_other`
 - `transformer.input_conditioning`
 - `transformer.final`
 - `transformer.other`
 
-Important repository-specific rule: `SingleStreamBlock.linear1` and `linear2` are fused attention/MLP projections. The profile must classify those real modules directly; it must not assume q_proj/k_proj/v_proj names.
+Important repository-specific rule: `SingleStreamBlock.linear1` and `linear2` are fused attention/MLP projections. The profile must classify those real modules directly; it must not assume q_proj/k_proj/v_proj names. Their biases remain in the same architectural Component; `ParameterClass` then makes those biases Muon-ineligible so fallback routing is exercised correctly.
 
 Flux Full never gains CLIP-L/T5 training merely because Component mode exists.
 
@@ -433,7 +474,9 @@ Examples:
 - Flux Full: only the transformer is trainable in the current trainer; CLIP-L/T5 stay unavailable.
 - SDXL Full: text encoders are available only under the existing `train_text_encoder` contract.
 - SD DreamBooth: the existing text-encoder training switch remains authoritative.
-- Anima Full: Qwen3 is available only when the existing Qwen3 joint-training contract enables it.
+- Anima Full: Qwen3 is available only when the existing Qwen3 joint-training target enables it. Existing legacy optimizer/LR restrictions in `anima_qwen_config.py` are not reinterpreted as Component optimizer rules; runtime integration of those constraints is Step 6.
+- Anima LoRA: `network_train_unet_only` / `network_train_text_encoder_only` preserve the DiT/Qwen3 target; `network_args train_llm_adapter=True` controls whether LLM Adapter LoRA can exist.
+- SD3 LoRA: `network_train_unet_only` controls MMDiT vs CLIP-L/CLIP-G availability, while `network_args train_t5xxl=True` independently controls T5XXL availability.
 - cache/target conflicts remain validated by the existing semantic compiler before routing.
 
 ## 11. Standard -> Component bootstrap
@@ -527,6 +570,7 @@ Initial blocker set:
   - `loraplus_lr_ratio`;
   - `loraplus_unet_lr_ratio`;
   - `loraplus_text_encoder_lr_ratio`;
+- regex-specific LoRA learning rates where implemented (Flux/Anima), especially `network_reg_lrs`;
 - `fused_backward_pass`;
 - `fused_optimizer_groups`;
 - `blockwise_fused_optimizers`;
@@ -537,17 +581,21 @@ The parser for `network_args` must inspect normalized key/value entries; it must
 
 This compatibility gate supplements the existing optimizer capability blockers.
 
-## 13. Component effective-config ownership
+## 13. Effective-config ownership is deferred to Step 6
 
-Step 3 should make ownership explicit before runtime work begins.
+Step 3 does **not** strip legacy optimizer/LR fields from the effective trainer config.
 
-After the normal semantic compiler has produced the effective config and compatibility checks have read the legacy fields, Component mode should remove legacy optimizer/LR controls that the sidecar owns from the exported effective trainer config.
+Reason:
 
-Scheduler settings remain global and are not stripped.
+- Component Start is still blocked in Step 3;
+- current trainer semantic validators (especially Anima Qwen3) still use legacy LR/optimizer fields while compiling existing trainer configuration;
+- stripping or bypassing those fields now would partially integrate Component runtime and create two competing semantic compilers.
 
-This avoids exporting two competing optimizer/LR authorities.
+Step 3 may expose pure compatibility/bootstrap helpers, but request/trainer integration keeps the Step 2 behavior unchanged.
 
-Standard mode is unchanged byte-for-byte in behavior.
+Step 6, when per-model runtime integration is implemented, becomes responsible for establishing the single trainer-side optimizer/LR authority and removing superseded legacy controls at the correct boundary.
+
+Standard mode remains unchanged.
 
 ## 14. LoRA Step 3 / Step 4 boundary
 
@@ -605,7 +653,8 @@ New `tests/test_parameter_routing.py` using fake modules/parameters:
 - scan preserves aliases;
 - identity is `id(parameter)`;
 - shared same-component alias is accepted;
-- conflicting alias ownership is rejected;
+- adapter metadata is alias-scoped;
+- conflicting alias ownership / adapter-target / eligibility is rejected;
 - no parameter mutation;
 - all-eligible Muon component works without fallback;
 - mixed Muon component requires fallback only for actual ineligible parameters;
@@ -617,7 +666,9 @@ New `tests/test_parameter_routing.py` using fake modules/parameters:
 - unknown parameter produces unassigned;
 - unavailable Train=true fails;
 - unavailable Train=false remains unavailable;
-- final audit counts are correct.
+- Train=true on a profile-valid but actually absent Component fails closed;
+- warning/error severity is preserved;
+- explicit routing stats (tensor count, numel, component/route/class counts) are correct.
 
 ### 15.4 Bootstrap/compatibility tests
 
@@ -630,9 +681,10 @@ Extend/create host tests for:
 - SDXL `block_lr` blocker;
 - LoRA block-weight blocker from normalized `network_args`;
 - LoRA+ blocker;
+- `network_reg_lrs` blocker for Flux/Anima LoRA;
 - fused/DeepSpeed blockers;
 - Standard config remains unchanged;
-- Component exported config has one optimizer/LR authority.
+- Step 3 does not strip or reinterpret trainer optimizer/LR fields.
 
 ### 15.5 CI
 
@@ -674,8 +726,8 @@ No PyTorch installation is added.
 - full Standard -> Component bootstrap;
 - legacy LR=0 migration;
 - compatibility blockers;
-- Component effective-config ownership cleanup;
-- request/rehydrate/export contract tests.
+- pure bootstrap/compatibility tests;
+- no request/runtime ownership rewrite.
 
 ### Commit 5 — CI and final contract review
 
@@ -692,7 +744,8 @@ Step 3 is complete only when all of the following are true:
 - Component Start is still blocked before trainer runtime staging.
 - The host can build deterministic descriptors from supplied model roots.
 - Every descriptor is keyed by real parameter identity, not only a string name.
-- Alias conflicts fail closed.
+- Alias conflicts (including adapter-target or eligibility disagreement) fail closed.
+- Train=true on a profile-valid but actually absent Component fails closed.
 - Every known full-model family has an explicit Component Profile.
 - LoRA profiles consume explicit original-target metadata and never guess when metadata is absent.
 - Muon eligibility is model-profile-approved, not `ndim == 2`.
@@ -702,7 +755,8 @@ Step 3 is complete only when all of the following are true:
 - Unassigned and duplicate/conflicting ownership counts are zero for a valid plan.
 - Higher-level trainer targets remain authoritative.
 - Legacy LR=0 bootstrap becomes Train Off.
-- Unsupported legacy multi-group/fused/LoRA+ semantics fail closed.
+- Unsupported legacy multi-group/fused/LoRA+/regex-LR semantics fail closed.
+- Step 3 does not strip or reinterpret trainer-side optimizer/LR fields; ownership transfer is deferred to Step 6.
 - No optimizer, scheduler, Accelerate, save/resume, device movement, or tensor-value inspection is introduced.
 - All host tests pass without installing PyTorch.
 
