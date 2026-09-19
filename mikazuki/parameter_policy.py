@@ -74,24 +74,37 @@ _STANDARD_MODE_ALIASES = {"", "standard", "off", "false", "0"}
 def _as_bool(value: object, default: bool = False) -> bool:
     if value is None:
         return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value == 1:
+            return True
+        if value == 0:
+            return False
+        raise ValueError("Parameter Policy: 布尔字段只能使用 true/false 或 1/0。")
     if isinstance(value, str):
         lowered = value.strip().lower()
         if lowered in {"1", "true", "yes", "on"}:
             return True
         if lowered in {"0", "false", "no", "off", ""}:
             return False
-    return bool(value)
+        raise ValueError(f"Parameter Policy: 无法解析布尔值 {value!r}。")
+    raise ValueError(f"Parameter Policy: 无法解析布尔值 {value!r}。")
 
 
-def _as_nonnegative_float(value: object, field: str) -> float:
+def _as_positive_float(value: object, field: str) -> float:
+    message = (
+        f"Parameter Policy: {field} 必须是正有限数字；"
+        "Train=true 时 LR 不能为 0，冻结请显式设置 Train=false。"
+    )
     if isinstance(value, bool):
-        raise ValueError(f"Parameter Policy: {field} 必须是非负有限数字。")
+        raise ValueError(message)
     try:
         result = float(value)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"Parameter Policy: {field} 必须是非负有限数字。") from exc
-    if not math.isfinite(result) or result < 0:
-        raise ValueError(f"Parameter Policy: {field} 必须是非负有限数字。")
+        raise ValueError(message) from exc
+    if not math.isfinite(result) or result <= 0:
+        raise ValueError(message)
     return result
 
 
@@ -218,7 +231,7 @@ def _normalize_components(
             profiles,
             field=f"{component_id}.optimizer_profile",
         )
-        learning_rate = _as_nonnegative_float(
+        learning_rate = _as_positive_float(
             raw.get("learning_rate"),
             f"{component_id}.learning_rate",
         )
@@ -231,13 +244,12 @@ def _normalize_components(
         capability = get_optimizer_capability(profiles[primary]["type"])
         fallback_raw = raw.get("fallback_optimizer_profile")
 
-        if capability.requires_parameter_eligibility and fallback_raw in (None, ""):
-            raise ValueError(
-                f"Parameter Policy: Component {component_id!r} 使用 "
-                f"{capability.name} 时必须设置 fallback_optimizer_profile。"
-            )
-
         if fallback_raw not in (None, ""):
+            if not capability.requires_parameter_eligibility:
+                raise ValueError(
+                    f"Parameter Policy: Component {component_id!r} 的主 Profile "
+                    f"{primary!r} 不需要 parameter eligibility routing，不能设置 fallback。"
+                )
             fallback = _lookup_profile_name(
                 fallback_raw,
                 profiles,
@@ -256,7 +268,7 @@ def _normalize_components(
                 )
             route["fallback_optimizer_profile"] = fallback
             if raw.get("fallback_learning_rate") not in (None, ""):
-                route["fallback_learning_rate"] = _as_nonnegative_float(
+                route["fallback_learning_rate"] = _as_positive_float(
                     raw.get("fallback_learning_rate"),
                     f"{component_id}.fallback_learning_rate",
                 )
@@ -284,12 +296,90 @@ def canonicalize_parameter_policy(gui_state: Mapping[str, Any]) -> dict[str, Any
     }
 
 
+def _validate_exact_keys(
+    raw: Mapping[str, Any],
+    *,
+    allowed: set[str],
+    required: set[str],
+    context: str,
+) -> None:
+    unknown = [key for key in raw if key not in allowed]
+    if unknown:
+        raise ValueError(
+            f"Parameter Policy: {context} 包含未知字段: "
+            + ", ".join(repr(key) for key in unknown)
+            + "。"
+        )
+    missing = [key for key in required if key not in raw]
+    if missing:
+        raise ValueError(
+            f"Parameter Policy: {context} 缺少必需字段: "
+            + ", ".join(sorted(missing))
+            + "。"
+        )
+
+
+def _validate_sidecar_shape(policy: Mapping[str, Any]) -> None:
+    _validate_exact_keys(
+        policy,
+        allowed={"version", "optimizer_profiles", "components"},
+        required={"version", "optimizer_profiles", "components"},
+        context="sidecar",
+    )
+
+    profiles = policy.get("optimizer_profiles")
+    if not isinstance(profiles, Mapping):
+        raise ValueError("Parameter Policy: sidecar.optimizer_profiles 必须是 object。")
+    for name, profile in profiles.items():
+        if not isinstance(profile, Mapping):
+            raise ValueError(f"Parameter Policy: Optimizer Profile {name!r} 必须是 object。")
+        _validate_exact_keys(
+            profile,
+            allowed={"type", "args"},
+            required={"type", "args"},
+            context=f"Optimizer Profile {name!r}",
+        )
+
+    components = policy.get("components")
+    if not isinstance(components, Mapping):
+        raise ValueError("Parameter Policy: sidecar.components 必须是 object。")
+    for component_id, route in components.items():
+        if not isinstance(route, Mapping):
+            raise ValueError(f"Parameter Policy: Component {component_id!r} 必须是 object。")
+        if "train" not in route:
+            raise ValueError(
+                f"Parameter Policy: Component {component_id!r} 缺少必需字段 train。"
+            )
+        train = _as_bool(route["train"])
+        if train:
+            _validate_exact_keys(
+                route,
+                allowed={
+                    "train",
+                    "optimizer_profile",
+                    "learning_rate",
+                    "fallback_optimizer_profile",
+                    "fallback_learning_rate",
+                },
+                required={"train", "optimizer_profile", "learning_rate"},
+                context=f"Component {component_id!r}",
+            )
+        else:
+            _validate_exact_keys(
+                route,
+                allowed={"train"},
+                required={"train"},
+                context=f"Component {component_id!r}",
+            )
+
+
 def validate_parameter_policy(policy: object) -> dict[str, Any]:
-    """Validate sidecar structure and return its canonical representation."""
+    """Strictly validate sidecar structure and return its canonical form."""
 
     if not isinstance(policy, Mapping):
         raise ValueError("Parameter Policy sidecar 必须是 JSON object。")
-    if policy.get("version") != PARAMETER_POLICY_VERSION:
+    _validate_sidecar_shape(policy)
+    if isinstance(policy.get("version"), bool) or policy.get("version") != PARAMETER_POLICY_VERSION:
         raise ValueError(
             f"Parameter Policy: 不支持 sidecar version={policy.get('version')!r}；"
             f"当前只支持 version={PARAMETER_POLICY_VERSION}。"
@@ -328,8 +418,18 @@ def parameter_policy_runtime_blockers(policy: Mapping[str, Any]) -> list[str]:
     blockers = [
         "Parameter Training Policy trainer runtime 尚未实现；当前 Component-wise 仅支持 Preview / Export / Rehydrate。"
     ]
+    referenced_profiles: set[str] = set()
+    for route in canonical["components"].values():
+        if not route["train"]:
+            continue
+        referenced_profiles.add(route["optimizer_profile"])
+        fallback = route.get("fallback_optimizer_profile")
+        if fallback:
+            referenced_profiles.add(fallback)
+
     seen: set[str] = set()
-    for profile in canonical["optimizer_profiles"].values():
+    for profile_name in sorted(referenced_profiles, key=str.casefold):
+        profile = canonical["optimizer_profiles"][profile_name]
         capability = get_optimizer_capability(profile["type"])
         if capability.component_support == "supported":
             continue

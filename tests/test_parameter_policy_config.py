@@ -86,10 +86,21 @@ class ParameterPolicyConfigTests(unittest.TestCase):
                 "lora-master",
             )
 
-    def test_muon_requires_fallback(self):
+    def test_muon_can_omit_fallback_until_routing_finds_ineligible_parameters(self):
         config = _component_config()
-        del config["parameter_policy_components"]["dit.self_attention"]["fallback_optimizer_profile"]
-        with self.assertRaisesRegex(ValueError, "fallback_optimizer_profile"):
+        route = config["parameter_policy_components"]["dit.self_attention"]
+        del route["fallback_optimizer_profile"]
+        _, _, policy = build_parameter_policy_sidecar(config)
+        self.assertNotIn(
+            "fallback_optimizer_profile",
+            policy["components"]["dit.self_attention"],
+        )
+
+    def test_fallback_is_rejected_when_primary_has_no_eligibility_routing(self):
+        config = _component_config()
+        route = config["parameter_policy_components"]["dit.self_attention"]
+        route["optimizer_profile"] = "aux_adamw"
+        with self.assertRaisesRegex(ValueError, "不需要 parameter eligibility routing"):
             build_parameter_policy_sidecar(config)
 
     def test_muon_fallback_cannot_require_eligibility_again(self):
@@ -118,16 +129,27 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "不能单独设置"):
             build_parameter_policy_sidecar(config)
 
-    def test_learning_rates_must_be_finite_and_nonnegative_but_zero_is_allowed(self):
-        config = _component_config()
-        config["parameter_policy_components"]["dit.self_attention"]["learning_rate"] = 0
-        _, _, policy = build_parameter_policy_sidecar(config)
-        self.assertEqual(policy["components"]["dit.self_attention"]["learning_rate"], 0.0)
-
-        for bad in (-1, float("nan"), float("inf"), "bad"):
+    def test_train_true_learning_rates_must_be_finite_and_positive(self):
+        for field, bad in (
+            ("learning_rate", 0),
+            ("learning_rate", -1),
+            ("learning_rate", float("nan")),
+            ("learning_rate", float("inf")),
+            ("learning_rate", "bad"),
+            ("fallback_learning_rate", 0),
+        ):
             broken = _component_config()
-            broken["parameter_policy_components"]["dit.self_attention"]["learning_rate"] = bad
-            with self.subTest(bad=bad), self.assertRaises(ValueError):
+            broken["parameter_policy_components"]["dit.self_attention"][field] = bad
+            with self.subTest(field=field, bad=bad), self.assertRaisesRegex(
+                ValueError, "Train=true 时 LR 不能为 0"
+            ):
+                build_parameter_policy_sidecar(broken)
+
+    def test_component_train_bool_is_fail_closed(self):
+        for bad in ("flase", "truthy", 2, -1, [], {}):
+            broken = _component_config()
+            broken["parameter_policy_components"]["dit.self_attention"]["train"] = bad
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "布尔"):
                 build_parameter_policy_sidecar(broken)
 
     def test_profile_names_are_case_insensitively_unique(self):
@@ -168,6 +190,30 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         self.assertTrue(path_a.startswith("config/autosave/parameter-policy/"))
         self.assertEqual(validate_parameter_policy(json.loads(content_a)), policy_a)
 
+    def test_sidecar_validation_rejects_unknown_or_missing_contract_fields(self):
+        config = _component_config()
+        _, _, policy = build_parameter_policy_sidecar(config)
+
+        unknown_top = json.loads(json.dumps(policy))
+        unknown_top["typo"] = True
+        with self.assertRaisesRegex(ValueError, "未知字段"):
+            validate_parameter_policy(unknown_top)
+
+        unknown_component = json.loads(json.dumps(policy))
+        unknown_component["components"]["dit.self_attention"]["trian"] = True
+        with self.assertRaisesRegex(ValueError, "未知字段"):
+            validate_parameter_policy(unknown_component)
+
+        missing_train = json.loads(json.dumps(policy))
+        del missing_train["components"]["dit.self_attention"]["train"]
+        with self.assertRaisesRegex(ValueError, "缺少必需字段 train"):
+            validate_parameter_policy(missing_train)
+
+        frozen_with_stale_route = json.loads(json.dumps(policy))
+        frozen_with_stale_route["components"]["qwen3"]["learning_rate"] = 1e-4
+        with self.assertRaisesRegex(ValueError, "未知字段"):
+            validate_parameter_policy(frozen_with_stale_route)
+
     def test_rehydrate_round_trip_preserves_semantics(self):
         config = _component_config()
         _, _, policy = build_parameter_policy_sidecar(config)
@@ -202,6 +248,16 @@ class ParameterPolicyConfigTests(unittest.TestCase):
                 _, _, policy = build_parameter_policy_sidecar(config)
                 blockers = parameter_policy_runtime_blockers(policy)
                 self.assertTrue(any(marker in item for item in blockers))
+
+    def test_unused_restricted_or_planned_profiles_do_not_add_runtime_blockers(self):
+        config = _component_config()
+        config["parameter_policy_profiles"]["unused_planned"] = {
+            "type": "pytorch_optimizer.CAME",
+            "args": {},
+        }
+        _, _, policy = build_parameter_policy_sidecar(config)
+        blockers = parameter_policy_runtime_blockers(policy)
+        self.assertFalse(any("CAME" in item or "planned" in item for item in blockers))
 
     def test_runtime_blockers_always_include_step2_runtime_gate(self):
         config = _component_config()
