@@ -322,6 +322,7 @@ class ParameterPolicyConfigTests(unittest.TestCase):
                     "lora_target": "unet",
                 },
                 "lora-master",
+                resolve_backend=lambda config, requested: (requested, f"trainer/{requested}.py"),
             )
 
 
