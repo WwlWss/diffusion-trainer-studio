@@ -354,6 +354,22 @@ class NativeLoRAMetadataEmitterContractTests(unittest.TestCase):
             source,
         )
 
+    def test_stable_root_mapping_uses_model_family_not_only_encoder_count(self):
+        source = self._source("stable")
+        self.assertIn("elif is_sdxl:", source)
+        self.assertIn(
+            '"text_encoder" if text_encoder_idx is None else None',
+            source,
+        )
+        self.assertIn(
+            '"text_encoder_1"\n                    if text_encoder_idx == 1',
+            source,
+        )
+        self.assertIn(
+            'else ("text_encoder_2" if text_encoder_idx == 2 else None)',
+            source,
+        )
+
     def test_flux_roots_cover_transformer_clip_l_and_t5(self):
         source = self._source("flux")
         for marker in ('"transformer"', '"clip_l"', '"t5xxl"'):

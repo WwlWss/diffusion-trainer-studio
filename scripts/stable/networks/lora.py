@@ -976,14 +976,14 @@ class LoRANetwork(torch.nn.Module):
             )
             if is_unet:
                 target_root = "unet"
-            elif text_encoder_idx is None:
-                target_root = "text_encoder"
-            elif text_encoder_idx == 1:
-                target_root = "text_encoder_1"
-            elif text_encoder_idx == 2:
-                target_root = "text_encoder_2"
+            elif is_sdxl:
+                target_root = (
+                    "text_encoder_1"
+                    if text_encoder_idx == 1
+                    else ("text_encoder_2" if text_encoder_idx == 2 else None)
+                )
             else:
-                target_root = None
+                target_root = "text_encoder" if text_encoder_idx is None else None
 
             loras = []
             skipped = []
