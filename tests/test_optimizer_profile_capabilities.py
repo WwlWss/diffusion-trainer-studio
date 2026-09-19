@@ -1,3 +1,4 @@
+from pathlib import Path
 import types
 import unittest
 
@@ -51,6 +52,12 @@ class OptimizerProfileCapabilityTests(unittest.TestCase):
         }
         actual = {item.name for item in list_optimizer_capabilities()}
         self.assertTrue(expected.issubset(actual))
+
+    def test_muon_provider_dependency_is_pinned_by_dts(self):
+        requirements = (
+            Path(__file__).resolve().parents[1] / "requirements.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("pytorch-optimizer==3.10.0", requirements)
 
     def test_muon_uses_already_pinned_pytorch_optimizer_provider(self):
         muon = get_optimizer_capability("muon")
