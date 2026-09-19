@@ -19,6 +19,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+DTS_PARAMETER_POLICY_TARGET_ATTR = "_dts_parameter_policy_target_v1"
+
+
+def _attach_dts_parameter_policy_target(lora, target_root, target_path, target_module):
+    if target_root is None:
+        return
+    cls = target_module.__class__
+    module_name = getattr(cls, "__module__", "")
+    qualname = getattr(cls, "__qualname__", getattr(cls, "__name__", ""))
+    target_type = f"{module_name}.{qualname}" if module_name else qualname
+    setattr(
+        lora,
+        DTS_PARAMETER_POLICY_TARGET_ATTR,
+        (target_root, target_path, target_type),
+    )
+
+
 RE_UPDOWN = re.compile(r"(up|down)_blocks_(\d+)_(resnets|upsamplers|downsamplers|attentions)_(\d+)_")
 
 
@@ -957,6 +974,17 @@ class LoRANetwork(torch.nn.Module):
                     else (self.LORA_PREFIX_TEXT_ENCODER1 if text_encoder_idx == 1 else self.LORA_PREFIX_TEXT_ENCODER2)
                 )
             )
+            if is_unet:
+                target_root = "unet"
+            elif is_sdxl:
+                target_root = (
+                    "text_encoder_1"
+                    if text_encoder_idx == 1
+                    else ("text_encoder_2" if text_encoder_idx == 2 else None)
+                )
+            else:
+                target_root = "text_encoder" if text_encoder_idx is None else None
+
             loras = []
             skipped = []
             for name, module in root_module.named_modules():
@@ -1011,6 +1039,13 @@ class LoRANetwork(torch.nn.Module):
                                 dropout=dropout,
                                 rank_dropout=rank_dropout,
                                 module_dropout=module_dropout,
+                            )
+                            target_path = (name + "." if name else "") + child_name
+                            _attach_dts_parameter_policy_target(
+                                lora,
+                                target_root,
+                                target_path,
+                                child_module,
                             )
                             loras.append(lora)
             return loras, skipped

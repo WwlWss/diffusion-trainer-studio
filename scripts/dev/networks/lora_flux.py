@@ -25,6 +25,23 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+DTS_PARAMETER_POLICY_TARGET_ATTR = "_dts_parameter_policy_target_v1"
+
+
+def _attach_dts_parameter_policy_target(lora, target_root, target_path, target_module):
+    if target_root is None:
+        return
+    cls = target_module.__class__
+    module_name = getattr(cls, "__module__", "")
+    qualname = getattr(cls, "__qualname__", getattr(cls, "__name__", ""))
+    target_type = f"{module_name}.{qualname}" if module_name else qualname
+    setattr(
+        lora,
+        DTS_PARAMETER_POLICY_TARGET_ATTR,
+        (target_root, target_path, target_type),
+    )
+
+
 
 NUM_DOUBLE_BLOCKS = 19
 NUM_SINGLE_BLOCKS = 38
@@ -805,6 +822,15 @@ class LoRANetwork(torch.nn.Module):
                 if is_flux
                 else (self.LORA_PREFIX_TEXT_ENCODER_CLIP if text_encoder_idx == 0 else self.LORA_PREFIX_TEXT_ENCODER_T5)
             )
+            target_root = (
+                "transformer"
+                if is_flux
+                else (
+                    "clip_l"
+                    if text_encoder_idx == 0
+                    else ("t5xxl" if text_encoder_idx == 1 else None)
+                )
+            )
 
             loras = []
             skipped = []
@@ -917,6 +943,13 @@ class LoRANetwork(torch.nn.Module):
                                 split_dims=split_dims,
                                 ggpo_beta=ggpo_beta,
                                 ggpo_sigma=ggpo_sigma,
+                            )
+                            target_path = (name + "." if name else "") + child_name
+                            _attach_dts_parameter_policy_target(
+                                lora,
+                                target_root,
+                                target_path,
+                                child_module,
                             )
                             loras.append(lora)
 

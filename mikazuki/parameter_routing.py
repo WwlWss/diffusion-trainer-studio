@@ -30,6 +30,10 @@ class ParameterScanError(ValueError):
     """Raised when the scanner cannot build a trustworthy parameter inventory."""
 
 
+ADAPTER_TARGET_MARKER_ATTR = "_dts_parameter_policy_target_v1"
+_MISSING_ADAPTER_TARGET_MARKER = object()
+
+
 @dataclass(frozen=True)
 class AdapterTargetMetadata:
     root: str
@@ -570,6 +574,101 @@ def _normalize_adapter_targets(
     return normalized
 
 
+
+def _parse_attached_adapter_target(
+    module: Any,
+    *,
+    root: str,
+    module_path: str,
+) -> AdapterTargetMetadata | None:
+    """Read one versioned adapter marker without importing trainer-side code."""
+
+    try:
+        raw = getattr(
+            module,
+            ADAPTER_TARGET_MARKER_ATTR,
+            _MISSING_ADAPTER_TARGET_MARKER,
+        )
+    except AttributeError:
+        return None
+    except Exception as exc:
+        raise ParameterScanError(
+            f"Module {root}.{module_path or '<root>'} failed while reading "
+            f"{ADAPTER_TARGET_MARKER_ATTR}: {exc}"
+        ) from exc
+
+    if raw is _MISSING_ADAPTER_TARGET_MARKER:
+        return None
+    if not isinstance(raw, tuple) or len(raw) != 3:
+        raise ParameterScanError(
+            f"Module {root}.{module_path or '<root>'} has malformed "
+            f"{ADAPTER_TARGET_MARKER_ATTR}; expected tuple[str, str, str]."
+        )
+
+    target_root, target_path, target_type = raw
+    if not all(isinstance(value, str) for value in raw):
+        raise ParameterScanError(
+            f"Module {root}.{module_path or '<root>'} has malformed "
+            f"{ADAPTER_TARGET_MARKER_ATTR}; every tuple item must be str."
+        )
+
+    try:
+        return AdapterTargetMetadata(
+            root=target_root,
+            module_path=target_path,
+            module_type=target_type,
+        )
+    except ValueError as exc:
+        raise ParameterScanError(
+            f"Module {root}.{module_path or '<root>'} has invalid "
+            f"{ADAPTER_TARGET_MARKER_ATTR}: {exc}"
+        ) from exc
+
+
+def _index_attached_adapter_targets(
+    module_entries: Sequence[tuple[str, Any]],
+    *,
+    root: str,
+) -> dict[int, AdapterTargetMetadata]:
+    """Index attached markers from an already-enumerated module tree."""
+
+    attached: dict[int, AdapterTargetMetadata] = {}
+    for module_path, module in module_entries:
+        metadata = _parse_attached_adapter_target(
+            module,
+            root=root,
+            module_path=module_path,
+        )
+        if metadata is None:
+            continue
+
+        module_id = id(module)
+        previous = attached.get(module_id)
+        if previous is not None and previous != metadata:
+            raise ParameterScanError(
+                f"Module identity {module_id} exposes conflicting attached adapter "
+                "target metadata across aliases."
+            )
+        attached[module_id] = metadata
+    return attached
+
+
+def _merge_adapter_targets(
+    explicit: Mapping[int, AdapterTargetMetadata],
+    attached: Mapping[int, AdapterTargetMetadata],
+) -> dict[int, AdapterTargetMetadata]:
+    merged = dict(explicit)
+    for module_id, metadata in attached.items():
+        previous = merged.get(module_id)
+        if previous is not None and previous != metadata:
+            raise ParameterScanError(
+                f"Adapter module id={module_id} has conflicting explicit and attached "
+                "adapter target metadata."
+            )
+        merged[module_id] = metadata
+    return merged
+
+
 def scan_parameter_roots(
     roots: Mapping[str, Any],
     *,
@@ -601,6 +700,10 @@ def scan_parameter_roots(
     for root in sorted(normalized_roots):
         root_module = normalized_roots[root]
         module_entries = _named_modules(root_module, root=root)
+        targets = _merge_adapter_targets(
+            targets,
+            _index_attached_adapter_targets(module_entries, root=root),
+        )
         module_table = dict(module_entries)
 
         type_table: dict[str, tuple[str, str]] = {
@@ -1848,6 +1951,7 @@ def build_parameter_routing_plan(
 
 
 __all__ = [
+    "ADAPTER_TARGET_MARKER_ATTR",
     "AdapterTargetMetadata",
     "ParameterAlias",
     "ParameterDescriptor",
