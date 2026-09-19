@@ -552,6 +552,18 @@ Schema.intersect([
     Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
+            SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+        ]),
+        Schema.intersect([
+            Schema.object({ model_type: Schema.const("anima").required() }),
+            SHARED_SCHEMAS.MULTI_CAPTION_ANIMA,
+        ]),
+        Schema.object({}),
+    ]),
+
+    Schema.union([
+        Schema.intersect([
+            Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
             SHARED_SCHEMAS.NOISE_SETTINGS,
         ]),
         Schema.object({ model_type: Schema.const("anima").required() }).description("Anima 使用 Rectified Flow；不显示旧 SD noise_offset / multires noise 选项"),

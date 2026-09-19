@@ -78,6 +78,8 @@ Schema.intersect([
         keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("在随机打乱 tokens 时，保留前 N 个不变"),
     }).description("caption 选项"),
 
+    SHARED_SCHEMAS.MULTI_CAPTION_BASIC,
+
     Schema.object({
         mixed_precision: Schema.union(["no", "fp16", "bf16"]).default("fp16").description("混合精度, RTX30系列以后也可以指定`bf16`"),
         no_half_vae: Schema.boolean().description("不使用半精度 VAE，当出现 NaN detected in latents 报错时使用"),

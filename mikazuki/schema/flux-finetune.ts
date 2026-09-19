@@ -127,6 +127,8 @@ Schema.intersect([
         caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；文本输出 cache 时应关闭"),
     }).description("Caption"),
 
+    SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+
     Schema.intersect([
         Schema.object({
             deepspeed: Schema.boolean().default(false).description("启用 DeepSpeed；不要与 fused optimizer 模式组合"),

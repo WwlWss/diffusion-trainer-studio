@@ -34,6 +34,8 @@ Schema.intersect([
         caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；TE output cache 时必须关闭"),
     }).description("Caption 设置"),
 
+    SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+
     Schema.object({
         output_name: Schema.string().default("sdxl-finetune").description("输出模型名"),
         output_dir: Schema.string().role("filepicker", { type: "folder" }).default("./output").description("输出目录"),

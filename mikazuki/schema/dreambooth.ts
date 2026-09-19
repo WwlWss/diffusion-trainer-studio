@@ -178,6 +178,8 @@ Schema.intersect([
         caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.1).description("按逗号分隔的标签来随机丢弃 tag 的概率"),
     }).description("caption（Tag）选项"),
 
+    SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+
     Schema.object({
         noise_offset: Schema.number().step(0.0001).description("在训练中添加噪声偏移来改良生成非常暗或者非常亮的图像，如果启用推荐为 0.1"),
         multires_noise_iterations: Schema.number().step(1).description("多分辨率（金字塔）噪声迭代次数 推荐 6-10。无法与 noise_offset 一同启用"),

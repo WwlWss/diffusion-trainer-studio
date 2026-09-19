@@ -79,6 +79,8 @@ Schema.intersect([
     // caption 选项
     Schema.object(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS).description("caption（Tag）选项"),
 
+    SHARED_SCHEMAS.MULTI_CAPTION_SHARED,
+
     // 噪声设置
     SHARED_SCHEMAS.NOISE_SETTINGS,
 
