@@ -36,14 +36,28 @@ PARAMETER_POLICY_GUI_KEYS = {
 # These become host-owned only when Component-wise mode is active.  Standard
 # mode intentionally keeps historical ui_custom_params last-write-wins behavior.
 PARAMETER_POLICY_OWNED_TRAINER_KEYS = {
+    # Host contract / GUI-only policy keys.
+    "optimization_mode",
     "parameter_policy_config",
+    "parameter_policy_profiles",
+    "parameter_policy_components",
+    # Legacy/global optimizer selectors that must not compete with policy-owned
+    # profiles once Component-wise mode is active.
     "optimizer_type",
     "optimizer_args",
+    "optimizer_args_custom",
+    "use_8bit_adam",
+    "use_lion_optimizer",
+    "anima_custom_optimizer_type",
+    "anima_lora_custom_optimizer_type",
+    # Legacy learning-rate controls superseded by Component routes.
     "learning_rate",
     "unet_lr",
     "text_encoder_lr",
     "learning_rate_te1",
     "learning_rate_te2",
+    "anima_finetune_learning_rate",
+    "anima_lora_text_encoder_lr",
     "block_lr",
     "self_attn_lr",
     "cross_attn_lr",
