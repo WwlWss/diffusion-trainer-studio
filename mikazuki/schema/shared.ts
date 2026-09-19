@@ -3,35 +3,28 @@
     const SAMPLE_PROMPTS_DESCRIPTION = "预览图生成参数。可填写直接填写参数，或单独写入txt文件填写路径<br>`--n` 后方为反向提示词<br>`--w`宽，`--h`高<br>`--l`: CFG Scale<br>`--s`: 迭代步数<br>`--d`: 种子"
 
 
-    const multiCaptionProcessingBasic = () => Schema.object({
-        shuffle_caption: Schema.boolean().default(false).description("该 Group 被选中后随机打乱 tag"),
-        keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("该 Group shuffle 时固定保留最前 N 个 token/tag"),
-    }).description("Group Caption Processing");
-
-    const multiCaptionProcessingShared = () => Schema.object({
-        shuffle_caption: Schema.boolean().default(false).description("该 Group 被选中后随机打乱 tag"),
-        keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("该 Group shuffle 时固定保留最前 N 个 token/tag"),
-        keep_tokens_separator: Schema.string().description("该 Group 的 keep_tokens 专用分隔符"),
-        caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 整条 caption dropout 概率"),
-        caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("该 Group 每 N epoch 丢弃 caption"),
-        caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 按 tag dropout 的概率"),
-    }).description("Group Caption Processing");
-
-    const multiCaptionProcessingAnima = () => Schema.object({
+    const multiCaptionProcessingCommon = () => Schema.object({
         caption_separator: Schema.string().default(",").description("该 Group 的主 tag 分隔符"),
         secondary_separator: Schema.string().description("该 Group 的第二分隔符"),
-        enable_wildcard: Schema.boolean().default(false).description("该 Group 启用 {a|b|c} wildcard"),
+        enable_wildcard: Schema.boolean().default(false).description("该 Group 启用多行随机选择和 {a|b|c} wildcard"),
         caption_prefix: Schema.string().description("该 Group 固定 caption prefix"),
         caption_suffix: Schema.string().description("该 Group 固定 caption suffix"),
         shuffle_caption: Schema.boolean().default(false).description("该 Group 被选中后随机打乱 tag"),
         keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("该 Group shuffle 时固定保留最前 N 个 token/tag"),
         keep_tokens_separator: Schema.string().description("该 Group 的 keep_tokens 专用分隔符"),
         token_warmup_min: Schema.number().min(0).step(1).default(1).description("该 Group token warmup 初始 tag 数"),
-        token_warmup_step: Schema.number().min(0).step(0.01).default(0).description("该 Group token warmup 完成位置"),
+        token_warmup_step: Schema.number().min(0).step(0.01).default(0).description("该 Group token warmup 完成位置；0=关闭，小于 1 按总训练步数比例解释"),
         caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 整条 caption dropout 概率"),
         caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("该 Group 每 N epoch 丢弃 caption"),
         caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("该 Group 按 tag dropout 的概率"),
     }).description("Group Caption Processing");
+
+    // stable/dev/Anima all delegate selected text to the same sd-scripts
+    // process_caption() contract. Keep the GUI capability set identical across
+    // model pages so switching backend cannot silently delete Group semantics.
+    const multiCaptionProcessingBasic = multiCaptionProcessingCommon;
+    const multiCaptionProcessingShared = multiCaptionProcessingCommon;
+    const multiCaptionProcessingAnima = multiCaptionProcessingCommon;
 
     const multiCaptionSchema = (processingFactory) => Schema.intersect([
         Schema.object({
