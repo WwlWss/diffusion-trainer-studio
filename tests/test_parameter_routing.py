@@ -4,9 +4,13 @@ import unittest
 
 from mikazuki.parameter_routing import (
     AdapterTargetMetadata,
+    ParameterDescriptor,
     ParameterScanError,
+    RoutingAssignment,
+    _audit_final_assignments,
     _resolve_parameter_ownership_pass,
     _route_trainable_ownership,
+    build_parameter_routing_plan,
     classify_parameter_class,
     scan_parameter_roots,
 )
@@ -992,7 +996,8 @@ class OptimizerEligibilityRoutingTests(unittest.TestCase):
 
         self.assertEqual(len(ownership.trainable), 1)
         self.assertEqual(routed.assignments, ())
-        self.assertEqual(len(routed.unroutable), 1)
+        self.assertEqual(routed.unroutable, ())
+        self.assertEqual(len(routed.conflicts), 1)
         issue = next(
             issue for issue in routed.issues if issue.code == "alias_eligibility_conflict"
         )
@@ -1027,6 +1032,376 @@ class OptimizerEligibilityRoutingTests(unittest.TestCase):
         unavailable_routed = _route_trainable_ownership(unavailable_ownership)
         self.assertEqual(unavailable_routed.assignments, ())
         self.assertEqual(unavailable_routed.unroutable, ())
+
+
+class FinalRoutingPlanTests(unittest.TestCase):
+    def test_public_plan_combines_primary_fallback_and_stats(self):
+        descriptors, weight, bias = _flux_double_descriptors(include_bias=True)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                    "fallback_optimizer_profile": "fallback",
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+
+        plan = build_parameter_routing_plan(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertTrue(plan.is_valid)
+        by_id = {item.parameter_id: item for item in plan.assignments}
+        self.assertEqual(by_id[id(weight)].route_kind, "primary")
+        self.assertEqual(by_id[id(bias)].route_kind, "fallback")
+        self.assertEqual(plan.stats.total.tensors, 2)
+        self.assertEqual(plan.stats.total.numel, 20)
+        self.assertEqual(plan.stats.assigned.tensors, 2)
+        self.assertEqual(plan.stats.unassigned.tensors, 0)
+        self.assertEqual(plan.stats.conflicts.tensors, 0)
+        self.assertEqual(plan.stats.unroutable.tensors, 0)
+        self.assertEqual(plan.stats.by_component["transformer.double_stream"].tensors, 2)
+        self.assertEqual(plan.stats.by_route["primary"].tensors, 1)
+        self.assertEqual(plan.stats.by_route["fallback"].tensors, 1)
+        self.assertEqual(plan.stats.by_parameter_class["matrix_weight"].tensors, 1)
+        self.assertEqual(plan.stats.by_parameter_class["bias"].tensors, 1)
+
+    def test_train_true_absent_component_is_hard_error(self):
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=(),
+        )
+
+        self.assertFalse(plan.is_valid)
+        issue = next(issue for issue in plan.issues if issue.code == "component_absent")
+        self.assertEqual(issue.component_id, "transformer.double_stream")
+        self.assertEqual(issue.count, 0)
+        self.assertEqual(plan.stats.total.tensors, 0)
+
+    def test_train_false_absent_component_is_allowed(self):
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=(),
+        )
+
+        self.assertTrue(plan.is_valid)
+        self.assertFalse(any(issue.code == "component_absent" for issue in plan.issues))
+
+    def test_target_unavailable_absent_component_does_not_add_absent_noise(self):
+        plan = build_parameter_routing_plan(
+            _policy({"text_encoder_1": {"train": False}}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=(),
+        )
+        self.assertTrue(plan.is_valid)
+        self.assertFalse(any(issue.code == "component_absent" for issue in plan.issues))
+
+        illegal = build_parameter_routing_plan(
+            _policy({"text_encoder_1": _train_route()}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=(),
+        )
+        self.assertFalse(illegal.is_valid)
+        self.assertIn(
+            "target_unavailable_train_enabled",
+            {issue.code for issue in illegal.issues},
+        )
+        self.assertNotIn("component_absent", {issue.code for issue in illegal.issues})
+
+    def test_conflicting_candidate_suppresses_redundant_component_absent(self):
+        shared = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "double_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("a", module(cls=Linear, parameters=[("weight", shared)])),
+                                        ("b", module(cls=Linear, parameters=[("bias", shared)])),
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertFalse(plan.is_valid)
+        self.assertIn(
+            "alias_parameter_class_conflict",
+            {issue.code for issue in plan.issues},
+        )
+        self.assertNotIn("component_absent", {issue.code for issue in plan.issues})
+        self.assertEqual(plan.stats.conflicts.tensors, 1)
+
+    def test_unused_fallback_is_warning_only_when_every_parameter_is_primary_eligible(self):
+        descriptors, _, _ = _flux_double_descriptors(include_bias=False)
+        policy = _policy(
+            {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-4,
+                    "fallback_optimizer_profile": "fallback",
+                }
+            },
+            profiles=_muon_profiles(),
+        )
+        plan = build_parameter_routing_plan(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertTrue(plan.is_valid)
+        warning = next(issue for issue in plan.issues if issue.code == "unused_fallback")
+        self.assertEqual(warning.severity, "warning")
+        self.assertEqual(warning.component_id, "transformer.double_stream")
+
+        mixed, _, _ = _flux_double_descriptors(include_bias=True)
+        mixed_plan = build_parameter_routing_plan(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=mixed,
+        )
+        self.assertFalse(any(issue.code == "unused_fallback" for issue in mixed_plan.issues))
+
+    def test_missing_fallback_is_unroutable_not_conflict(self):
+        descriptors, _, bias = _flux_double_descriptors(include_bias=True)
+        plan = build_parameter_routing_plan(
+            _policy(
+                {
+                    "transformer.double_stream": {
+                        "train": True,
+                        "optimizer_profile": "muon",
+                        "learning_rate": 2e-4,
+                    }
+                },
+                profiles=_muon_profiles(),
+            ),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertFalse(plan.is_valid)
+        self.assertEqual(plan.stats.unroutable.tensors, 1)
+        self.assertEqual(plan.stats.conflicts.tensors, 0)
+        self.assertEqual(plan.stats.assigned.tensors, 1)
+        self.assertNotIn(
+            id(bias),
+            {assignment.parameter_id for assignment in plan.assignments},
+        )
+
+    def test_eligibility_disagreement_is_conflict_not_unroutable(self):
+        shared = FakeParameter((4, 4))
+        hidden = _nested_linear(
+            ("model", "layers", "0", "self_attn", "q_proj"),
+            shared,
+        )
+        embedding = _nested_linear(("embed_tokens",), shared)
+        descriptors = scan_parameter_roots(
+            {
+                "qwen3": module(
+                    children=[
+                        ("hidden", hidden),
+                        ("embedding_alias", embedding),
+                    ]
+                )
+            }
+        )
+        plan = build_parameter_routing_plan(
+            _policy(
+                {
+                    "qwen3": {
+                        "train": True,
+                        "optimizer_profile": "muon",
+                        "learning_rate": 1e-4,
+                        "fallback_optimizer_profile": "fallback",
+                    }
+                },
+                profiles=_muon_profiles(),
+            ),
+            train_type="anima-finetune",
+            effective_config={"train_qwen3_text_encoder": True},
+            descriptors=descriptors,
+        )
+
+        self.assertFalse(plan.is_valid)
+        self.assertEqual(plan.stats.conflicts.tensors, 1)
+        self.assertEqual(plan.stats.unroutable.tensors, 0)
+        self.assertEqual(plan.assignments, ())
+
+    def test_unassigned_stats_cover_missing_lora_metadata(self):
+        parameter = FakeParameter((4, 4))
+        adapter = module(
+            cls=LoRAModule,
+            children=[("lora_down", module(cls=Linear, parameters=[("weight", parameter)]))],
+        )
+        descriptors = scan_parameter_roots(
+            {"network": module(children=[("x", adapter)])}
+        )
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream.adapter": {"train": False}}),
+            train_type="flux-lora",
+            effective_config={"network_train_unet_only": True},
+            descriptors=descriptors,
+        )
+
+        self.assertFalse(plan.is_valid)
+        self.assertEqual(plan.stats.unassigned.tensors, 1)
+        self.assertEqual(plan.stats.assigned.tensors, 0)
+
+    def test_frozen_and_unavailable_are_counted_as_assigned_routes(self):
+        frozen_descriptors, _ = _flux_single_descriptor()
+        frozen_plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=frozen_descriptors,
+        )
+        self.assertTrue(frozen_plan.is_valid)
+        self.assertEqual(frozen_plan.stats.assigned.tensors, 1)
+        self.assertEqual(frozen_plan.stats.by_route["frozen"].tensors, 1)
+
+        te_param = FakeParameter((4, 4))
+        te_root = module(
+            children=[("encoder", module(cls=Linear, parameters=[("weight", te_param)]))]
+        )
+        unavailable_descriptors = scan_parameter_roots({"text_encoder_1": te_root})
+        unavailable_plan = build_parameter_routing_plan(
+            _policy({"unet.transformer": {"train": False}}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=unavailable_descriptors,
+        )
+        self.assertTrue(unavailable_plan.is_valid)
+        self.assertEqual(unavailable_plan.stats.assigned.tensors, 1)
+        self.assertEqual(unavailable_plan.stats.by_route["unavailable"].tensors, 1)
+
+    def test_assignment_audit_removes_duplicate_physical_ownership(self):
+        parameter = FakeParameter((2, 2))
+        descriptor = ParameterDescriptor(
+            parameter=parameter,
+            parameter_id=id(parameter),
+            aliases=(),
+            shape=(2, 2),
+            ndim=2,
+            numel=4,
+            dtype="float32",
+            requires_grad=True,
+        )
+        first = RoutingAssignment(
+            parameter=parameter,
+            parameter_id=id(parameter),
+            canonical_name="x.weight",
+            parameter_class="matrix_weight",
+            component_id="x",
+            route_kind="primary",
+            optimizer_profile="a",
+            learning_rate=1e-4,
+            reason="test",
+        )
+        second = RoutingAssignment(
+            parameter=parameter,
+            parameter_id=id(parameter),
+            canonical_name="x.weight",
+            parameter_class="matrix_weight",
+            component_id="x",
+            route_kind="fallback",
+            optimizer_profile="b",
+            learning_rate=1e-4,
+            reason="test",
+        )
+
+        valid, issues, conflicts = _audit_final_assignments(
+            (first, second),
+            (descriptor,),
+        )
+        self.assertEqual(valid, ())
+        self.assertEqual(len(conflicts), 1)
+        self.assertIn(
+            "duplicate_parameter_assignment",
+            {issue.code for issue in issues},
+        )
+
+    def test_public_assignment_order_and_stats_maps_are_deterministic(self):
+        first = FakeParameter((4, 4))
+        second = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "single_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("z", module(cls=Linear, parameters=[("weight", second)])),
+                                        ("a", module(cls=Linear, parameters=[("weight", first)])),
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.single_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=tuple(reversed(descriptors)),
+        )
+
+        self.assertTrue(plan.is_valid)
+        self.assertEqual(
+            [item.canonical_name for item in plan.assignments],
+            [
+                "transformer.single_blocks.0.a.weight",
+                "transformer.single_blocks.0.z.weight",
+            ],
+        )
+        self.assertEqual(
+            list(plan.stats.by_component),
+            sorted(plan.stats.by_component),
+        )
+        self.assertEqual(
+            list(plan.stats.by_route),
+            sorted(plan.stats.by_route),
+        )
+        self.assertEqual(
+            list(plan.stats.by_parameter_class),
+            sorted(plan.stats.by_parameter_class),
+        )
 
 
 if __name__ == "__main__":

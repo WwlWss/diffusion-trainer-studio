@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-"""Dependency-light parameter scanning primitives for Parameter Policy.
+"""Dependency-light parameter scanning and pure routing for Parameter Policy.
 
-This module deliberately does not import PyTorch. It only reads structural
-metadata exposed by module/parameter-like objects and preserves alias identity
-so later routing can fail closed on shared/tied parameters.
+This module deliberately does not import PyTorch. It scans structural metadata,
+preserves alias identity, resolves model-component ownership, applies optimizer
+eligibility/fallback policy, and returns an audited RoutingPlan.
 
-Commit 3A/3B scope ends at deterministic parameter descriptors. Optimizer
-routing is added by later Commit 3 stages.
+It never constructs optimizers/schedulers, mutates parameters, performs device
+movement, or integrates with trainer launch/runtime.
 """
 
 from dataclasses import dataclass
@@ -171,6 +171,7 @@ class _OwnershipPass:
 class _OptimizerRoutingPass:
     assignments: tuple[RoutingAssignment, ...]
     issues: tuple[RoutingIssue, ...]
+    conflicts: tuple[ParameterDescriptor, ...]
     unroutable: tuple[ParameterDescriptor, ...]
     fallback_usage: Mapping[str, int]
 
@@ -1169,6 +1170,7 @@ def _route_trainable_ownership(
 
     assignments: list[RoutingAssignment] = []
     issues: list[RoutingIssue] = []
+    conflicts: list[ParameterDescriptor] = []
     unroutable: list[ParameterDescriptor] = []
     missing_fallback: dict[str, list[ParameterDescriptor]] = {}
     fallback_usage: dict[str, int] = {}
@@ -1224,7 +1226,7 @@ def _route_trainable_ownership(
 
         eligibility_values = {eligible for _, eligible, _ in decisions}
         if len(eligibility_values) != 1:
-            unroutable.append(descriptor)
+            conflicts.append(descriptor)
             examples = tuple(
                 f"{alias.qualified_name} => "
                 f"{'eligible' if eligible else 'ineligible'}"
@@ -1334,6 +1336,9 @@ def _route_trainable_ownership(
     return _OptimizerRoutingPass(
         assignments=tuple(sorted(assignments, key=_assignment_sort_key)),
         issues=tuple(sorted(issues, key=_issue_sort_key)),
+        conflicts=tuple(
+            sorted(_unique_descriptors(conflicts), key=_descriptor_sort_key)
+        ),
         unroutable=tuple(
             sorted(_unique_descriptors(unroutable), key=_descriptor_sort_key)
         ),
@@ -1343,6 +1348,459 @@ def _route_trainable_ownership(
                 for component_id in sorted(fallback_usage)
             }
         ),
+    )
+
+
+def _known_components_for_descriptor(
+    profile: ModelComponentProfile,
+    descriptor: ParameterDescriptor,
+) -> frozenset[str]:
+    components: set[str] = set()
+    for alias in descriptor.aliases:
+        try:
+            component_id = profile.classify_alias(alias)
+        except Exception:
+            continue
+        if component_id is not None and component_id in profile.components:
+            components.add(component_id)
+    return frozenset(components)
+
+
+def _unique_physical_descriptors(
+    descriptors: Sequence[ParameterDescriptor],
+) -> tuple[ParameterDescriptor, ...]:
+    ordered = sorted(descriptors, key=_descriptor_sort_key)
+    seen: set[int] = set()
+    result: list[ParameterDescriptor] = []
+    for descriptor in ordered:
+        physical_id = id(descriptor.parameter)
+        if physical_id in seen:
+            continue
+        seen.add(physical_id)
+        result.append(descriptor)
+    return tuple(result)
+
+
+def _parameter_stat(
+    descriptors: Sequence[ParameterDescriptor],
+) -> ParameterStat:
+    unique = _unique_physical_descriptors(descriptors)
+    return ParameterStat(
+        tensors=len(unique),
+        numel=sum(item.numel for item in unique),
+    )
+
+
+def _stat_mapping(
+    entries: Sequence[tuple[str, ParameterDescriptor]],
+) -> Mapping[str, ParameterStat]:
+    grouped: dict[str, list[ParameterDescriptor]] = {}
+    for key, descriptor in entries:
+        grouped.setdefault(key, []).append(descriptor)
+    return MappingProxyType(
+        {
+            key: _parameter_stat(grouped[key])
+            for key in sorted(grouped)
+        }
+    )
+
+
+def _audit_final_assignments(
+    assignments: Sequence[RoutingAssignment],
+    descriptors: Sequence[ParameterDescriptor],
+) -> tuple[
+    tuple[RoutingAssignment, ...],
+    tuple[RoutingIssue, ...],
+    tuple[ParameterDescriptor, ...],
+]:
+    """Guarantee public assignments never contain duplicate/bad identities."""
+
+    descriptor_by_parameter_id: dict[int, ParameterDescriptor] = {}
+    for descriptor in sorted(descriptors, key=_descriptor_sort_key):
+        descriptor_by_parameter_id.setdefault(descriptor.parameter_id, descriptor)
+
+    grouped: dict[int, list[RoutingAssignment]] = {}
+    invalid_ids: set[int] = set()
+    issues: list[RoutingIssue] = []
+
+    for assignment in assignments:
+        grouped.setdefault(assignment.parameter_id, []).append(assignment)
+        if id(assignment.parameter) != assignment.parameter_id:
+            invalid_ids.add(assignment.parameter_id)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="assignment_identity_mismatch",
+                    message=(
+                        f"Assignment {assignment.canonical_name!r} carries a "
+                        "parameter_id that does not match id(parameter)."
+                    ),
+                    component_id=assignment.component_id,
+                    parameter_id=assignment.parameter_id,
+                    examples=(assignment.canonical_name,),
+                )
+            )
+
+    for parameter_id, group in grouped.items():
+        if len(group) <= 1:
+            continue
+        invalid_ids.add(parameter_id)
+        ordered = sorted(group, key=_assignment_sort_key)
+        issues.append(
+            RoutingIssue(
+                severity="error",
+                code="duplicate_parameter_assignment",
+                message=(
+                    "One physical parameter was assigned to more than one routing "
+                    "result. DTS removed every conflicting assignment."
+                ),
+                parameter_id=parameter_id,
+                count=len(group),
+                examples=tuple(item.canonical_name for item in ordered[:5]),
+            )
+        )
+
+    valid = tuple(
+        sorted(
+            (
+                assignment
+                for assignment in assignments
+                if assignment.parameter_id not in invalid_ids
+            ),
+            key=_assignment_sort_key,
+        )
+    )
+    conflict_descriptors = tuple(
+        sorted(
+            (
+                descriptor_by_parameter_id[parameter_id]
+                for parameter_id in invalid_ids
+                if parameter_id in descriptor_by_parameter_id
+            ),
+            key=_descriptor_sort_key,
+        )
+    )
+    return valid, tuple(sorted(issues, key=_issue_sort_key)), conflict_descriptors
+
+
+def _presence_issues(
+    ownership: _OwnershipPass,
+    optimizer_routing: _OptimizerRoutingPass,
+) -> tuple[RoutingIssue, ...]:
+    observed = set(ownership.observed_components)
+    for descriptor in ownership.conflicts:
+        observed.update(
+            _known_components_for_descriptor(ownership.profile, descriptor)
+        )
+    for descriptor in optimizer_routing.conflicts:
+        observed.update(
+            _known_components_for_descriptor(ownership.profile, descriptor)
+        )
+
+    issues: list[RoutingIssue] = []
+    for component_id in sorted(ownership.policy["components"]):
+        route = ownership.policy["components"][component_id]
+        if component_id not in ownership.profile.components:
+            continue
+        if not route["train"]:
+            continue
+        if not ownership.target.is_available(component_id):
+            continue
+        if component_id in observed:
+            continue
+        issues.append(
+            RoutingIssue(
+                severity="error",
+                code="component_absent",
+                message=(
+                    f"Component {component_id!r} has Train=true but the scanned "
+                    "model contains no parameter candidate for that Component."
+                ),
+                component_id=component_id,
+                count=0,
+            )
+        )
+
+    return tuple(sorted(issues, key=_issue_sort_key))
+
+
+def _problem_components(
+    profile: ModelComponentProfile,
+    issues: Sequence[RoutingIssue],
+    conflict_descriptors: Sequence[ParameterDescriptor],
+    unroutable_descriptors: Sequence[ParameterDescriptor],
+) -> set[str]:
+    components = {
+        issue.component_id
+        for issue in issues
+        if issue.severity == "error" and issue.component_id is not None
+    }
+    for descriptor in tuple(conflict_descriptors) + tuple(unroutable_descriptors):
+        components.update(_known_components_for_descriptor(profile, descriptor))
+    return components
+
+
+def _unused_fallback_warnings(
+    ownership: _OwnershipPass,
+    assignments: Sequence[RoutingAssignment],
+    issues: Sequence[RoutingIssue],
+    conflict_descriptors: Sequence[ParameterDescriptor],
+    unroutable_descriptors: Sequence[ParameterDescriptor],
+) -> tuple[RoutingIssue, ...]:
+    problem_components = _problem_components(
+        ownership.profile,
+        issues,
+        conflict_descriptors,
+        unroutable_descriptors,
+    )
+    assignment_components = {
+        assignment.component_id
+        for assignment in assignments
+        if assignment.route_kind in {"primary", "fallback"}
+    }
+    fallback_components = {
+        assignment.component_id
+        for assignment in assignments
+        if assignment.route_kind == "fallback"
+    }
+
+    warnings: list[RoutingIssue] = []
+    for component_id in sorted(ownership.policy["components"]):
+        route = ownership.policy["components"][component_id]
+        if component_id not in ownership.profile.components:
+            continue
+        if not route["train"]:
+            continue
+        if not ownership.target.is_available(component_id):
+            continue
+        if not route.get("fallback_optimizer_profile"):
+            continue
+        if component_id in problem_components:
+            continue
+        if component_id not in assignment_components:
+            continue
+        if component_id in fallback_components:
+            continue
+        warnings.append(
+            RoutingIssue(
+                severity="warning",
+                code="unused_fallback",
+                message=(
+                    f"Component {component_id!r} declares fallback Optimizer "
+                    f"Profile {route['fallback_optimizer_profile']!r}, but every "
+                    "real routed parameter is eligible for the primary Profile."
+                ),
+                component_id=component_id,
+                count=0,
+            )
+        )
+
+    return tuple(sorted(warnings, key=_issue_sort_key))
+
+
+def _routing_stats(
+    descriptors: Sequence[ParameterDescriptor],
+    assignments: Sequence[RoutingAssignment],
+    ownership: _OwnershipPass,
+    optimizer_routing: _OptimizerRoutingPass,
+    final_conflicts: Sequence[ParameterDescriptor],
+) -> tuple[RoutingStats, tuple[RoutingIssue, ...], tuple[RoutingAssignment, ...]]:
+    total_descriptors = _unique_physical_descriptors(descriptors)
+    descriptor_by_physical_id = {
+        id(descriptor.parameter): descriptor
+        for descriptor in total_descriptors
+    }
+
+    conflict_descriptors = _unique_physical_descriptors(
+        tuple(ownership.conflicts)
+        + tuple(optimizer_routing.conflicts)
+        + tuple(final_conflicts)
+    )
+    conflict_ids = {id(item.parameter) for item in conflict_descriptors}
+
+    unassigned_descriptors = tuple(
+        item
+        for item in _unique_physical_descriptors(ownership.unassigned)
+        if id(item.parameter) not in conflict_ids
+    )
+    unassigned_ids = {id(item.parameter) for item in unassigned_descriptors}
+
+    unroutable_descriptors = tuple(
+        item
+        for item in _unique_physical_descriptors(optimizer_routing.unroutable)
+        if id(item.parameter) not in conflict_ids
+        and id(item.parameter) not in unassigned_ids
+    )
+    unroutable_ids = {id(item.parameter) for item in unroutable_descriptors}
+
+    error_ids = conflict_ids | unassigned_ids | unroutable_ids
+    clean_assignments = tuple(
+        assignment
+        for assignment in assignments
+        if id(assignment.parameter) not in error_ids
+    )
+    assigned_ids = {id(item.parameter) for item in clean_assignments}
+
+    overlap = assigned_ids.intersection(error_ids)
+    # The filter above should make this impossible; keep the explicit invariant.
+    if overlap:
+        raise RuntimeError("Routing stats internal assignment/error overlap.")
+
+    covered = assigned_ids | error_ids
+    total_ids = set(descriptor_by_physical_id)
+    uncovered = total_ids.difference(covered)
+
+    coverage_issues: list[RoutingIssue] = []
+    if uncovered:
+        uncovered_descriptors = tuple(
+            descriptor_by_physical_id[item]
+            for item in sorted(
+                uncovered,
+                key=lambda item: _descriptor_sort_key(
+                    descriptor_by_physical_id[item]
+                ),
+            )
+        )
+        conflict_descriptors = _unique_physical_descriptors(
+            tuple(conflict_descriptors) + uncovered_descriptors
+        )
+        conflict_ids.update(uncovered)
+        coverage_issues.append(
+            _aggregate_issue(
+                code="routing_coverage_error",
+                message=(
+                    "Internal routing audit found parameters with neither an "
+                    "assignment nor an explicit error bucket."
+                ),
+                descriptors=uncovered_descriptors,
+            )
+        )
+
+    descriptor_by_parameter_id = {
+        descriptor.parameter_id: descriptor
+        for descriptor in total_descriptors
+    }
+
+    component_entries: list[tuple[str, ParameterDescriptor]] = []
+    class_entries: list[tuple[str, ParameterDescriptor]] = []
+
+    for assignment in ownership.assignments:
+        descriptor = descriptor_by_parameter_id.get(assignment.parameter_id)
+        if descriptor is not None:
+            component_entries.append((assignment.component_id, descriptor))
+            class_entries.append((assignment.parameter_class, descriptor))
+    for candidate in ownership.trainable:
+        component_entries.append((candidate.component_id, candidate.descriptor))
+        class_entries.append((candidate.parameter_class, candidate.descriptor))
+
+    route_entries: list[tuple[str, ParameterDescriptor]] = []
+    for assignment in clean_assignments:
+        descriptor = descriptor_by_parameter_id.get(assignment.parameter_id)
+        if descriptor is not None:
+            route_entries.append((assignment.route_kind, descriptor))
+
+    stats = RoutingStats(
+        total=_parameter_stat(total_descriptors),
+        assigned=_parameter_stat(
+            tuple(
+                descriptor_by_parameter_id[assignment.parameter_id]
+                for assignment in clean_assignments
+                if assignment.parameter_id in descriptor_by_parameter_id
+            )
+        ),
+        unassigned=_parameter_stat(unassigned_descriptors),
+        conflicts=_parameter_stat(conflict_descriptors),
+        unroutable=_parameter_stat(unroutable_descriptors),
+        by_component=_stat_mapping(component_entries),
+        by_route=_stat_mapping(route_entries),
+        by_parameter_class=_stat_mapping(class_entries),
+    )
+
+    return (
+        stats,
+        tuple(sorted(coverage_issues, key=_issue_sort_key)),
+        tuple(sorted(clean_assignments, key=_assignment_sort_key)),
+    )
+
+
+def build_parameter_routing_plan(
+    policy: Mapping[str, Any],
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+    descriptors: Sequence[ParameterDescriptor],
+) -> RoutingPlan:
+    """Build the audited, side-effect-free Parameter Policy routing plan."""
+
+    ownership = _resolve_parameter_ownership_pass(
+        policy,
+        train_type=train_type,
+        effective_config=effective_config,
+        descriptors=descriptors,
+    )
+    optimizer_routing = _route_trainable_ownership(ownership)
+
+    combined_assignments = tuple(ownership.assignments) + tuple(
+        optimizer_routing.assignments
+    )
+    audited_assignments, assignment_issues, assignment_conflicts = (
+        _audit_final_assignments(combined_assignments, descriptors)
+    )
+
+    presence_issues = _presence_issues(ownership, optimizer_routing)
+
+    base_issues = tuple(ownership.issues) + tuple(optimizer_routing.issues)
+    issues_before_warnings = tuple(
+        sorted(
+            base_issues + tuple(assignment_issues) + tuple(presence_issues),
+            key=_issue_sort_key,
+        )
+    )
+
+    all_conflicts = _unique_physical_descriptors(
+        tuple(ownership.conflicts)
+        + tuple(optimizer_routing.conflicts)
+        + tuple(assignment_conflicts)
+    )
+
+    warnings = _unused_fallback_warnings(
+        ownership,
+        audited_assignments,
+        issues_before_warnings,
+        all_conflicts,
+        optimizer_routing.unroutable,
+    )
+
+    stats, coverage_issues, final_assignments = _routing_stats(
+        descriptors,
+        audited_assignments,
+        ownership,
+        optimizer_routing,
+        assignment_conflicts,
+    )
+
+    final_issues = tuple(
+        sorted(
+            issues_before_warnings + tuple(coverage_issues) + tuple(warnings),
+            key=_issue_sort_key,
+        )
+    )
+
+    # Public assignment invariant: one physical tensor -> at most one route.
+    parameter_ids = [item.parameter_id for item in final_assignments]
+    if len(parameter_ids) != len(set(parameter_ids)):
+        raise RuntimeError(
+            "RoutingPlan internal invariant failed: duplicate parameter assignment."
+        )
+    if any(id(item.parameter) != item.parameter_id for item in final_assignments):
+        raise RuntimeError(
+            "RoutingPlan internal invariant failed: assignment identity mismatch."
+        )
+
+    return RoutingPlan(
+        assignments=final_assignments,
+        issues=final_issues,
+        stats=stats,
     )
 
 
@@ -1357,6 +1815,7 @@ __all__ = [
     "RoutingIssue",
     "RoutingPlan",
     "RoutingStats",
+    "build_parameter_routing_plan",
     "classify_parameter_class",
     "scan_parameter_roots",
 ]
