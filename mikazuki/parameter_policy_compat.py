@@ -66,7 +66,9 @@ def _positive_count(value: object, *, field: str) -> bool:
     if value in (None, "", 0, 0.0, "0", "0.0"):
         return False
     if isinstance(value, bool):
-        return value
+        raise ValueError(
+            f"Parameter Policy compatibility: {field} 必须是非负整数，收到 {value!r}。"
+        )
     try:
         parsed = int(value)
     except (TypeError, ValueError) as exc:

@@ -275,6 +275,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
     def test_invalid_global_runtime_field_values_fail_closed(self):
         cases = (
             ("fused_backward_pass", "maybe"),
+            ("fused_optimizer_groups", True),
             ("fused_optimizer_groups", 1.5),
             ("blockwise_fused_optimizers", 2),
             ("deepspeed", []),
