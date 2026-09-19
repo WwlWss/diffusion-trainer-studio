@@ -22,13 +22,13 @@ class MultiCaptionRequestContractTests(unittest.TestCase):
     def test_all_supported_training_schema_sources_expose_multi_caption(self):
         root = Path(__file__).resolve().parents[1] / "mikazuki" / "schema"
         expectations = {
-            "lora-basic.ts": "MULTI_CAPTION_BASIC",
-            "lora-master.ts": "MULTI_CAPTION_SHARED",
-            "dreambooth.ts": "MULTI_CAPTION_SHARED",
-            "sdxl-full.ts": "MULTI_CAPTION_SHARED",
-            "flux-finetune.ts": "MULTI_CAPTION_SHARED",
-            "sd3-lora.ts": "MULTI_CAPTION_SHARED",
-            "flux-lora.ts": "MULTI_CAPTION_ANIMA",
+            "lora-basic.ts": "CAPTION_MODE_BASIC",
+            "lora-master.ts": "CAPTION_MODE_SHARED",
+            "dreambooth.ts": "CAPTION_MODE_SHARED",
+            "sdxl-full.ts": "CAPTION_MODE_SHARED",
+            "flux-finetune.ts": "CAPTION_MODE_SHARED",
+            "sd3-lora.ts": "CAPTION_MODE_SHARED",
+            "flux-lora.ts": "CAPTION_MODE_ANIMA",
         }
         for filename, needle in expectations.items():
             with self.subTest(filename=filename):
