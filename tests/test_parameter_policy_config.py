@@ -11,6 +11,7 @@ from mikazuki.parameter_policy import (
     serialize_parameter_policy,
     validate_parameter_policy,
 )
+from mikazuki.training_rehydrate import rehydrate_trainer_config
 
 
 def _component_config():
@@ -233,6 +234,34 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         self.assertEqual(sidecars, {})
         self.assertIsNone(policy)
         self.assertEqual(config["ui_custom_params"], 'optimizer_type = "Lion"')
+
+
+    def test_trainer_rehydrate_restores_component_mode_from_sidecar_content(self):
+        config = _component_config()
+        path, sidecars, policy = build_parameter_policy_sidecar(config)
+        gui = rehydrate_trainer_config(
+            {
+                "optimizer_type": "AdamW",
+                "learning_rate": 1e-4,
+                "parameter_policy_config": path,
+            },
+            "lora-master",
+            sidecars=sidecars,
+        )
+        self.assertEqual(gui["optimization_mode"], "component")
+        self.assertEqual(gui["parameter_policy_profiles"], policy["optimizer_profiles"])
+        self.assertEqual(gui["parameter_policy_components"], policy["components"])
+
+    def test_trainer_rehydrate_missing_sidecar_never_falls_back_to_standard(self):
+        with self.assertRaisesRegex(ValueError, "不能静默回退 Standard"):
+            rehydrate_trainer_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "parameter_policy_config": "config/autosave/parameter-policy/missing.json",
+                },
+                "lora-master",
+                sidecars={},
+            )
 
     def test_legacy_optimizer_args_match_sd_scripts_literal_semantics(self):
         parsed = parse_legacy_optimizer_args(
