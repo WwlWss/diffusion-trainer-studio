@@ -65,9 +65,17 @@ class OptimizerProfileCapabilityTests(unittest.TestCase):
         self.assertEqual(muon.component_support, "supported")
         self.assertTrue(muon.supports_group_lr)
         self.assertTrue(muon.uses_external_scheduler)
+        self.assertEqual(muon.eligibility_policy, "model_hidden_2d_weight")
         self.assertTrue(muon.requires_parameter_eligibility)
         self.assertEqual(muon.dependency, "pytorch-optimizer==3.10.0")
         self.assertEqual(muon.implementation, "pytorch_optimizer.Muon")
+
+    def test_ordinary_optimizers_have_no_parameter_eligibility_policy(self):
+        for optimizer_type in ("AdamW", "AdamW8bit", "Lion", "SGDNesterov"):
+            with self.subTest(optimizer_type=optimizer_type):
+                capability = get_optimizer_capability(optimizer_type)
+                self.assertIsNone(capability.eligibility_policy)
+                self.assertFalse(capability.requires_parameter_eligibility)
 
     def test_optimizer_names_are_canonicalized_without_constructing_runtime(self):
         self.assertEqual(canonical_optimizer_type(" adamw "), "AdamW")

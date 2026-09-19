@@ -14,6 +14,7 @@ from typing import Any, Literal, Mapping
 
 
 ComponentSupport = Literal["supported", "restricted", "planned"]
+ParameterEligibilityPolicy = Literal["model_hidden_2d_weight"]
 
 
 @dataclass(frozen=True)
@@ -25,8 +26,14 @@ class OptimizerCapability:
     lr_semantics: Literal["normal", "adaptive", "optimizer_managed"]
     dependency: str | None = None
     implementation: str | None = None
-    requires_parameter_eligibility: bool = False
+    eligibility_policy: ParameterEligibilityPolicy | None = None
     restriction: str | None = None
+
+    @property
+    def requires_parameter_eligibility(self) -> bool:
+        """Backward-compatible Step 2 view of the explicit eligibility contract."""
+
+        return self.eligibility_policy is not None
 
 
 # "supported" means intended for Component v1 without an extra semantic gate.
@@ -194,7 +201,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         "normal",
         dependency="pytorch-optimizer==3.10.0",
         implementation="pytorch_optimizer.Muon",
-        requires_parameter_eligibility=True,
+        eligibility_policy="model_hidden_2d_weight",
         restriction=(
             "Only model-profile-approved hidden-layer 2D weights are eligible; "
             "other parameters require fallback routing."

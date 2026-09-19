@@ -270,6 +270,7 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         for text in (
             'optimizer_type = "Lion"',
             'learning_rate = 0.001',
+            'learning_rate_te = 0.000001',
             'use_8bit_adam = true',
             'optimization_mode = "standard"',
             'parameter_policy_config = "evil.json"',
@@ -278,6 +279,25 @@ class ParameterPolicyConfigTests(unittest.TestCase):
             config["ui_custom_params"] = text
             with self.subTest(text=text), self.assertRaisesRegex(ValueError, "冲突"):
                 build_parameter_policy_sidecar(config)
+
+    def test_component_owned_learning_rate_contract_covers_all_bootstrap_lr_fields(self):
+        from mikazuki.parameter_policy import PARAMETER_POLICY_OWNED_TRAINER_KEYS
+
+        expected = {
+            "learning_rate",
+            "unet_lr",
+            "text_encoder_lr",
+            "learning_rate_te",
+            "learning_rate_te1",
+            "learning_rate_te2",
+            "self_attn_lr",
+            "cross_attn_lr",
+            "mlp_lr",
+            "mod_lr",
+            "llm_adapter_lr",
+            "qwen3_lr",
+        }
+        self.assertTrue(expected.issubset(PARAMETER_POLICY_OWNED_TRAINER_KEYS))
 
     def test_standard_does_not_change_ui_custom_params_behavior(self):
         config = {

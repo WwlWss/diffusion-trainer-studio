@@ -54,6 +54,7 @@ PARAMETER_POLICY_OWNED_TRAINER_KEYS = {
     "learning_rate",
     "unet_lr",
     "text_encoder_lr",
+    "learning_rate_te",
     "learning_rate_te1",
     "learning_rate_te2",
     "anima_finetune_learning_rate",
