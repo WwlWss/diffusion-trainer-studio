@@ -59,5 +59,11 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn("install_frontend_training_patch()", TRAINING_API)
 
 
+    def test_export_payload_contains_portable_bundle(self):
+        self.assertIn('"format": "dts-training-bundle-v1"', TRAINING_API)
+        self.assertIn('"bundle": json.dumps(bundle', TRAINING_API)
+        self.assertIn('sidecars = {str(key): str(value)', TRAINING_API)
+
+
 if __name__ == "__main__":
     unittest.main()
