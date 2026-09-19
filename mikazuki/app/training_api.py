@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import uuid
 from pathlib import Path
@@ -48,13 +49,22 @@ router.routes[:] = [
 
 
 def _prepared_payload(prepared) -> dict:
+    toml_text = toml.dumps(prepared.config)
+    sidecars = [{"path": path, "content": content} for path, content in prepared.sidecars.items()]
+    bundle = {
+        "format": "dts-training-bundle-v1",
+        "train_type": prepared.train_type,
+        "toml": toml_text,
+        "sidecars": {path: content for path, content in prepared.sidecars.items()},
+    }
     return {
         "train_type": prepared.train_type,
         "trainer": prepared.trainer_file,
         "effective_config": prepared.config,
-        "toml": toml.dumps(prepared.config),
+        "toml": toml_text,
         "warnings": prepared.warnings,
-        "sidecars": [{"path": path, "content": content} for path, content in prepared.sidecars.items()],
+        "sidecars": sidecars,
+        "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
 
 
@@ -95,7 +105,24 @@ async def rehydrate_training_config(request: Request):
         page_type, effective = decode_training_request(await request.body())
         if not page_type:
             raise ValueError("导入 Trainer TOML 时必须提供当前页面 train_type。")
-        gui_state = rehydrate_trainer_config(effective, str(page_type))
+        sidecars = None
+        if effective.get("format") == "dts-training-bundle-v1":
+            bundle_train_type = str(effective.get("train_type") or "")
+            if bundle_train_type and bundle_train_type != str(page_type):
+                raise ValueError(
+                    f"Training bundle 属于 {bundle_train_type!r} 页面，不能导入当前 {page_type!r} 页面。"
+                )
+            toml_text = effective.get("toml")
+            if not isinstance(toml_text, str):
+                raise ValueError("Training bundle 缺少 toml 文本。")
+            effective = toml.loads(toml_text)
+            raw_sidecars = effective_sidecars = json.loads(json.dumps(
+                json.loads((await request.body()).decode("utf-8")).get("config", {}).get("sidecars", {})
+            ))
+            if not isinstance(raw_sidecars, dict):
+                raise ValueError("Training bundle sidecars 必须是 object。")
+            sidecars = {str(key): str(value) for key, value in raw_sidecars.items()}
+        gui_state = rehydrate_trainer_config(effective, str(page_type), sidecars=sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "rehydrate"})
     return APIResponseSuccess(message="rehydrate ready", data={"gui_state": gui_state})
