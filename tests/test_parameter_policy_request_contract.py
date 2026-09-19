@@ -1,90 +1,51 @@
+from pathlib import Path
 import unittest
 
-from mikazuki.training_request import prepare_request_config
 
-
-def _component_fields():
-    return {
-        "optimization_mode": "component",
-        "parameter_policy_profiles": {
-            "main_muon": {"type": "Muon", "args": {}},
-            "aux_adamw": {"type": "AdamW", "args": {}},
-        },
-        "parameter_policy_components": {
-            "test.component": {
-                "train": True,
-                "optimizer_profile": "main_muon",
-                "learning_rate": 1e-4,
-                "fallback_optimizer_profile": "aux_adamw",
-            }
-        },
-    }
+ROOT = Path(__file__).resolve().parents[1]
+REQUEST = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
 
 
 class ParameterPolicyRequestContractTests(unittest.TestCase):
-    def test_standard_missing_and_explicit_modes_prepare_identically(self):
-        base = {
-            "optimizer_type": "AdamW8bit",
-            "learning_rate": 1e-4,
-            "lora_target": "unet",
-        }
-        missing = prepare_request_config(dict(base), "lora-basic", launch=False)
-        explicit = prepare_request_config(
-            {
-                **base,
-                "optimization_mode": "standard",
-                "parameter_policy_profiles": {"stale": {"type": "Muon"}},
-                "parameter_policy_components": {"stale": {"train": True}},
-            },
-            "lora-basic",
-            launch=False,
+    def test_request_layer_builds_policy_before_effective_config(self):
+        self.assertIn(
+            "policy_path, policy_sidecars, policy = build_parameter_policy_sidecar(config, page_type)",
+            REQUEST,
         )
-        self.assertEqual(missing.config, explicit.config)
-        self.assertEqual(missing.sidecars, explicit.sidecars)
-        self.assertEqual(missing.runtime_blockers, [])
-        self.assertEqual(explicit.runtime_blockers, [])
-        self.assertNotIn("parameter_policy_config", missing.config)
-
-    def test_component_preview_has_sidecar_and_runtime_blocker(self):
-        prepared = prepare_request_config(
-            {
-                "optimizer_type": "AdamW",
-                "learning_rate": 1e-4,
-                "lora_target": "unet",
-                **_component_fields(),
-            },
-            "lora-basic",
-            launch=False,
+        self.assertLess(
+            REQUEST.index("build_parameter_policy_sidecar(config, page_type)"),
+            REQUEST.index("prepare_training_config("),
         )
-        policy_path = prepared.config.get("parameter_policy_config")
-        self.assertTrue(policy_path)
-        self.assertIn(policy_path, prepared.sidecars)
-        self.assertTrue(prepared.runtime_blockers)
-        self.assertIn("runtime 尚未实现", prepared.runtime_blockers[0])
 
-    def test_component_start_fails_closed_before_runtime_exists(self):
-        with self.assertRaisesRegex(ValueError, "runtime 尚未实现"):
-            prepare_request_config(
-                {
-                    "optimizer_type": "AdamW",
-                    "learning_rate": 1e-4,
-                    "lora_target": "unet",
-                    **_component_fields(),
-                },
-                "lora-basic",
-                launch=True,
-            )
+    def test_component_start_disables_launch_specific_staging(self):
+        self.assertIn("effective_launch = launch and policy is None", REQUEST)
+        self.assertIn("launch=effective_launch", REQUEST)
 
-    def test_component_custom_override_cannot_replace_host_sidecar(self):
-        config = {
-            "optimizer_type": "AdamW",
-            "learning_rate": 1e-4,
-            "lora_target": "unet",
-            **_component_fields(),
-            "ui_custom_params": 'parameter_policy_config = "evil.json"',
-        }
-        with self.assertRaisesRegex(ValueError, "冲突|托管"):
-            prepare_request_config(config, "lora-basic", launch=False)
+    def test_component_start_fails_closed_before_materialization(self):
+        blocker_index = REQUEST.index("if launch:\n            raise ValueError(blockers[0])")
+        materialize_index = REQUEST.index("if materialize:\n        materialize_sidecars")
+        self.assertLess(blocker_index, materialize_index)
+
+    def test_parameter_policy_sidecar_is_host_owned(self):
+        self.assertIn(
+            "parameter_policy_config 是 DTS 托管字段，不能通过 ui_custom_params 手工注入",
+            REQUEST,
+        )
+        self.assertIn(
+            "parameter_policy_config 是 DTS 托管字段，不能通过 ui_custom_params 覆盖",
+            REQUEST,
+        )
+
+    def test_policy_sidecars_are_merged_without_replacing_existing_sidecars(self):
+        policy_index = REQUEST.index("prepared.sidecars.update(policy_sidecars)")
+        multi_index = REQUEST.index("prepared.sidecars.update(multi_sidecars)")
+        prompt_index = REQUEST.index("prepared.sidecars.update(sidecars)")
+        self.assertLess(policy_index, multi_index)
+        self.assertLess(multi_index, prompt_index)
+
+    def test_standard_path_has_no_policy_runtime_blocker(self):
+        self.assertIn("if policy is not None:", REQUEST)
+        self.assertIn("prepared.runtime_blockers.extend(blockers)", REQUEST)
 
 
 if __name__ == "__main__":
