@@ -10,7 +10,7 @@ import toml
 from fastapi import Request
 
 import mikazuki.app.api as legacy_api
-from mikazuki.anima_qwen_runtime import prepare_runtime_trainer
+from mikazuki.anima_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
