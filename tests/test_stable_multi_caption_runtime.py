@@ -1,11 +1,13 @@
 import json
 import os
+import pickle
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.stable.library.multi_caption import MultiCaptionResolver
+from scripts.stable.library.multi_caption import CaptionProcessingOptions, MultiCaptionResolver
+from scripts.stable.library.train_util import BaseDataset
 
 
 class Info:
@@ -126,6 +128,108 @@ class StableMultiCaptionResolverTests(unittest.TestCase):
             resolved = resolver.choose(image_path=str(image))
             self.assertTrue(resolved.processing.shuffle_caption)
             self.assertEqual(resolved.processing.keep_tokens, 1)
+
+
+    def test_all_groups_missing_fails_closed_instead_of_using_standard_caption(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "001.png"
+            image.write_bytes(b"x")
+            policy = {
+                "version": 1,
+                "selection": {"mode": "weighted_one"},
+                "storage": {"mode": "files"},
+                "groups": {
+                    "tags": {
+                        "enabled": True,
+                        "weight": 1,
+                        "source": {"extension": ".txt"},
+                        "processing": {},
+                    }
+                },
+            }
+            resolver = MultiCaptionResolver.from_file(str(write_policy(tmp, policy)), [Info(image)])
+            with self.assertRaisesRegex(ValueError, "no enabled non-empty caption group"):
+                resolver.choose(image_path=str(image))
+
+    def test_separate_files_preserve_multiline_for_wildcard_processing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "001.png"
+            image.write_bytes(b"x")
+            (Path(tmp) / "001.txt").write_text("first\nsecond\n", encoding="utf-8")
+            policy = {
+                "version": 1,
+                "selection": {"mode": "weighted_one"},
+                "storage": {"mode": "files"},
+                "groups": {
+                    "tags": {
+                        "enabled": True,
+                        "weight": 1,
+                        "source": {"extension": ".txt"},
+                        "processing": {"enable_wildcard": True},
+                    }
+                },
+            }
+            resolver = MultiCaptionResolver.from_file(str(write_policy(tmp, policy)), [Info(image)])
+            resolved = resolver.choose(image_path=str(image))
+            self.assertEqual(resolved.caption, "first\nsecond")
+
+    def test_processing_adapter_is_mutable_like_sd_scripts_subset(self):
+        dataset = object.__new__(BaseDataset)
+        dataset.current_epoch = 1
+        dataset.current_step = 1
+        dataset.max_train_steps = 100
+        dataset.replacements = {}
+        processing = CaptionProcessingOptions(
+            shuffle_caption=True,
+            token_warmup_step=0.5,
+        )
+        with patch("scripts.stable.library.train_util.random.shuffle", lambda values: None):
+            caption = BaseDataset.process_caption(dataset, processing, "a, b, c")
+        self.assertEqual(processing.token_warmup_step, 50)
+        self.assertIsInstance(caption, str)
+
+    def test_resolver_is_spawn_pickle_safe_after_opening_sqlite_connection(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "001.png"
+            image.write_bytes(b"x")
+            (Path(tmp) / "001.txt").write_text("tags", encoding="utf-8")
+            policy = {
+                "version": 1,
+                "selection": {"mode": "weighted_one"},
+                "storage": {"mode": "files"},
+                "groups": {
+                    "tags": {
+                        "enabled": True,
+                        "weight": 1,
+                        "source": {"extension": ".txt"},
+                        "processing": {},
+                    }
+                },
+            }
+            resolver = MultiCaptionResolver.from_file(str(write_policy(tmp, policy)), [Info(image)])
+            self.assertEqual(resolver.choose(image_path=str(image)).caption, "tags")
+            restored = pickle.loads(pickle.dumps(resolver))
+            self.assertEqual(restored.choose(image_path=str(image)).caption, "tags")
+
+    def test_validation_clone_is_deterministic_per_image(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "001.png"
+            image.write_bytes(b"x")
+            (Path(tmp) / "001.a.txt").write_text("a", encoding="utf-8")
+            (Path(tmp) / "001.b.txt").write_text("b", encoding="utf-8")
+            policy = {
+                "version": 1,
+                "selection": {"mode": "weighted_one"},
+                "storage": {"mode": "files"},
+                "groups": {
+                    "a": {"enabled": True, "weight": 1, "source": {"extension": ".a.txt"}, "processing": {}},
+                    "b": {"enabled": True, "weight": 1, "source": {"extension": ".b.txt"}, "processing": {}},
+                },
+            }
+            train = MultiCaptionResolver.from_file(str(write_policy(tmp, policy)), [Info(image)])
+            val = train.clone(deterministic=True)
+            chosen = {val.choose(image_path=str(image)).group_name for _ in range(10)}
+            self.assertEqual(len(chosen), 1)
 
 
 if __name__ == "__main__":
