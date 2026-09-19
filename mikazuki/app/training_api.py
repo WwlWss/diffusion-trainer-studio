@@ -67,8 +67,8 @@ def _prepared_payload(prepared) -> dict:
         "toml": toml_text,
         "warnings": prepared.warnings,
         "sidecars": sidecars,
-        "runtime_ready": not parameter_policy_active,
-        "runtime_blockers": list(prepared.warnings) if parameter_policy_active else [],
+        "runtime_ready": not bool(prepared.runtime_blockers),
+        "runtime_blockers": list(prepared.runtime_blockers),
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
 
