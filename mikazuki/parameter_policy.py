@@ -22,7 +22,6 @@ from mikazuki.optimizer_profiles import (
     normalize_optimizer_profile,
 )
 from mikazuki.training_gui_args import apply_raw_gui_semantics
-from mikazuki.training_gui_semantics import apply_ui_custom_overrides
 
 
 PARAMETER_POLICY_VERSION = 1
@@ -424,7 +423,9 @@ def bootstrap_legacy_optimizer_profile(
         dict(raw_gui_config),
         page_train_type=page_train_type,
     )
-    apply_ui_custom_overrides(compiled)
+    overrides = compiled.pop("__ui_custom_overrides", None)
+    if isinstance(overrides, Mapping):
+        compiled.update(dict(overrides))
 
     optimizer_type = str(compiled.get("optimizer_type") or "").strip()
     if not optimizer_type:
