@@ -523,28 +523,43 @@ Schema.intersect([
     Schema.union([
         Schema.intersect([
             Schema.object({ model_type: Schema.union(["flux", "chroma"]).required() }),
-            Schema.object(UpdateSchema(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS, {}, ["max_token_length"])).description("caption（Tag）选项"),
+            Schema.object({
+                weighted_captions: Schema.boolean().description("使用带权重的 token；这是全局 encoding 选项"),
+            }).description("Caption 全局编码"),
+            SHARED_SCHEMAS.CAPTION_MODE_SHARED(
+                Schema.object(
+                    UpdateSchema(
+                        SHARED_SCHEMAS.RAW.CAPTION_SETTINGS,
+                        {},
+                        ["max_token_length", "weighted_captions"]
+                    )
+                ).description("Standard Caption")
+            ),
         ]),
         Schema.intersect([
-            Schema.object({
-                model_type: Schema.const("anima").required(),
-                caption_extension: Schema.string().default(".txt").description("Caption 文件扩展名；默认 .txt。只有数据集使用其他后缀（如 .caption）时修改。"),
-                shuffle_caption: Schema.boolean().default(false).description("随机打乱逗号分隔的 tag 顺序，降低模型对固定顺序的依赖。只有 tag-list caption 才常用；缓存 Qwen3 输出时必须关闭。"),
-                keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("shuffle 时固定保留最前 N 个 token/tag。常用于保留角色名/触发词；0=不保留。"),
-            }).description("Anima caption（Tag）选项"),
-            Schema.object({
-                caption_separator: Schema.string().default(",").description("Tag 分隔符；Danbooru/Pixiv tag 数据通常保持逗号。自然语言 caption 通常无需修改。"),
-                secondary_separator: Schema.string().description("第二分隔符；shuffle/dropout 前会解析并替换成主分隔符。只有数据源混用两种分隔符时使用。"),
-                enable_wildcard: Schema.boolean().default(false).description("启用 {a|b|c} 随机 wildcard；用于 caption 随机变体。普通固定 caption 保持关闭。"),
-                caption_prefix: Schema.string().description("给每条 caption 自动加固定前缀；例如统一质量词/风格提示。大多数数据集应在标注阶段处理，训练时通常留空。"),
-                caption_suffix: Schema.string().description("给每条 caption 自动加固定后缀；用途同 prefix，普通训练通常留空。"),
-                keep_tokens_separator: Schema.string().description("keep_tokens 专用分隔符；只有你的保留段与普通 tag 使用不同分隔规则时才需要。"),
-                token_warmup_min: Schema.number().min(0).step(1).default(1).description("Token warmup 开始时至少使用的 tag 数；1 为默认。只在想让训练早期逐步增加 caption 信息时使用。"),
-                token_warmup_step: Schema.number().min(0).step(0.01).default(0).description("Token warmup 完成位置；0=关闭，小于 1 按总步数比例解释。实验性策略，通常保持 0。"),
-                caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("随机丢弃整条 caption 的概率，用于降低对文本条件过拟合。小数据集可尝试 0.05~0.1；缓存 Qwen3 输出时需确认兼容。"),
-                caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("每 N 个 epoch 整轮丢弃 caption；非常少用，普通训练留空/0。"),
-                caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("按 tag 随机丢弃，适合 tag-list 正则化；常见可从 0.05~0.1 试起。缓存 Qwen3 输出时不能开启。"),
-            }).description("Caption 高级增强（通常保持默认/留空）").collapse(),
+            Schema.object({ model_type: Schema.const("anima").required() }),
+            SHARED_SCHEMAS.CAPTION_MODE_ANIMA(
+                Schema.intersect([
+                    Schema.object({
+                        caption_extension: Schema.string().default(".txt").description("Caption 文件扩展名；默认 .txt。只有数据集使用其他后缀时修改。"),
+                        shuffle_caption: Schema.boolean().default(false).description("随机打乱逗号分隔的 tag 顺序；缓存 Qwen3 输出时必须关闭。"),
+                        keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("shuffle 时固定保留最前 N 个 token/tag。"),
+                    }).description("Standard Caption"),
+                    Schema.object({
+                        caption_separator: Schema.string().default(",").description("Tag 分隔符"),
+                        secondary_separator: Schema.string().description("第二分隔符"),
+                        enable_wildcard: Schema.boolean().default(false).description("启用多行随机选择和 {a|b|c} wildcard"),
+                        caption_prefix: Schema.string().description("固定 caption prefix"),
+                        caption_suffix: Schema.string().description("固定 caption suffix"),
+                        keep_tokens_separator: Schema.string().description("keep_tokens 专用分隔符"),
+                        token_warmup_min: Schema.number().min(0).step(1).default(1).description("Token warmup 初始 tag 数"),
+                        token_warmup_step: Schema.number().min(0).step(0.01).default(0).description("Token warmup 完成位置；0=关闭，小于 1 按总步数比例解释"),
+                        caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout 概率"),
+                        caption_dropout_every_n_epochs: Schema.number().min(0).max(100).step(1).description("每 N epoch 丢弃 caption"),
+                        caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("按 tag dropout 概率"),
+                    }).description("Standard Caption 高级增强").collapse(),
+                ])
+            ),
         ]),
         Schema.object({}),
     ]),

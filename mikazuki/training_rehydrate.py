@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 import ast
+import json
+from pathlib import Path
 
+from mikazuki.multi_caption_config import rehydrate_multi_caption_policy
 from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
 
 
@@ -66,7 +69,12 @@ def _infer_checkpoint_mode(config: dict) -> str:
     return "standard" if gradient else "off"
 
 
-def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> dict:
+def rehydrate_trainer_config(
+    effective_config: dict,
+    page_train_type: str,
+    *,
+    sidecars: dict[str, str] | None = None,
+) -> dict:
     """Inverse-map an exported trainer TOML into current-page GUI state.
 
     The inverse is semantic rather than byte-for-byte historical state: values
@@ -75,6 +83,25 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
     state yields an equivalent trainer configuration.
     """
     config = deepcopy(effective_config)
+    multi_caption_path = config.pop("multi_caption_config", None)
+    if multi_caption_path:
+        path_key = str(multi_caption_path)
+        sidecar_content = (sidecars or {}).get(path_key)
+        if sidecar_content is None:
+            path = Path(path_key)
+            if not path.is_file():
+                raise ValueError(f"Multi-Caption sidecar 不存在，不能静默回退 Standard: {path}")
+            try:
+                sidecar_content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Multi-Caption sidecar 读取失败: {path}: {exc}") from exc
+        try:
+            policy = json.loads(sidecar_content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Multi-Caption sidecar JSON 无效: {path_key}: {exc}") from exc
+        multi_caption_gui = rehydrate_multi_caption_policy(policy, page_train_type)
+    else:
+        multi_caption_gui = {"caption_mode": "standard"}
 
     if _as_bool(config.pop("lowram", False)):
         config["memory_mode"] = "lowram"
@@ -261,4 +288,5 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
     if page_train_type != "lora-basic" and config.get("sample_prompts"):
         config["prompt_file"] = config.pop("sample_prompts")
 
+    config.update(multi_caption_gui)
     return config

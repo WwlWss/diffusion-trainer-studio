@@ -61,11 +61,19 @@ Schema.intersect([
     // 日志设置
     SHARED_SCHEMAS.LOG_SETTINGS,
 
-    // caption 选项
-    // FLUX 去除 max_token_length
-    Schema.object(UpdateSchema(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS, {}, ["max_token_length"])).description("caption（Tag）选项"),
+    // Caption 全局 encoding：SD3 不使用 SD max_token_length 控件
+    Schema.object({
+        weighted_captions: Schema.boolean().description("使用带权重的 token；这是全局 encoding 选项"),
+    }).description("Caption 全局编码"),
+
+    SHARED_SCHEMAS.CAPTION_MODE_SHARED(
+        Schema.object(
+            UpdateSchema(SHARED_SCHEMAS.RAW.CAPTION_SETTINGS, {}, ["max_token_length", "weighted_captions"])
+        ).description("Standard Caption")
+    ),
 
     // 噪声设置
+
     SHARED_SCHEMAS.NOISE_SETTINGS,
 
     // 数据增强

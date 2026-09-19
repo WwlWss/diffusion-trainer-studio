@@ -24,15 +24,20 @@ Schema.intersect([
     }).description("数据集设置"),
 
     Schema.object({
-        caption_extension: Schema.string().default(".txt").description("caption 扩展名"),
-        shuffle_caption: Schema.boolean().default(false).description("随机打乱 caption token；TE output cache 时必须关闭"),
-        keep_tokens: Schema.number().min(0).step(1).default(0).description("shuffle 时固定前 N token"),
-        keep_tokens_separator: Schema.string().description("keep_tokens 分隔符"),
-        max_token_length: Schema.number().min(75).step(75).default(225).description("SDXL tokenizer 最大 token 长度"),
-        caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout；TE output cache 时必须关闭"),
-        caption_dropout_every_n_epochs: Schema.number().min(0).step(1).description("每 N epoch 丢弃 caption"),
-        caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；TE output cache 时必须关闭"),
-    }).description("Caption 设置"),
+        max_token_length: Schema.number().min(75).step(75).default(225).description("SDXL tokenizer 最大 token 长度；Standard 与 Multi 共用"),
+    }).description("Caption 全局编码"),
+
+    SHARED_SCHEMAS.CAPTION_MODE_SHARED(
+        Schema.object({
+            caption_extension: Schema.string().default(".txt").description("caption 扩展名"),
+            shuffle_caption: Schema.boolean().default(false).description("随机打乱 caption token；TE output cache 时必须关闭"),
+            keep_tokens: Schema.number().min(0).step(1).default(0).description("shuffle 时固定前 N token"),
+            keep_tokens_separator: Schema.string().description("keep_tokens 分隔符"),
+            caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout；TE output cache 时必须关闭"),
+            caption_dropout_every_n_epochs: Schema.number().min(0).step(1).description("每 N epoch 丢弃 caption"),
+            caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；TE output cache 时必须关闭"),
+        }).description("Standard Caption")
+    ),
 
     Schema.object({
         output_name: Schema.string().default("sdxl-finetune").description("输出模型名"),

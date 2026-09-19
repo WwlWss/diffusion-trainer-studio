@@ -68,5 +68,15 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             patch_training_layout_js("not the pinned training layout")
 
 
+    def test_export_preserves_plain_toml_and_bundles_sidecars(self):
+        self.assertIn('.dts.json', self.patched)
+        self.assertIn('R.sidecars&&R.sidecars.length>0', self.patched)
+        self.assertIn('H?".dts.json":".toml"', self.patched)
+
+    def test_import_accepts_toml_and_portable_bundle(self):
+        self.assertIn('_.accept=".toml,.json"', self.patched)
+        self.assertIn('JSON.parse(V):TomlParse(V)', self.patched)
+
+
 if __name__ == "__main__":
     unittest.main()

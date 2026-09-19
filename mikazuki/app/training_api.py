@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import uuid
 from pathlib import Path
@@ -10,10 +12,11 @@ import toml
 from fastapi import Request
 
 import mikazuki.app.api as legacy_api
-from mikazuki.anima_qwen_runtime import prepare_runtime_trainer
+from mikazuki.anima_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
+from mikazuki.training_config import PAGE_BACKEND_MAP
 from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 from mikazuki.training_request import (
@@ -48,13 +51,22 @@ router.routes[:] = [
 
 
 def _prepared_payload(prepared) -> dict:
+    toml_text = toml.dumps(prepared.config)
+    sidecars = [{"path": path, "content": content} for path, content in prepared.sidecars.items()]
+    bundle = {
+        "format": "dts-training-bundle-v1",
+        "train_type": prepared.train_type,
+        "toml": toml_text,
+        "sidecars": {path: content for path, content in prepared.sidecars.items()},
+    }
     return {
         "train_type": prepared.train_type,
         "trainer": prepared.trainer_file,
         "effective_config": prepared.config,
-        "toml": toml.dumps(prepared.config),
+        "toml": toml_text,
         "warnings": prepared.warnings,
-        "sidecars": [{"path": path, "content": content} for path, content in prepared.sidecars.items()],
+        "sidecars": sidecars,
+        "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
 
 
@@ -64,6 +76,34 @@ def _write_text_atomic(path: str, content: str) -> None:
     tmp = target.with_name(target.name + ".tmp")
     tmp.write_text(content, encoding="utf-8")
     os.replace(tmp, target)
+
+
+_ALLOWED_BUNDLE_SIDECAR_ROOTS = (
+    (Path("config") / "autosave" / "multi-caption").as_posix() + "/",
+    (Path("config") / "autosave" / "prompts").as_posix() + "/",
+)
+
+
+def _validated_bundle_sidecars(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        raise ValueError("Training bundle sidecars 必须是 object。")
+    sidecars: dict[str, str] = {}
+    for raw_path, raw_content in raw.items():
+        path = str(raw_path).replace("\\", "/")
+        pure = Path(path)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise ValueError(f"Training bundle sidecar 路径不安全: {raw_path!r}")
+        if not any(path.startswith(prefix) for prefix in _ALLOWED_BUNDLE_SIDECAR_ROOTS):
+            raise ValueError(f"Training bundle sidecar 路径不属于 DTS 托管目录: {raw_path!r}")
+        if not isinstance(raw_content, str):
+            raise ValueError(f"Training bundle sidecar 内容必须是文本: {raw_path!r}")
+        expected = hashlib.sha256(raw_content.encode("utf-8")).hexdigest()[:24]
+        if pure.stem != expected:
+            raise ValueError(
+                f"Training bundle sidecar 内容 hash 与路径不匹配: {raw_path!r}"
+            )
+        sidecars[path] = raw_content
+    return sidecars
 
 
 @router.post("/training/preview")
@@ -95,7 +135,27 @@ async def rehydrate_training_config(request: Request):
         page_type, effective = decode_training_request(await request.body())
         if not page_type:
             raise ValueError("导入 Trainer TOML 时必须提供当前页面 train_type。")
-        gui_state = rehydrate_trainer_config(effective, str(page_type))
+        sidecars = None
+        if effective.get("format") == "dts-training-bundle-v1":
+            bundle = effective
+            bundle_train_type = str(bundle.get("train_type") or "")
+            bundle_backend = str(PAGE_BACKEND_MAP.get(bundle_train_type, bundle_train_type))
+            page_backend = str(PAGE_BACKEND_MAP.get(str(page_type), str(page_type)))
+            if bundle_backend and bundle_backend != page_backend:
+                raise ValueError(
+                    f"Training bundle backend={bundle_backend!r}，不能导入当前 backend={page_backend!r} 页面。"
+                )
+            toml_text = bundle.get("toml")
+            if not isinstance(toml_text, str):
+                raise ValueError("Training bundle 缺少 toml 文本。")
+            sidecars = _validated_bundle_sidecars(bundle.get("sidecars", {}))
+            effective = toml.loads(toml_text)
+            # Import is the one place where unpacking a portable bundle is an
+            # explicit user action. Materialize only validated DTS-owned
+            # content-addressed paths so generated prompt sidecars are portable
+            # too; Preview remains side-effect free.
+            materialize_sidecars(sidecars)
+        gui_state = rehydrate_trainer_config(effective, str(page_type), sidecars=sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "rehydrate"})
     return APIResponseSuccess(message="rehydrate ready", data={"gui_state": gui_state})

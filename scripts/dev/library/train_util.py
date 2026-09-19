@@ -730,6 +730,10 @@ class BaseDataset(torch.utils.data.Dataset):
         # caching
         self.caching_mode = None  # None, 'latents', 'text'
 
+        # Optional Multi-Caption is attached only after the legacy Dataset has
+        # been fully constructed. None means the historical Standard path.
+        self.multi_caption_resolver = None
+
         self.tokenize_strategy = None
         self.text_encoder_output_caching_strategy = None
         self.latents_caching_strategy = None
@@ -1095,6 +1099,8 @@ class BaseDataset(torch.utils.data.Dataset):
         return all([not subset.color_aug and not subset.random_crop for subset in self.subsets])
 
     def is_text_encoder_output_cacheable(self):
+        if self.multi_caption_resolver is not None:
+            return False
         return all(
             [
                 not (
@@ -1210,6 +1216,9 @@ class BaseDataset(torch.utils.data.Dataset):
 
         finally:
             executor.shutdown()
+
+    def set_multi_caption_resolver(self, resolver):
+        self.multi_caption_resolver = resolver
 
     def cache_latents(self, vae, vae_batch_size=1, cache_to_disk=False, is_main_process=True, file_suffix=".npz"):
         # マルチGPUには対応していないので、そちらはtools/cache_latents.pyを使うこと
@@ -1703,7 +1712,17 @@ class BaseDataset(torch.utils.data.Dataset):
             text_encoder_outputs_list.append(text_encoder_outputs)
 
             if tokenization_required:
-                caption = self.process_caption(subset, image_info.caption)
+                if self.multi_caption_resolver is None or image_info.is_reg:
+                    caption = self.process_caption(subset, image_info.caption)
+                else:
+                    resolved_caption = self.multi_caption_resolver.choose(
+                        image_path=image_info.absolute_path,
+                        image_key=image_info.image_key,
+                    )
+                    caption = self.process_caption(
+                        resolved_caption.processing,
+                        resolved_caption.caption,
+                    )
                 input_ids = [ids[0] for ids in self.tokenize_strategy.tokenize(caption)]  # remove batch dimension
                 # if self.XTI_layers:
                 #     caption_layer = []
@@ -2587,6 +2606,10 @@ class DatasetGroup(torch.utils.data.ConcatDataset):
     def add_replacement(self, str_from, str_to):
         for dataset in self.datasets:
             dataset.add_replacement(str_from, str_to)
+
+    def set_multi_caption_resolver(self, resolver):
+        for dataset in self.datasets:
+            dataset.set_multi_caption_resolver(resolver)
 
     # def make_buckets(self):
     #   for dataset in self.datasets:
@@ -4445,6 +4468,12 @@ def add_dataset_arguments(
     # dataset common
     parser.add_argument(
         "--train_data_dir", type=str, default=None, help="directory for train images / 学習画像データのディレクトリ"
+    )
+    parser.add_argument(
+        "--multi_caption_config",
+        type=str,
+        default=None,
+        help="optional DTS Multi-Caption JSON sidecar; absent keeps the legacy caption path unchanged",
     )
     parser.add_argument(
         "--cache_info",

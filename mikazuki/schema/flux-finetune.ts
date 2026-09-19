@@ -118,14 +118,16 @@ Schema.intersect([
 
     SHARED_SCHEMAS.LOG_SETTINGS,
 
-    Schema.object({
-        caption_extension: Schema.string().default(".txt").description("caption 扩展名"),
-        shuffle_caption: Schema.boolean().default(false).description("随机打乱 caption token；文本输出 cache 时应关闭"),
-        keep_tokens: Schema.number().min(0).step(1).default(0).description("shuffle 时固定前 N token"),
-        caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout；文本输出 cache 时应关闭"),
-        caption_dropout_every_n_epochs: Schema.number().min(0).step(1).description("每 N epoch caption dropout"),
-        caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；文本输出 cache 时应关闭"),
-    }).description("Caption"),
+    SHARED_SCHEMAS.CAPTION_MODE_SHARED(
+        Schema.object({
+            caption_extension: Schema.string().default(".txt").description("caption 扩展名"),
+            shuffle_caption: Schema.boolean().default(false).description("随机打乱 caption token；文本输出 cache 时应关闭"),
+            keep_tokens: Schema.number().min(0).step(1).default(0).description("shuffle 时固定前 N token"),
+            caption_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("整条 caption dropout；文本输出 cache 时应关闭"),
+            caption_dropout_every_n_epochs: Schema.number().min(0).step(1).description("每 N epoch caption dropout"),
+            caption_tag_dropout_rate: Schema.number().min(0).max(1).step(0.01).description("tag dropout；文本输出 cache 时应关闭"),
+        }).description("Standard Caption")
+    ),
 
     Schema.intersect([
         Schema.object({

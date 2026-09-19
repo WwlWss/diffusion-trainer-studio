@@ -85,6 +85,12 @@ def train(args):
     else:
         train_dataset_group = train_util.load_arbitrary_dataset(args, tokenizer)
 
+    if args.multi_caption_config:
+        if args.dataset_class is not None:
+            raise ValueError("Multi-Caption v1 does not support custom dataset_class")
+        from library.multi_caption import configure_multi_caption_dataset_groups
+        configure_multi_caption_dataset_groups(args.multi_caption_config, train_dataset_group)
+
     current_epoch = Value("i", 0)
     current_step = Value("i", 0)
     ds_for_collator = train_dataset_group if args.max_data_loader_n_workers == 0 else None

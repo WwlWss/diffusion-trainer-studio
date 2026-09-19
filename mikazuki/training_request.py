@@ -9,6 +9,7 @@ import random
 from pathlib import Path
 
 import mikazuki.app.api as legacy_api
+from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
 from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
@@ -176,6 +177,7 @@ def prepare_request_config(
 ):
     del stamp
     train_utils.fix_config_types(config)
+    multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
     prepared = prepare_training_config(
         config,
@@ -184,6 +186,12 @@ def prepare_request_config(
         launch=launch,
         toml_path=toml_path,
     )
+    effective_multi_path = prepared.config.get("multi_caption_config")
+    if multi_path is None and effective_multi_path not in (None, ""):
+        raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 手工注入。")
+    if multi_path is not None and effective_multi_path != multi_path:
+        raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 覆盖。")
+    prepared.sidecars.update(multi_sidecars)
     prepared.sidecars.update(sidecars)
     prepared.warnings.extend(prompt_warnings)
     if materialize:

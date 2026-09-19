@@ -343,7 +343,7 @@ class AnimaUiParityTests(unittest.TestCase):
             'description("高级数据集控制（通常不需要）").collapse()',
             'description("LoRA 网络高级选项（大多数训练保持默认/留空）").collapse()',
             'description("LoRA 性能与编译高级选项（通常保持默认）").collapse()',
-            'description("Caption 高级增强（通常保持默认/留空）").collapse()',
+            'description("Standard Caption 高级增强").collapse()',
             'description("模型 Metadata（发布时再填写）").collapse()',
             'description("Hugging Face 保存/恢复（不用云端训练时保持折叠）").collapse()',
             'description("其他高级设置").collapse()',

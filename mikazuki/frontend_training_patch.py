@@ -85,11 +85,11 @@ def patch_training_layout_js(content: str) -> str:
     content = _replace_once(
         content,
         'E=()=>{const _=x(),g=`${new Date().getTime()}.toml`;P(g,_)}',
-        'E=async()=>{try{const R=await __requestEffective(T(),"/api/training/export"),g=`${new Date().getTime()}.toml`;P(g,R.toml||"")}catch(_){ElMessage.error(_.message||String(_))}}',
+        'E=async()=>{try{const R=await __requestEffective(T(),"/api/training/export"),H=R.sidecars&&R.sidecars.length>0,g=`${new Date().getTime()}${H?".dts.json":".toml"}`;P(g,H?(R.bundle||JSON.stringify({format:"dts-training-bundle-v1",train_type:t,toml:R.toml||"",sidecars:{}})):(R.toml||""))}catch(_){ElMessage.error(_.message||String(_))}}',
         "effective config export",
     )
 
-    new_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=async D=>{const V=D.target.result;try{let k=TomlParse(V),U=await __trainingRequest("/api/training/rehydrate",k),B=U.data&&U.data.gui_state;if(!B||typeof B!=="object")throw new Error("导入结果缺少 gui_state");a.value=clone(B),ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F"),await nextTick(),__refreshPreview()}catch(k){console.log(k),ElMessage.error(k.message||"\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
+    new_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml,.json",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=async D=>{const V=D.target.result;try{let k=g.name.toLowerCase().endsWith(".json")?JSON.parse(V):TomlParse(V),U=await __trainingRequest("/api/training/rehydrate",k),B=U.data&&U.data.gui_state;if(!B||typeof B!=="object")throw new Error("导入结果缺少 gui_state");a.value=clone(B),ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F"),await nextTick(),__refreshPreview()}catch(k){console.log(k),ElMessage.error(k.message||"\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
     content = _replace_span_once(
         content,
         'S=()=>{const _=document.createElement("input");',
