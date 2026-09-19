@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 
 from mikazuki.multi_caption_config import rehydrate_multi_caption_policy
+from mikazuki.parameter_policy import rehydrate_parameter_policy, validate_parameter_policy
 from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
 
 
@@ -83,6 +84,28 @@ def rehydrate_trainer_config(
     state yields an equivalent trainer configuration.
     """
     config = deepcopy(effective_config)
+
+    parameter_policy_path = config.pop("parameter_policy_config", None)
+    if parameter_policy_path:
+        path_key = str(parameter_policy_path)
+        sidecar_content = (sidecars or {}).get(path_key)
+        if sidecar_content is None:
+            path = Path(path_key)
+            if not path.is_file():
+                raise ValueError(f"Parameter Policy sidecar 不存在，不能静默回退 Standard: {path}")
+            try:
+                sidecar_content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Parameter Policy sidecar 读取失败: {path}: {exc}") from exc
+        try:
+            raw_policy = json.loads(sidecar_content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Parameter Policy sidecar JSON 无效: {path_key}: {exc}") from exc
+        policy = validate_parameter_policy(raw_policy)
+        parameter_policy_gui = rehydrate_parameter_policy(policy)
+    else:
+        parameter_policy_gui = {"optimization_mode": "standard"}
+
     multi_caption_path = config.pop("multi_caption_config", None)
     if multi_caption_path:
         path_key = str(multi_caption_path)
@@ -289,4 +312,5 @@ def rehydrate_trainer_config(
         config["prompt_file"] = config.pop("sample_prompts")
 
     config.update(multi_caption_gui)
+    config.update(parameter_policy_gui)
     return config
