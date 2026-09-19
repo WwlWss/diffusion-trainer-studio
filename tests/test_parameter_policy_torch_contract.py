@@ -110,6 +110,17 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
         self.assertIn('mode="optimizer_managed"', self.source)
         self.assertIn('spec.lr_semantics != "optimizer_managed"', self.source)
 
+    def test_optimizer_load_restores_runtime_lifecycle_after_checkpoint_state(self):
+        self.assertIn("desired_lifecycle_mode = self._lifecycle_mode", self.source)
+        self.assertIn(
+            "ScheduleFree state may be checkpointed while the trainer is in eval",
+            self.source,
+        )
+        self.assertIn('if desired_lifecycle_mode == "train":', self.source)
+        self.assertIn("self.train()", self.source)
+        self.assertIn('elif desired_lifecycle_mode == "eval":', self.source)
+        self.assertIn("self.eval()", self.source)
+
     def test_composite_optimizer_forwards_train_and_eval(self):
         self.assertIn("def train(self):", self.source)
         self.assertIn('train_fn = getattr(entry.optimizer, "train", None)', self.source)

@@ -325,6 +325,7 @@ class CompositeOptimizer(torch.optim.Optimizer):
 
         self.runtime_spec = runtime_spec
         self.entries = tuple(entries)
+        self._lifecycle_mode = "train"
 
         flat_parameters = [
             parameter
@@ -376,11 +377,16 @@ class CompositeOptimizer(torch.optim.Optimizer):
         for entry in self.entries:
             entry.optimizer.zero_grad(set_to_none=set_to_none)
 
+    @property
+    def lifecycle_mode(self) -> str:
+        return self._lifecycle_mode
+
     def train(self):
         for entry in self.entries:
             train_fn = getattr(entry.optimizer, "train", None)
             if callable(train_fn):
                 train_fn()
+        self._lifecycle_mode = "train"
         return self
 
     def eval(self):
@@ -388,6 +394,7 @@ class CompositeOptimizer(torch.optim.Optimizer):
             eval_fn = getattr(entry.optimizer, "eval", None)
             if callable(eval_fn):
                 eval_fn()
+        self._lifecycle_mode = "eval"
         return self
 
     def state_dict(self) -> dict[str, Any]:
@@ -406,6 +413,7 @@ class CompositeOptimizer(torch.optim.Optimizer):
         }
 
     def load_state_dict(self, state_dict: Mapping[str, Any]) -> None:
+        desired_lifecycle_mode = self._lifecycle_mode
         if not isinstance(state_dict, Mapping):
             raise ParameterPolicyTorchRuntimeError(
                 "CompositeOptimizer state must be a mapping."
@@ -474,6 +482,19 @@ class CompositeOptimizer(torch.optim.Optimizer):
             for entry in self.entries
             for group in entry.optimizer.param_groups
         ]
+
+        # ScheduleFree state may be checkpointed while the trainer is in eval
+        # mode (sampling/save occurs before the legacy train() restoration).
+        # Resume restores the runtime's pre-load lifecycle rather than blindly
+        # inheriting the checkpoint's transient train_mode flag.
+        if desired_lifecycle_mode == "train":
+            self.train()
+        elif desired_lifecycle_mode == "eval":
+            self.eval()
+        else:
+            raise ParameterPolicyTorchRuntimeError(
+                f"Unknown CompositeOptimizer lifecycle mode {desired_lifecycle_mode!r}."
+            )
 
 
 def build_parameter_policy_optimizer(
