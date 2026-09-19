@@ -107,21 +107,20 @@ async def rehydrate_training_config(request: Request):
             raise ValueError("导入 Trainer TOML 时必须提供当前页面 train_type。")
         sidecars = None
         if effective.get("format") == "dts-training-bundle-v1":
-            bundle_train_type = str(effective.get("train_type") or "")
+            bundle = effective
+            bundle_train_type = str(bundle.get("train_type") or "")
             if bundle_train_type and bundle_train_type != str(page_type):
                 raise ValueError(
                     f"Training bundle 属于 {bundle_train_type!r} 页面，不能导入当前 {page_type!r} 页面。"
                 )
-            toml_text = effective.get("toml")
+            toml_text = bundle.get("toml")
             if not isinstance(toml_text, str):
                 raise ValueError("Training bundle 缺少 toml 文本。")
-            effective = toml.loads(toml_text)
-            raw_sidecars = effective_sidecars = json.loads(json.dumps(
-                json.loads((await request.body()).decode("utf-8")).get("config", {}).get("sidecars", {})
-            ))
+            raw_sidecars = bundle.get("sidecars", {})
             if not isinstance(raw_sidecars, dict):
                 raise ValueError("Training bundle sidecars 必须是 object。")
             sidecars = {str(key): str(value) for key, value in raw_sidecars.items()}
+            effective = toml.loads(toml_text)
         gui_state = rehydrate_trainer_config(effective, str(page_type), sidecars=sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "rehydrate"})
