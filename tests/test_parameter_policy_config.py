@@ -2,7 +2,6 @@ import json
 import unittest
 
 from mikazuki.parameter_policy import (
-    bootstrap_legacy_optimizer_profile,
     build_parameter_policy_sidecar,
     canonicalize_parameter_policy,
     parameter_policy_runtime_blockers,
@@ -12,6 +11,7 @@ from mikazuki.parameter_policy import (
     validate_parameter_policy,
 )
 from mikazuki.training_rehydrate import rehydrate_trainer_config
+from mikazuki.training_request import bootstrap_parameter_policy_optimizer_profile
 
 
 def _component_config():
@@ -282,12 +282,13 @@ class ParameterPolicyConfigTests(unittest.TestCase):
             parse_legacy_optimizer_args(["broken"])
 
     def test_bootstrap_uses_compiled_legacy_optimizer_semantics(self):
-        profiles = bootstrap_legacy_optimizer_profile(
+        profiles = bootstrap_parameter_policy_optimizer_profile(
             {
                 "optimizer_type": "Prodigy",
                 "prodigy_d0": "1e-6",
                 "prodigy_d_coef": 2,
                 "lr_warmup_steps": 10,
+                "lora_target": "unet",
             },
             "lora-master",
         )
@@ -300,9 +301,10 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         self.assertTrue(profile["args"]["safeguard_warmup"])
 
     def test_bootstrap_honors_legacy_custom_toml_override(self):
-        profiles = bootstrap_legacy_optimizer_profile(
+        profiles = bootstrap_parameter_policy_optimizer_profile(
             {
                 "optimizer_type": "AdamW",
+                "lora_target": "unet",
                 "ui_custom_params": 'optimizer_type = "Lion"',
             },
             "lora-master",
@@ -311,9 +313,10 @@ class ParameterPolicyConfigTests(unittest.TestCase):
 
     def test_bootstrap_rejects_unregistered_custom_optimizer_without_affecting_standard(self):
         with self.assertRaisesRegex(ValueError, "无法自动迁移"):
-            bootstrap_legacy_optimizer_profile(
+            bootstrap_parameter_policy_optimizer_profile(
                 {
                     "optimizer_type": "torch.optim.Adamax",
+                    "lora_target": "unet",
                 },
                 "lora-master",
             )
