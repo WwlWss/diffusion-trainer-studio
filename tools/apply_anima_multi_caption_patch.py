@@ -58,9 +58,13 @@ def patch_dataset(text: str) -> str:
     )
     text = replace_once(
         text,
-        '''    def new_cache_latents(self, model: Any, accelerator: Accelerator):
+        '''        )
+
+    def new_cache_latents(self, model: Any, accelerator: Accelerator):
 ''',
-        '''    def set_multi_caption_resolver(self, resolver):
+        '''        )
+
+    def set_multi_caption_resolver(self, resolver):
         self.multi_caption_resolver = resolver
 
     def new_cache_latents(self, model: Any, accelerator: Accelerator):
