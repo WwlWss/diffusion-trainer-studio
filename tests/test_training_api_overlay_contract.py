@@ -66,6 +66,13 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn("hashlib.sha256(raw_content.encode", TRAINING_API)
         self.assertIn("materialize_sidecars(sidecars)", TRAINING_API)
 
+    def test_parameter_policy_bundle_and_runtime_readiness_are_exposed(self):
+        self.assertIn('autosave" / "parameter-policy"', TRAINING_API)
+        self.assertIn('if prepared.config.get("parameter_policy_config"):', TRAINING_API)
+        self.assertIn('payload["runtime_ready"] = not bool(prepared.runtime_blockers)', TRAINING_API)
+        self.assertIn('payload["runtime_blockers"] = list(prepared.runtime_blockers)', TRAINING_API)
+        self.assertIn("RuntimeError, OSError", TRAINING_API)
+
 
 if __name__ == "__main__":
     unittest.main()

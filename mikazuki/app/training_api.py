@@ -59,7 +59,7 @@ def _prepared_payload(prepared) -> dict:
         "toml": toml_text,
         "sidecars": {path: content for path, content in prepared.sidecars.items()},
     }
-    return {
+    payload = {
         "train_type": prepared.train_type,
         "trainer": prepared.trainer_file,
         "effective_config": prepared.config,
@@ -68,6 +68,10 @@ def _prepared_payload(prepared) -> dict:
         "sidecars": sidecars,
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
+    if prepared.config.get("parameter_policy_config"):
+        payload["runtime_ready"] = not bool(prepared.runtime_blockers)
+        payload["runtime_blockers"] = list(prepared.runtime_blockers)
+    return payload
 
 
 def _write_text_atomic(path: str, content: str) -> None:
@@ -80,6 +84,7 @@ def _write_text_atomic(path: str, content: str) -> None:
 
 _ALLOWED_BUNDLE_SIDECAR_ROOTS = (
     (Path("config") / "autosave" / "multi-caption").as_posix() + "/",
+    (Path("config") / "autosave" / "parameter-policy").as_posix() + "/",
     (Path("config") / "autosave" / "prompts").as_posix() + "/",
 )
 
@@ -156,7 +161,7 @@ async def rehydrate_training_config(request: Request):
             # too; Preview remains side-effect free.
             materialize_sidecars(sidecars)
         gui_state = rehydrate_trainer_config(effective, str(page_type), sidecars=sidecars)
-    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+    except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "rehydrate"})
     return APIResponseSuccess(message="rehydrate ready", data={"gui_state": gui_state})
 
