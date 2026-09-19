@@ -162,6 +162,29 @@ class OptimizerProfileCapabilityTests(unittest.TestCase):
             "Muon",
         )
 
+    def test_schedulefree_is_supported_with_optimizer_managed_lr_contract(self):
+        requirements = (
+            Path(__file__).resolve().parents[1] / "requirements.txt"
+        ).read_text(encoding="utf-8")
+        self.assertIn("schedulefree==1.4", requirements)
+
+        for optimizer_type in (
+            "RAdamScheduleFree",
+            "AdamWScheduleFree",
+            "SGDScheduleFree",
+        ):
+            with self.subTest(optimizer_type=optimizer_type):
+                capability = require_unrestricted_component_optimizer(optimizer_type)
+                self.assertEqual(capability.component_support, "supported")
+                self.assertTrue(capability.supports_group_lr)
+                self.assertFalse(capability.uses_external_scheduler)
+                self.assertEqual(capability.lr_semantics, "optimizer_managed")
+                self.assertEqual(capability.dependency, "schedulefree")
+                self.assertEqual(
+                    capability.implementation,
+                    f"schedulefree.{optimizer_type}",
+                )
+
     def test_non_muon_args_are_canonical_json_safe(self):
         normalized = normalize_optimizer_profile({
             "type": "AdamW",
