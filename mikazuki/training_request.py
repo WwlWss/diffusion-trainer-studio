@@ -10,7 +10,12 @@ from pathlib import Path
 
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
-from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
+from mikazuki.parameter_policy import (
+    PARAMETER_POLICY_GUI_KEYS,
+    bootstrap_legacy_optimizer_profile,
+    build_parameter_policy_sidecar,
+    parameter_policy_runtime_blockers,
+)
 from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
 from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
@@ -167,6 +172,29 @@ def materialize_sidecars(sidecars: dict[str, str]) -> None:
         os.replace(tmp, path)
 
 
+def bootstrap_parameter_policy_optimizer_profile(
+    config: dict,
+    page_type: str | None,
+) -> dict:
+    """Compile Standard semantics first, then derive the initial optimizer profile.
+
+    Model Component assignment deliberately starts in Step 3.
+    """
+    candidate = dict(config)
+    for key in PARAMETER_POLICY_GUI_KEYS:
+        candidate.pop(key, None)
+    candidate.pop("parameter_policy_config", None)
+    train_utils.fix_config_types(candidate)
+    prepared = prepare_training_config(
+        candidate,
+        page_train_type=page_type,
+        resolve_backend=legacy_api.resolve_training_backend,
+        launch=False,
+        toml_path=None,
+    )
+    return bootstrap_legacy_optimizer_profile(prepared.config)
+
+
 def prepare_request_config(
     config: dict,
     page_type: str | None,
@@ -220,6 +248,7 @@ def prepare_request_config(
 
 
 __all__ = [
-    "decode_training_request", "materialize_sidecars", "prepare_prompt_fields",
-    "prepare_request_config", "validate_prepared_config",
+    "bootstrap_parameter_policy_optimizer_profile", "decode_training_request",
+    "materialize_sidecars", "prepare_prompt_fields", "prepare_request_config",
+    "validate_prepared_config",
 ]
