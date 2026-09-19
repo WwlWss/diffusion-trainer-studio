@@ -950,7 +950,9 @@ class ParameterPolicyFullBootstrapTests(unittest.TestCase):
             )
 
         validator.assert_called_once()
-        self.assertEqual(policy, validator.return_value)
+        from mikazuki.parameter_policy import validate_parameter_policy
+
+        self.assertEqual(policy, validate_parameter_policy(policy))
 
     def test_profile_only_bootstrap_remains_independent_of_compatibility_gate(self):
         prepared = PreparedTrainingConfig(
