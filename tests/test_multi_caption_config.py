@@ -94,17 +94,57 @@ class MultiCaptionConfigTests(unittest.TestCase):
                 "groups": {"tags": {"extension": ".txt", "weight": 0}},
             })
 
-    def test_basic_profile_rejects_shared_or_anima_only_processing(self):
-        with self.assertRaisesRegex(ValueError, "不支持字段"):
+    def test_all_pages_share_full_group_processing_contract(self):
+        for profile in ("basic", "shared", "anima"):
+            with self.subTest(profile=profile):
+                policy = canonicalize_multi_caption_policy({
+                    "storage_mode": "files",
+                    "profile": profile,
+                    "groups": {
+                        "tags": {
+                            "extension": ".txt",
+                            "weight": 1,
+                            "processing": {
+                                "caption_separator": "|",
+                                "enable_wildcard": True,
+                                "caption_prefix": "prefix",
+                                "token_warmup_step": 0.5,
+                                "caption_tag_dropout_rate": 0.1,
+                            },
+                        }
+                    },
+                })
+                processing = policy["groups"]["tags"]["processing"]
+                self.assertEqual(processing["caption_separator"], "|")
+                self.assertTrue(processing["enable_wildcard"])
+                self.assertEqual(processing["token_warmup_step"], 0.5)
+
+    def test_numeric_fields_fail_closed_instead_of_truncating_or_accepting_nan(self):
+        bad_values = [
+            ("weight", float("nan")),
+            ("line", 1.5),
+        ]
+        for field, value in bad_values:
+            with self.subTest(field=field):
+                group = {"weight": 1, "line": 1}
+                group[field] = value
+                state = {
+                    "storage_mode": "multiline",
+                    "profile": "shared",
+                    "extension": ".txt",
+                    "groups": {"tags": group},
+                }
+                with self.assertRaises(ValueError):
+                    canonicalize_multi_caption_policy(state)
+
+    def test_group_names_cannot_collide_after_normalization(self):
+        with self.assertRaisesRegex(ValueError, "规范化后重复"):
             canonicalize_multi_caption_policy({
                 "storage_mode": "files",
-                "profile": "basic",
+                "profile": "shared",
                 "groups": {
-                    "tags": {
-                        "extension": ".txt",
-                        "weight": 1,
-                        "processing": {"caption_tag_dropout_rate": 0.1},
-                    }
+                    "tags": {"extension": ".txt", "weight": 1},
+                    " tags ": {"extension": ".nl.txt", "weight": 1},
                 },
             })
 
