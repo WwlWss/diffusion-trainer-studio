@@ -34,7 +34,7 @@ imagesize==1.4.1
 sentencepiece==0.2.1
 # for ui
 rich==14.1.0
-pandas
+pandas==2.2.3
 scipy
 requests
 pillow
