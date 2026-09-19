@@ -369,16 +369,14 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertNotIn("clip_l.adapter", flux_dit.available_components)
         self.assertNotIn("t5xxl.adapter", flux_dit.available_components)
 
-        # In the actual trainer T5 is independent from the CLIP/unet-only flag.
-        flux_dit_t5 = resolve_training_target_profile(
-            "flux-lora",
-            {
-                "network_train_unet_only": True,
-                "network_args": ["train_t5xxl=True"],
-            },
-        )
-        self.assertNotIn("clip_l.adapter", flux_dit_t5.available_components)
-        self.assertIn("t5xxl.adapter", flux_dit_t5.available_components)
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            resolve_training_target_profile(
+                "flux-lora",
+                {
+                    "network_train_unet_only": True,
+                    "network_args": ["train_t5xxl=True"],
+                },
+            )
 
         flux_te_only = resolve_training_target_profile(
             "flux-lora",
@@ -407,6 +405,15 @@ class ModelComponentProfileTests(unittest.TestCase):
         )
         self.assertIn("t5xxl.adapter", chroma.available_components)
         self.assertNotIn("clip_l.adapter", chroma.available_components)
+
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            resolve_training_target_profile(
+                "chroma-lora",
+                {
+                    "network_train_unet_only": True,
+                    "network_args": ["train_t5xxl=True"],
+                },
+            )
 
     def test_anima_full_and_lora_targets_preserve_existing_capabilities(self):
         full = resolve_training_target_profile(
@@ -485,16 +492,14 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertNotIn("clip_g.adapter", sd3_unet.available_components)
         self.assertNotIn("t5xxl.adapter", sd3_unet.available_components)
 
-        sd3_unet_t5 = resolve_training_target_profile(
-            "sd3-lora",
-            {
-                "network_train_unet_only": True,
-                "network_args": ["train_t5xxl=True"],
-            },
-        )
-        self.assertNotIn("clip_l.adapter", sd3_unet_t5.available_components)
-        self.assertNotIn("clip_g.adapter", sd3_unet_t5.available_components)
-        self.assertIn("t5xxl.adapter", sd3_unet_t5.available_components)
+        with self.assertRaisesRegex(ValueError, "inconsistent"):
+            resolve_training_target_profile(
+                "sd3-lora",
+                {
+                    "network_train_unet_only": True,
+                    "network_args": ["train_t5xxl=True"],
+                },
+            )
 
         sd3_te_only = resolve_training_target_profile(
             "sd3-lora",

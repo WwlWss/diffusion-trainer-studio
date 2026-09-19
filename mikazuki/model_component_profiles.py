@@ -764,6 +764,13 @@ def _resolve_flux_lora_target(
             "Flux/Chroma LoRA target cannot enable both unet-only and text-encoder-only modes."
         )
 
+    train_t5xxl = _network_bool(config, "train_t5xxl")
+    if unet_only and train_t5xxl:
+        raise ValueError(
+            "Flux/Chroma LoRA target is inconsistent: network_train_unet_only=true "
+            "cannot be combined with network_args train_t5xxl=true."
+        )
+
     available: set[str] = set()
     if not te_only:
         available.update(
@@ -773,7 +780,7 @@ def _resolve_flux_lora_target(
         )
     if not chroma and not unet_only:
         available.add("clip_l.adapter")
-    if _network_bool(config, "train_t5xxl"):
+    if train_t5xxl:
         available.add("t5xxl.adapter")
     return _target_profile(profile, available)
 
@@ -817,6 +824,13 @@ def _resolve_sd3_lora_target(
             "SD3 LoRA target cannot enable both unet-only and text-encoder-only modes."
         )
 
+    train_t5xxl = _network_bool(config, "train_t5xxl")
+    if unet_only and train_t5xxl:
+        raise ValueError(
+            "SD3 LoRA target is inconsistent: network_train_unet_only=true "
+            "cannot be combined with network_args train_t5xxl=true."
+        )
+
     available: set[str] = set()
     if not te_only:
         available.update(
@@ -826,7 +840,7 @@ def _resolve_sd3_lora_target(
         )
     if not unet_only:
         available.update({"clip_l.adapter", "clip_g.adapter"})
-    if _network_bool(config, "train_t5xxl"):
+    if train_t5xxl:
         available.add("t5xxl.adapter")
     return _target_profile(profile, available)
 
