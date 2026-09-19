@@ -37,6 +37,7 @@ class PreparedTrainingConfig:
     gpu_ids: Optional[list] = None
     warnings: list[str] = field(default_factory=list)
     sidecars: dict[str, str] = field(default_factory=dict)
+    runtime_blockers: list[str] = field(default_factory=list)
 
 
 def _as_bool(value: object) -> bool:
