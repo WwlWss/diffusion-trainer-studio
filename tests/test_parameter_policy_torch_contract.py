@@ -166,9 +166,22 @@ class ParameterPolicyTorchSourceContractTests(unittest.TestCase):
         self.assertIn("has already executed its own provider-defined initialization", self.source)
 
     def test_external_scheduler_factory_receives_each_child_optimizer(self):
-        self.assertIn("scheduler = scheduler_factory(optimizer_entry.optimizer)", self.source)
+        self.assertIn(
+            "scheduler = scheduler_factory(spec, optimizer_entry.optimizer)",
+            self.source,
+        )
         self.assertIn("is not attached to that child optimizer", self.source)
         self.assertIn("not torch.optim.lr_scheduler.LRScheduler", self.source)
+
+    def test_scheduler_factory_receives_profile_spec_for_legacy_context(self):
+        self.assertIn(
+            "[OptimizerInstanceSpec, torch.optim.Optimizer]",
+            self.source,
+        )
+        self.assertIn(
+            "scheduler = scheduler_factory(spec, optimizer_entry.optimizer)",
+            self.source,
+        )
 
     def test_scheduler_step_count_propagates_accelerate_direct_increment(self):
         self.assertIn("@_step_count.setter", self.source)

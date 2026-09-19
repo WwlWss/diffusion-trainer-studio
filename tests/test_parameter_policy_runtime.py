@@ -388,6 +388,22 @@ class ParameterPolicyRuntimeSpecTests(unittest.TestCase):
             {x.code for x in bad_frozen.exception.issues},
         )
 
+    def test_schedulefree_profile_compiles_as_optimizer_managed_without_external_scheduler(self):
+        p = FakeParameter()
+        policy = _policy(
+            profiles={"sf": {"type": "AdamWScheduleFree", "args": {}}},
+            components={"a": _train("sf", 1e-4)},
+        )
+        spec = compile_parameter_policy_runtime_spec(
+            policy,
+            _plan(_assignment(p, name="a.weight", component="a", profile="sf", lr=1e-4)),
+        )
+        self.assertEqual(len(spec.optimizers), 1)
+        optimizer = spec.optimizers[0]
+        self.assertEqual(optimizer.optimizer_type, "AdamWScheduleFree")
+        self.assertFalse(optimizer.uses_external_scheduler)
+        self.assertEqual(optimizer.lr_semantics, "optimizer_managed")
+
     def test_used_restricted_is_rejected_unused_planned_is_ignored(self):
         p = FakeParameter()
         policy = _policy(

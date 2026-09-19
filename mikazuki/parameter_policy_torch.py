@@ -55,7 +55,7 @@ class SchedulerRuntimeEntry:
 
 
 SchedulerFactory = Callable[
-    [torch.optim.Optimizer],
+    [OptimizerInstanceSpec, torch.optim.Optimizer],
     torch.optim.lr_scheduler.LRScheduler,
 ]
 
@@ -885,7 +885,7 @@ def build_parameter_policy_scheduler(
                     f"Optimizer Profile {spec.profile_name!r} requires an external "
                     "scheduler but no scheduler_factory was supplied."
                 )
-            scheduler = scheduler_factory(optimizer_entry.optimizer)
+            scheduler = scheduler_factory(spec, optimizer_entry.optimizer)
             if not isinstance(scheduler, torch.optim.lr_scheduler.LRScheduler):
                 raise ParameterPolicyTorchRuntimeError(
                     f"Scheduler factory for Profile {spec.profile_name!r} returned "
