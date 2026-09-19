@@ -1387,13 +1387,10 @@ class BaseDataset(torch.utils.data.Dataset):
                         image_path=image_info.absolute_path,
                         image_key=image_info.image_key,
                     )
-                    if resolved_caption is None:
-                        caption = self.process_caption(subset, image_info.caption)
-                    else:
-                        caption = self.process_caption(
-                            resolved_caption.processing,
-                            resolved_caption.caption,
-                        )
+                    caption = self.process_caption(
+                        resolved_caption.processing,
+                        resolved_caption.caption,
+                    )
                 if self.XTI_layers:
                     caption_layer = []
                     for layer in self.XTI_layers:
