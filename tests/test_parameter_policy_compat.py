@@ -146,7 +146,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                 )
 
     def test_dreambooth_malformed_stop_fails_closed(self):
-        for stop in (True, 1.5, "1.5", "later"):
+        for stop in (True, 1.5, "1.5", "later", float("inf")):
             with self.subTest(stop=stop), self.assertRaisesRegex(
                 ValueError,
                 "stop_text_encoder_training",
@@ -277,6 +277,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
             ("fused_backward_pass", "maybe"),
             ("fused_optimizer_groups", True),
             ("fused_optimizer_groups", 1.5),
+            ("fused_optimizer_groups", float("inf")),
             ("blockwise_fused_optimizers", 2),
             ("deepspeed", []),
         )

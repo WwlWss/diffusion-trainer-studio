@@ -16,6 +16,7 @@ It remains host-only and does not alter request/launch/runtime behavior.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from collections.abc import Mapping, Sequence
 from typing import Any, Callable
 
@@ -57,19 +58,27 @@ def _prepare_standard_snapshot(
     if not isinstance(config, Mapping):
         raise ValueError("Parameter Policy bootstrap: config 必须是 mapping。")
 
-    candidate = dict(config)
+    candidate = deepcopy(dict(config))
     for key in PARAMETER_POLICY_GUI_KEYS:
         candidate.pop(key, None)
     candidate.pop("parameter_policy_config", None)
 
     train_utils.fix_config_types(candidate)
-    return prepare_training_config(
+    prepared = prepare_training_config(
         candidate,
         page_train_type=page_type,
         resolve_backend=resolve_backend,
         launch=False,
         toml_path=None,
     )
+
+    # ui_custom_params is intentionally last-write-wins for legacy trainer
+    # values, but bootstrap migration must never let it re-introduce
+    # Parameter Policy host fields into the Standard snapshot.
+    for key in PARAMETER_POLICY_GUI_KEYS:
+        prepared.config.pop(key, None)
+    prepared.config.pop("parameter_policy_config", None)
+    return prepared
 
 
 def _parse_legacy_lr(value: object, *, field: str) -> float:

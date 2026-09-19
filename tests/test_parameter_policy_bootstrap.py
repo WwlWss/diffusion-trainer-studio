@@ -22,6 +22,37 @@ def _resolver(config, requested):
 
 
 class ParameterPolicyBootstrapPrimitiveTests(unittest.TestCase):
+    def test_prepare_standard_snapshot_deep_copies_nested_values(self):
+        raw = {
+            "learning_rate": "1e-4",
+            "flux_lora_target": "dit",
+            "network_args": ["rank_dropout=0.1"],
+        }
+        before = copy.deepcopy(raw)
+        prepared = _prepare_standard_snapshot(
+            raw,
+            "flux-lora",
+            resolve_backend=_resolver,
+        )
+        self.assertEqual(raw, before)
+        self.assertIsNot(prepared.config.get("network_args"), raw["network_args"])
+
+    def test_prepare_standard_snapshot_strips_policy_fields_reintroduced_by_custom_toml(self):
+        prepared = _prepare_standard_snapshot(
+            {
+                "learning_rate": "1e-4",
+                "lora_target": "unet",
+                "ui_custom_params": (
+                    'optimization_mode = "component"\n'
+                    'parameter_policy_config = "stale.json"'
+                ),
+            },
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+        self.assertNotIn("optimization_mode", prepared.config)
+        self.assertNotIn("parameter_policy_config", prepared.config)
+
     def test_prepare_standard_snapshot_does_not_mutate_caller(self):
         raw = {
             "optimization_mode": "component",
@@ -654,7 +685,7 @@ class ParameterPolicyFullBootstrapTests(unittest.TestCase):
             "learning_rate": "1e-4",
             "unet_lr": "2e-4",
             "text_encoder_lr": "0",
-            "lora_target": "both",
+            "lora_target": "unet_text_encoder",
         }
         before = copy.deepcopy(raw)
 

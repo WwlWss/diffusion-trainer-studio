@@ -71,7 +71,7 @@ def _positive_count(value: object, *, field: str) -> bool:
         )
     try:
         parsed = int(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, OverflowError) as exc:
         raise ValueError(
             f"Parameter Policy compatibility: {field} 必须是非负整数，收到 {value!r}。"
         ) from exc
@@ -224,7 +224,7 @@ def parameter_policy_compatibility_blockers(
                 )
             try:
                 stop_step = int(stop)
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError, OverflowError) as exc:
                 raise ValueError(
                     "Parameter Policy compatibility: "
                     "stop_text_encoder_training 必须是整数 step。"

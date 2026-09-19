@@ -636,17 +636,23 @@ Standard training behavior therefore cannot regress from Commit 4.
 
 ## 14. Purity and performance
 
-All Commit 4 work is dictionary/string/number processing.
+Commit 4 adds no new model loading, tensor work, device work, or parameter scanning.
+The bootstrap deliberately reuses the existing Standard effective-config compiler;
+therefore it may inherit lightweight checks that Standard already performs, such
+as Anima safetensors header inspection for model-variant validation. Commit 4
+must not add any additional checkpoint/model inspection beyond that existing
+compiler behavior.
 
 No:
 
 - torch import;
-- filesystem model inspection;
 - trainer source parsing at runtime;
 - tensor work;
-- device work.
+- device work;
+- model parameter scanning.
 
-Expected cost is O(number of config fields + network_args + Component IDs).
+Expected additional bootstrap cost after Standard compilation is
+O(number of config fields + network_args + Component IDs).
 
 The implementation must not call the model parameter scanner.
 
