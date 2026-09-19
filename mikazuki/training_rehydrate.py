@@ -69,7 +69,7 @@ def _infer_checkpoint_mode(config: dict) -> str:
     return "standard" if gradient else "off"
 
 
-def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> dict:
+def rehydrate_trainer_config(\n    effective_config: dict,\n    page_train_type: str,\n    *,\n    sidecars: dict[str, str] | None = None,\n) -> dict:
     """Inverse-map an exported trainer TOML into current-page GUI state.
 
     The inverse is semantic rather than byte-for-byte historical state: values
@@ -80,13 +80,20 @@ def rehydrate_trainer_config(effective_config: dict, page_train_type: str) -> di
     config = deepcopy(effective_config)
     multi_caption_path = config.pop("multi_caption_config", None)
     if multi_caption_path:
-        path = Path(str(multi_caption_path))
-        if not path.is_file():
-            raise ValueError(f"Multi-Caption sidecar 不存在，不能静默回退 Standard: {path}")
+        path_key = str(multi_caption_path)
+        sidecar_content = (sidecars or {}).get(path_key)
+        if sidecar_content is None:
+            path = Path(path_key)
+            if not path.is_file():
+                raise ValueError(f"Multi-Caption sidecar 不存在，不能静默回退 Standard: {path}")
+            try:
+                sidecar_content = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise ValueError(f"Multi-Caption sidecar 读取失败: {path}: {exc}") from exc
         try:
-            policy = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ValueError(f"Multi-Caption sidecar 读取失败: {path}: {exc}") from exc
+            policy = json.loads(sidecar_content)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Multi-Caption sidecar JSON 无效: {path_key}: {exc}") from exc
         multi_caption_gui = rehydrate_multi_caption_policy(policy, page_train_type)
     else:
         multi_caption_gui = {"caption_mode": "standard"}
