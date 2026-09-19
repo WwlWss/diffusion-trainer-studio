@@ -45,7 +45,7 @@ class AdapterTargetMetadata:
             raise ValueError("AdapterTargetMetadata.module_type must be a non-empty string.")
 
         object.__setattr__(self, "root", self.root.strip().casefold())
-        object.__setattr__(self, "module_path", self.module_path.strip("."))
+        object.__setattr__(self, "module_path", self.module_path.strip().strip("."))
         object.__setattr__(self, "module_type", self.module_type.strip())
 
 
@@ -356,6 +356,9 @@ def _resolve_adapter_target(
     module_table: Mapping[str, Any],
     adapter_targets: Mapping[int, AdapterTargetMetadata],
 ) -> AdapterTargetMetadata | None:
+    if not adapter_targets:
+        return None
+
     registrations: list[AdapterTargetMetadata] = []
     for module in _module_chain(module_path, module_table):
         metadata = adapter_targets.get(id(module))
@@ -530,9 +533,15 @@ def _alias_sort_key(alias: ParameterAlias) -> tuple[object, ...]:
     )
 
 
+def _descriptor_display_name(descriptor: ParameterDescriptor) -> str:
+    if descriptor.aliases:
+        return descriptor.aliases[0].qualified_name
+    return "<parameter-without-alias>"
+
+
 def _descriptor_sort_key(descriptor: ParameterDescriptor) -> tuple[object, ...]:
     return (
-        descriptor.canonical_name,
+        _descriptor_display_name(descriptor),
         tuple(alias.qualified_name for alias in descriptor.aliases),
         descriptor.shape,
         descriptor.dtype,
@@ -734,16 +743,17 @@ def _descriptor_identity_issues(
         by_parameter_id.setdefault(descriptor.parameter_id, []).append(descriptor)
         if id(descriptor.parameter) != descriptor.parameter_id:
             conflict_ids.add(descriptor.parameter_id)
+            display_name = _descriptor_display_name(descriptor)
             issues.append(
                 RoutingIssue(
                     severity="error",
                     code="descriptor_identity_mismatch",
                     message=(
-                        f"Descriptor {descriptor.canonical_name!r} carries "
-                        "parameter_id that does not match id(parameter)."
+                        f"Descriptor {display_name!r} carries parameter_id that "
+                        "does not match id(parameter)."
                     ),
                     parameter_id=descriptor.parameter_id,
-                    examples=(descriptor.canonical_name,),
+                    examples=(display_name,),
                 )
             )
 
@@ -751,7 +761,9 @@ def _descriptor_identity_issues(
         if len(group) <= 1:
             continue
         conflict_ids.add(parameter_id)
-        examples = tuple(sorted({item.canonical_name for item in group})[:5])
+        examples = tuple(
+            sorted({_descriptor_display_name(item) for item in group})[:5]
+        )
         issues.append(
             RoutingIssue(
                 severity="error",
@@ -848,7 +860,14 @@ def _resolve_parameter_ownership_pass(
     profile = get_model_component_profile(train_type)
     target = resolve_training_target_profile(train_type, effective_config)
 
-    ordered_descriptors = tuple(sorted(descriptors, key=_descriptor_sort_key))
+    raw_descriptors = tuple(descriptors)
+    for descriptor in raw_descriptors:
+        if not isinstance(descriptor, ParameterDescriptor):
+            raise TypeError(
+                "Parameter routing requires ParameterDescriptor instances from "
+                "scan_parameter_roots()."
+            )
+    ordered_descriptors = tuple(sorted(raw_descriptors, key=_descriptor_sort_key))
     identity_conflicts, identity_issues = _descriptor_identity_issues(
         ordered_descriptors
     )
@@ -910,6 +929,7 @@ def _resolve_parameter_ownership_pass(
                     code="descriptor_without_alias",
                     message="Parameter descriptor contains no aliases.",
                     parameter_id=descriptor.parameter_id,
+                    examples=("<parameter-without-alias>",),
                 )
             )
             continue
@@ -1205,24 +1225,46 @@ def _route_trainable_ownership(
             continue
 
         decisions: list[tuple[ParameterAlias, bool, str]] = []
+        eligibility_error: Exception | None = None
         for alias in descriptor.aliases:
-            decision = ownership.profile.eligibility_check(
-                eligibility_policy,
-                alias,
-                component_id,
-            )
-            if (
-                not isinstance(decision, tuple)
-                or len(decision) != 2
-                or not isinstance(decision[0], bool)
-                or not isinstance(decision[1], str)
-            ):
-                raise ValueError(
-                    f"Model Component Profile {ownership.profile.train_type!r} "
-                    f"returned invalid eligibility decision for "
-                    f"{alias.qualified_name!r}."
+            try:
+                decision = ownership.profile.eligibility_check(
+                    eligibility_policy,
+                    alias,
+                    component_id,
                 )
+                if (
+                    not isinstance(decision, tuple)
+                    or len(decision) != 2
+                    or not isinstance(decision[0], bool)
+                    or not isinstance(decision[1], str)
+                ):
+                    raise ValueError(
+                        "eligibility_check() must return tuple[bool, str]"
+                    )
+            except Exception as exc:
+                eligibility_error = exc
+                break
             decisions.append((alias, decision[0], decision[1]))
+
+        if eligibility_error is not None:
+            unroutable.append(descriptor)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="eligibility_policy_error",
+                    message=(
+                        f"Model Component Profile {ownership.profile.train_type!r} "
+                        f"could not evaluate eligibility policy "
+                        f"{eligibility_policy!r} for Component "
+                        f"{component_id!r}: {eligibility_error}"
+                    ),
+                    component_id=component_id,
+                    parameter_id=descriptor.parameter_id,
+                    examples=(descriptor.canonical_name,),
+                )
+            )
+            continue
 
         eligibility_values = {eligible for _, eligible, _ in decisions}
         if len(eligibility_values) != 1:

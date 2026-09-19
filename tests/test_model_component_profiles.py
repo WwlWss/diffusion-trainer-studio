@@ -540,5 +540,32 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertFalse(target.is_available("text_encoder_1"))
 
 
+    def test_anima_qwen_adapter_text_encoder_root_matches_component_root_contract(self):
+        profile = get_model_component_profile("anima-lora")
+        alias = Alias(
+            "network",
+            "lora_down",
+            adapter_target=Target(
+                "text_encoder",
+                "model.layers.0.self_attn.q_proj",
+            ),
+        )
+        component_id = profile.classify_alias(alias)
+        self.assertEqual(component_id, "qwen3.adapter")
+        self.assertIn("text_encoder", profile.components[component_id].roots)
+
+    def test_flux_does_not_accept_sd3_text_encoder_3_as_t5_root(self):
+        profile = get_model_component_profile("flux-lora")
+        alias = Alias(
+            "network",
+            "lora_down",
+            adapter_target=Target(
+                "text_encoder_3",
+                "encoder.block.0.layer.0.SelfAttention.q",
+            ),
+        )
+        self.assertIsNone(profile.classify_alias(alias))
+
+
 if __name__ == "__main__":
     unittest.main()

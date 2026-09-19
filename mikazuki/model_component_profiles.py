@@ -340,7 +340,7 @@ def _flux_lora_classifier(alias: ParameterAliasLike, *, chroma: bool) -> str | N
         return None
     if not chroma and root in {"clip_l", "text_encoder_1"}:
         return "clip_l.adapter"
-    if root in {"t5xxl", "text_encoder_2", "text_encoder_3"}:
+    if root in {"t5xxl", "text_encoder_2"}:
         return "t5xxl.adapter"
     return None
 
@@ -597,7 +597,7 @@ _ANIMA_LORA_COMPONENTS = _components(
     ("dit.modulation.adapter", "DiT Modulation Adapters", "Anima LoRA targeting AdaLN modulation modules.", ("dit", "anima")),
     ("dit.other.adapter", "DiT Other Adapters", "Other Anima DiT LoRA targets.", ("dit", "anima")),
     ("llm_adapter.adapter", "LLM Adapter LoRA", "LoRA attached to the optional Anima LLM Adapter.", ("llm_adapter", "dit", "anima")),
-    ("qwen3.adapter", "Qwen3 Adapters", "LoRA attached to Qwen3 attention/MLP modules.", ("qwen3",)),
+    ("qwen3.adapter", "Qwen3 Adapters", "LoRA attached to Qwen3 attention/MLP modules.", ("qwen3", "text_encoder")),
 )
 
 _SD3_LORA_COMPONENTS = _components(

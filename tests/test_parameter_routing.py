@@ -1306,17 +1306,8 @@ class FinalRoutingPlanTests(unittest.TestCase):
         self.assertEqual(unavailable_plan.stats.by_route["unavailable"].tensors, 1)
 
     def test_assignment_audit_removes_duplicate_physical_ownership(self):
-        parameter = FakeParameter((2, 2))
-        descriptor = ParameterDescriptor(
-            parameter=parameter,
-            parameter_id=id(parameter),
-            aliases=(),
-            shape=(2, 2),
-            ndim=2,
-            numel=4,
-            dtype="float32",
-            requires_grad=True,
-        )
+        descriptors, parameter = _flux_single_descriptor()
+        descriptor = descriptors[0]
         first = RoutingAssignment(
             parameter=parameter,
             parameter_id=id(parameter),
@@ -1402,6 +1393,36 @@ class FinalRoutingPlanTests(unittest.TestCase):
             list(plan.stats.by_parameter_class),
             sorted(plan.stats.by_parameter_class),
         )
+
+
+    def test_public_router_reports_descriptor_without_alias_instead_of_crashing(self):
+        parameter = FakeParameter((2, 2))
+        descriptor = ParameterDescriptor(
+            parameter=parameter,
+            parameter_id=id(parameter),
+            aliases=(),
+            shape=(2, 2),
+            ndim=2,
+            numel=4,
+            dtype="float32",
+            requires_grad=True,
+        )
+        plan = build_parameter_routing_plan(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=(descriptor,),
+        )
+        self.assertFalse(plan.is_valid)
+        self.assertIn("descriptor_without_alias", {issue.code for issue in plan.issues})
+        self.assertEqual(plan.stats.conflicts.tensors, 1)
+
+    def test_adapter_scan_fast_path_does_not_walk_ancestry_without_registry(self):
+        parameter = FakeParameter((2, 2))
+        root = _nested_linear(("a", "b", "c"), parameter)
+        descriptors = scan_parameter_roots({"unet": root}, adapter_targets={})
+        self.assertEqual(len(descriptors), 1)
+        self.assertIsNone(descriptors[0].canonical_alias.adapter_target)
 
 
 if __name__ == "__main__":
