@@ -66,7 +66,11 @@ class ResolvedCaption:
     processing: CaptionProcessingOptions
 
 
-def _cleanup_index(path: str) -> None:
+def _cleanup_index(path: str, owner_pid: int) -> None:
+    # Linux fork workers inherit the parent's atexit registry. Only the
+    # process that created the index may remove it.
+    if os.getpid() != owner_pid:
+        return
     try:
         Path(path).unlink(missing_ok=True)
     except OSError:
@@ -121,6 +125,7 @@ class MultiCaptionResolver:
         self._image_key_mode = str(self.storage.get("image_key_mode") or "relative_path")
         self._json_root: Path | None = None
         self._conn: sqlite3.Connection | None = None
+        self._conn_pid: int | None = None
         self._candidate_cache: OrderedDict[str, dict[str, str]] = OrderedDict()
 
         infos = [info for info in image_infos if not bool(getattr(info, "is_reg", False))]
@@ -149,18 +154,21 @@ class MultiCaptionResolver:
         cloned = copy.deepcopy(self)
         cloned.deterministic = bool(deterministic)
         cloned._conn = None
+        cloned._conn_pid = None
         cloned._candidate_cache = OrderedDict()
         return cloned
 
     def __getstate__(self):
         state = dict(self.__dict__)
         state["_conn"] = None
+        state["_conn_pid"] = None
         state["_candidate_cache"] = OrderedDict()
         return state
 
     def __setstate__(self, state):
         self.__dict__.update(state)
         self._conn = None
+        self._conn_pid = None
         self._candidate_cache = OrderedDict()
 
     @staticmethod
@@ -280,7 +288,7 @@ class MultiCaptionResolver:
                 conn.close()
             except Exception:
                 pass
-        atexit.register(_cleanup_index, str(target))
+        atexit.register(_cleanup_index, str(target), os.getpid())
         return str(target)
 
     def _index_files(self, conn: sqlite3.Connection, image_infos: list[Any]) -> None:
@@ -388,10 +396,19 @@ class MultiCaptionResolver:
                 raise ValueError(f"Multi-Caption JSONL could not be read: {source}: {exc}") from exc
 
     def _connection(self) -> sqlite3.Connection:
+        pid = os.getpid()
+        if self._conn is not None and self._conn_pid != pid:
+            try:
+                self._conn.close()
+            except sqlite3.Error:
+                pass
+            self._conn = None
+            self._conn_pid = None
         if self._conn is None:
             if not os.path.isfile(self._db_path):
                 raise ValueError("Multi-Caption caption index disappeared before training completed")
             self._conn = sqlite3.connect(self._db_path)
+            self._conn_pid = pid
         return self._conn
 
     def _candidates(self, image_path: str) -> dict[str, str]:
