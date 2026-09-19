@@ -292,18 +292,6 @@ class NativeLoRAMetadataEmitterContractTests(unittest.TestCase):
                 "ggpo_beta",
                 "ggpo_sigma",
             ],
-            "sd3": [
-                "self",
-                "lora_name",
-                "org_module",
-                "multiplier",
-                "lora_dim",
-                "alpha",
-                "dropout",
-                "rank_dropout",
-                "module_dropout",
-                "split_dims",
-            ],
         }
         for key, expected_args in expected.items():
             with self.subTest(key=key):
@@ -322,6 +310,18 @@ class NativeLoRAMetadataEmitterContractTests(unittest.TestCase):
                     [arg.arg for arg in init.args.args],
                     expected_args,
                 )
+
+        sd3 = self._source("sd3")
+        self.assertIn(
+            "from networks.lora_flux import LoRAModule, LoRAInfModule",
+            sd3,
+        )
+        self.assertFalse(
+            any(
+                isinstance(node, ast.ClassDef) and node.name == "LoRAModule"
+                for node in self._tree("sd3").body
+            )
+        )
 
     def test_marker_payload_contains_only_root_path_and_original_type_strings(self):
         for key in self.FILES:
