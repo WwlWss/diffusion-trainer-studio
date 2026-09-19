@@ -79,7 +79,7 @@ Schema.intersect([
     // tokenizer / encoding 全局设置：Standard 与 Multi 共用
     Schema.object({
         weighted_captions: Schema.boolean().description("使用带权重的 token；这是全局 encoding 选项，不属于某个 Group"),
-        max_token_length: Schema.number().default(255).description("最大 token 长度；Standard 与 Multi 共用"),
+        sd_max_token_length_mode: Schema.union(["75", "150", "225"]).default("75").description("CLIP 最大 token 长度；Standard 与 Multi 共用"),
     }).description("Caption 全局编码"),
 
     SHARED_SCHEMAS.CAPTION_MODE_SHARED(
