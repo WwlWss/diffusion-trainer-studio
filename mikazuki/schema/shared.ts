@@ -26,54 +26,75 @@
     const multiCaptionProcessingShared = multiCaptionProcessingCommon;
     const multiCaptionProcessingAnima = multiCaptionProcessingCommon;
 
-    const multiCaptionSchema = (processingFactory) => Schema.intersect([
+    const multiCaptionBody = (processingFactory) => Schema.intersect([
         Schema.object({
-            caption_mode: Schema.union(["standard", "multi"]).default("standard").description("Standard 完全沿用原 caption 路径；Multi-Caption 才启用多提示词解析。"),
+            multi_caption_storage: Schema.union(["files", "multiline", "json", "jsonl"]).default("files").description("Multi-Caption caption 来源"),
         }),
         Schema.union([
-            Schema.intersect([
-                Schema.object({
-                    caption_mode: Schema.const("multi").required(),
-                    multi_caption_storage: Schema.union(["files", "multiline", "json", "jsonl"]).default("files").description("Multi-Caption caption 来源"),
-                }),
-                Schema.union([
-                    Schema.object({
-                        multi_caption_storage: Schema.const("files").required(),
-                        multi_caption_file_groups: Schema.dict(Schema.object({
-                            enabled: Schema.boolean().default(true),
-                            weight: Schema.number().min(0).default(1),
-                            extension: Schema.string().default(".txt").description("该 Group 的 caption 文件扩展名"),
-                            processing: processingFactory(),
-                        })).description("Separate Files Caption Groups；字典 key 就是 Group Name"),
-                    }),
-                    Schema.object({
-                        multi_caption_storage: Schema.const("multiline").required(),
-                        multi_caption_line_extension: Schema.string().default(".txt").description("多行 caption 文件扩展名"),
-                        multi_caption_line_groups: Schema.dict(Schema.object({
-                            enabled: Schema.boolean().default(true),
-                            weight: Schema.number().min(0).default(1),
-                            line: Schema.number().min(1).step(1).default(1).description("1-based 物理行号；空行也占行号"),
-                            processing: processingFactory(),
-                        })).description("Simple Multi-Line Caption Groups"),
-                    }),
-                    Schema.object({
-                        multi_caption_storage: Schema.union(["json", "jsonl"]).required(),
-                        multi_caption_json_path: Schema.string().role("filepicker", { type: "file" }).description("Dedicated Multi-Caption JSON/JSONL；不会复用 in_json/dataset metadata"),
-                        multi_caption_json_root: Schema.string().role("filepicker", { type: "folder" }).description("relative_path lookup 的可选显式根目录；留空时相对 JSON 所在目录"),
-                        multi_caption_image_key_mode: Schema.union(["relative_path", "filename", "stem"]).default("relative_path").description("JSON 图片索引方式；filename/stem 有重名时启动会报错"),
-                        multi_caption_jsonl_image_key_field: Schema.string().default("image").description("JSONL 每条记录中存图片 key 的字段名"),
-                        multi_caption_json_groups: Schema.dict(Schema.object({
-                            enabled: Schema.boolean().default(true),
-                            weight: Schema.number().min(0).default(1),
-                            key: Schema.string().description("该 Group 在记录中的 JSON key"),
-                            processing: processingFactory(),
-                        })).description("JSON / JSONL Caption Groups"),
-                    }),
-                ]),
-            ]),
-            Schema.object({}),
+            Schema.object({
+                multi_caption_storage: Schema.const("files").required(),
+                multi_caption_file_groups: Schema.dict(Schema.object({
+                    enabled: Schema.boolean().default(true),
+                    weight: Schema.number().min(0).default(1),
+                    extension: Schema.string().default(".txt").description("该 Group 的 caption 文件扩展名"),
+                    processing: processingFactory(),
+                })).description("Separate Files Caption Groups；字典 key 就是 Group Name；Group 顺序不参与权重语义"),
+            }),
+            Schema.object({
+                multi_caption_storage: Schema.const("multiline").required(),
+                multi_caption_line_extension: Schema.string().default(".txt").description("多行 caption 文件扩展名"),
+                multi_caption_line_groups: Schema.dict(Schema.object({
+                    enabled: Schema.boolean().default(true),
+                    weight: Schema.number().min(0).default(1),
+                    line: Schema.number().min(1).step(1).default(1).description("1-based 物理行号；空行也占行号"),
+                    processing: processingFactory(),
+                })).description("Simple Multi-Line Caption Groups；Group 顺序不参与权重语义"),
+            }),
+            Schema.object({
+                multi_caption_storage: Schema.const("json").required(),
+                multi_caption_json_path: Schema.string().role("filepicker", { type: "file" }).description("Dedicated Multi-Caption JSON；不会复用 in_json/dataset metadata"),
+                multi_caption_json_root: Schema.string().role("filepicker", { type: "folder" }).description("relative_path lookup 的可选显式根目录；留空时相对 JSON 所在目录"),
+                multi_caption_image_key_mode: Schema.union(["relative_path", "filename", "stem"]).default("relative_path").description("JSON 图片索引方式；filename/stem 有重名时启动会报错"),
+                multi_caption_json_groups: Schema.dict(Schema.object({
+                    enabled: Schema.boolean().default(true),
+                    weight: Schema.number().min(0).default(1),
+                    key: Schema.string().description("JSON key；以 / 开头时按 RFC6901 JSON Pointer 读取嵌套路径"),
+                    processing: processingFactory(),
+                })).description("JSON Caption Groups；Group 顺序不参与权重语义"),
+            }),
+            Schema.object({
+                multi_caption_storage: Schema.const("jsonl").required(),
+                multi_caption_json_path: Schema.string().role("filepicker", { type: "file" }).description("Dedicated Multi-Caption JSONL；不会复用 in_json/dataset metadata"),
+                multi_caption_json_root: Schema.string().role("filepicker", { type: "folder" }).description("relative_path lookup 的可选显式根目录；留空时相对 JSONL 所在目录"),
+                multi_caption_image_key_mode: Schema.union(["relative_path", "filename", "stem"]).default("relative_path").description("JSONL 图片索引方式；filename/stem 有重名时启动会报错"),
+                multi_caption_jsonl_image_key_field: Schema.string().default("image").description("JSONL 每条记录中存图片 key 的字段名"),
+                multi_caption_json_groups: Schema.dict(Schema.object({
+                    enabled: Schema.boolean().default(true),
+                    weight: Schema.number().min(0).default(1),
+                    key: Schema.string().description("JSON key；以 / 开头时按 RFC6901 JSON Pointer 读取嵌套路径"),
+                    processing: processingFactory(),
+                })).description("JSONL Caption Groups；Group 顺序不参与权重语义"),
+            }),
         ]),
-    ]).description("Multi-Caption（可选；关闭时不改变原有训练行为）");
+    ]);
+
+    const captionModeSchema = (standardSchema, processingFactory) => Schema.intersect([
+        Schema.object({
+            caption_mode: Schema.union(["standard", "multi"]).default("standard").description("Standard 使用原 sd-scripts caption；Multi-Caption 按 Group 在每次训练 exposure 选择 caption。"),
+        }),
+        // Put the guarded Multi branch first and make Standard the unconstrained
+        // fallback. This remains stable in the pinned legacy frontend even
+        // before caption_mode's default has been materialized into form state.
+        Schema.union([
+            Schema.intersect([
+                Schema.object({ caption_mode: Schema.const("multi").required() }),
+                multiCaptionBody(processingFactory),
+            ]),
+            standardSchema,
+        ]),
+    ]).description("Caption Mode");
+
+
 
     let data = {
         RAW: {
@@ -290,9 +311,9 @@
             ]),
         ]),
 
-        MULTI_CAPTION_BASIC: multiCaptionSchema(multiCaptionProcessingBasic),
-        MULTI_CAPTION_SHARED: multiCaptionSchema(multiCaptionProcessingShared),
-        MULTI_CAPTION_ANIMA: multiCaptionSchema(multiCaptionProcessingAnima),
+        CAPTION_MODE_BASIC: (standardSchema) => captionModeSchema(standardSchema, multiCaptionProcessingBasic),
+        CAPTION_MODE_SHARED: (standardSchema) => captionModeSchema(standardSchema, multiCaptionProcessingShared),
+        CAPTION_MODE_ANIMA: (standardSchema) => captionModeSchema(standardSchema, multiCaptionProcessingAnima),
 
         NOISE_SETTINGS: Schema.object({
             noise_offset: Schema.number().step(0.01).description("在训练中添加噪声偏移来改良生成非常暗或者非常亮的图像，如果启用推荐为 0.1"),
