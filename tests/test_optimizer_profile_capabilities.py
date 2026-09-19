@@ -52,6 +52,7 @@ class OptimizerProfileCapabilityTests(unittest.TestCase):
             "adjust_lr_fn": "match_rms_adamw",
         })
         self.assertEqual(args["momentum"], 0.95)
+        self.assertEqual(validate_muon_arguments({"momentum": 1.0})["momentum"], 1.0)
         self.assertEqual(args["weight_decay"], 0.01)
         self.assertEqual(args["ns_coefficients"], (3.4445, -4.775, 2.0315))
         self.assertEqual(args["ns_steps"], 5)
@@ -61,12 +62,12 @@ class OptimizerProfileCapabilityTests(unittest.TestCase):
         bad = (
             {"unknown": 1},
             {"momentum": float("nan")},
-            {"momentum": 1.0},
             {"weight_decay": -0.1},
             {"nesterov": 1},
             {"ns_coefficients": [1.0, 2.0]},
             {"ns_steps": 1.5},
             {"ns_steps": 0},
+            {"ns_steps": 100},
             {"eps": 0.0},
             {"adjust_lr_fn": "invented-mode"},
         )
