@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "mikazuki/anima_qwen_config.py"
+      - "mikazuki/anima_runtime.py"
+      - "mikazuki/multi_caption_config.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -58,6 +60,19 @@ on:
       - "tests/test_full_trainer_contract.py"
       - "tests/test_full_schema_contract.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
+      - "tools/apply_anima_multi_caption_patch.py"
+      - "scripts/stable/library/multi_caption.py"
+      - "scripts/stable/library/train_util.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/stable/train_db.py"
+      - "scripts/stable/sdxl_train.py"
+      - "scripts/dev/library/multi_caption.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/dev/flux_train.py"
+      - "scripts/dev/sd3_train.py"
+      - "tests/test_multi_caption*.py"
+      - "tests/test_anima_multi_caption_runtime.py"
       - "ANIMA.md"
       - ".gitmodules"
       - "sd-scripts"
@@ -85,6 +100,8 @@ jobs:
         run: |
           python -m py_compile \
             mikazuki/anima_qwen_config.py \
+            mikazuki/anima_runtime.py \
+            mikazuki/multi_caption_config.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -111,6 +128,24 @@ jobs:
             mikazuki/tasks.py \
             mikazuki/utils/train_utils.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
+            tools/apply_anima_multi_caption_patch.py \
+            scripts/stable/library/multi_caption.py \
+            scripts/stable/library/train_util.py \
+            scripts/stable/train_network.py \
+            scripts/stable/train_db.py \
+            scripts/stable/sdxl_train.py \
+            scripts/dev/library/multi_caption.py \
+            scripts/dev/library/train_util.py \
+            scripts/dev/train_network.py \
+            scripts/dev/flux_train.py \
+            scripts/dev/sd3_train.py \
+            tests/test_multi_caption_config.py \
+            tests/test_multi_caption_request_contract.py \
+            tests/test_stable_multi_caption_runtime.py \
+            tests/test_multi_caption_runtime_parity.py \
+            tests/test_multi_caption_safety.py \
+            tests/test_multi_caption_backend_matrix.py \
+            tests/test_anima_multi_caption_runtime.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -134,9 +169,19 @@ jobs:
 
       - name: Syntax-check expert GUI schemas
         run: |
+          cp mikazuki/schema/shared.ts /tmp/shared.js
+          cp mikazuki/schema/lora-basic.ts /tmp/lora-basic.js
+          cp mikazuki/schema/lora-master.ts /tmp/lora-master.js
+          cp mikazuki/schema/dreambooth.ts /tmp/dreambooth.js
+          cp mikazuki/schema/sd3-lora.ts /tmp/sd3-lora.js
           cp mikazuki/schema/flux-lora.ts /tmp/flux-lora.js
           cp mikazuki/schema/flux-finetune.ts /tmp/flux-finetune.js
           cp mikazuki/schema/sdxl-full.ts /tmp/sdxl-full.js
+          node --check /tmp/shared.js
+          node --check /tmp/lora-basic.js
+          node --check /tmp/lora-master.js
+          node --check /tmp/dreambooth.js
+          node --check /tmp/sd3-lora.js
           node --check /tmp/flux-lora.js
           node --check /tmp/flux-finetune.js
           node --check /tmp/sdxl-full.js
@@ -174,6 +219,20 @@ jobs:
           node --check /tmp/dts-layout.mjs
           node --check /tmp/dts-home.mjs
           node --check /tmp/dts-about.mjs
+
+      - name: Multi-Caption contract and backend matrix
+        run: |
+          python -m unittest discover -s tests -p 'test_multi_caption*.py' -v
+          python -m unittest tests.test_anima_multi_caption_runtime -v
+
+      - name: Validate Multi-Caption patch against pinned Anima source
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          from tools.apply_anima_multi_caption_patch import validate_patch
+          validate_patch(Path("sd-scripts"))
+          print("Anima Multi-Caption patch validation passed")
+          PY
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
