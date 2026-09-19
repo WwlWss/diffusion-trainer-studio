@@ -96,5 +96,20 @@ class AnimaComposableRuntimeTests(unittest.TestCase):
             self.assertTrue((tree / "library" / "multi_caption.py").is_file())
 
 
+    def test_staging_ignores_untracked_worktree_files(self):
+        source = Path("sd-scripts").resolve()
+        probe = source / "__dts_untracked_probe__.txt"
+        probe.write_text("must not be staged", encoding="utf-8")
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                tree = materialize_anima_runtime_tree(
+                    ("multi_caption",), source_dir=source, cache_root=temp_dir
+                )
+                self.assertFalse((tree / probe.name).exists())
+                self.assertLess(len(tree.name), 32)
+        finally:
+            probe.unlink(missing_ok=True)
+
+
 if __name__ == "__main__":
     unittest.main()
