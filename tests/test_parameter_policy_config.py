@@ -236,6 +236,15 @@ class ParameterPolicyConfigTests(unittest.TestCase):
         self.assertEqual(config["ui_custom_params"], 'optimizer_type = "Lion"')
 
 
+    def test_standard_trainer_rehydrate_does_not_invent_hidden_policy_gui_state(self):
+        gui = rehydrate_trainer_config(
+            {"optimizer_type": "AdamW", "learning_rate": 1e-4},
+            "lora-master",
+        )
+        self.assertNotIn("optimization_mode", gui)
+        self.assertNotIn("parameter_policy_profiles", gui)
+        self.assertNotIn("parameter_policy_components", gui)
+
     def test_trainer_rehydrate_restores_component_mode_from_sidecar_content(self):
         config = _component_config()
         path, sidecars, policy = build_parameter_policy_sidecar(config)
