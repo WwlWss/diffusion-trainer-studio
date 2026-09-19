@@ -139,10 +139,10 @@ def _drop_empty_optional_fields(config: dict) -> None:
             config.pop(field, None)
 
 
-def _parse_ui_custom_params(config: dict) -> None:
-    payload = config.pop("ui_custom_params", None)
+def parse_ui_custom_params(payload: object) -> dict:
+    """Parse the custom-TOML overlay without mutating caller state."""
     if _is_empty(payload):
-        return
+        return {}
     if not isinstance(payload, str):
         raise ValueError("ui_custom_params 必须是 TOML 文本。")
     try:
@@ -151,7 +151,14 @@ def _parse_ui_custom_params(config: dict) -> None:
         raise ValueError(f"ui_custom_params TOML 解析失败: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("ui_custom_params 必须解析为 TOML 顶层键值。")
-    config["__ui_custom_overrides"] = parsed
+    return parsed
+
+
+def _parse_ui_custom_params(config: dict) -> None:
+    payload = config.pop("ui_custom_params", None)
+    parsed = parse_ui_custom_params(payload)
+    if parsed:
+        config["__ui_custom_overrides"] = parsed
 
 
 def _normalize_network_args(config: dict) -> None:
