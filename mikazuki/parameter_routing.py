@@ -12,9 +12,17 @@ routing is added by later Commit 3 stages.
 
 from dataclasses import dataclass
 from operator import index as operator_index
-from typing import Any, Mapping
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Sequence
 
-from mikazuki.model_component_profiles import ParameterClass
+from mikazuki.model_component_profiles import (
+    ModelComponentProfile,
+    ParameterClass,
+    TrainingTargetProfile,
+    get_model_component_profile,
+    resolve_training_target_profile,
+)
+from mikazuki.parameter_policy import validate_parameter_policy
 
 
 class ParameterScanError(ValueError):
@@ -78,6 +86,84 @@ class ParameterDescriptor:
     @property
     def canonical_name(self) -> str:
         return self.canonical_alias.qualified_name
+
+
+RouteKind = Literal["primary", "fallback", "frozen", "unavailable"]
+IssueSeverity = Literal["error", "warning"]
+
+
+@dataclass(frozen=True)
+class RoutingAssignment:
+    parameter: Any
+    parameter_id: int
+    canonical_name: str
+    parameter_class: ParameterClass
+    component_id: str
+    route_kind: RouteKind
+    optimizer_profile: str | None
+    learning_rate: float | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class RoutingIssue:
+    severity: IssueSeverity
+    code: str
+    message: str
+    component_id: str | None = None
+    parameter_id: int | None = None
+    count: int = 1
+    examples: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ParameterStat:
+    tensors: int
+    numel: int
+
+
+@dataclass(frozen=True)
+class RoutingStats:
+    total: ParameterStat
+    assigned: ParameterStat
+    unassigned: ParameterStat
+    conflicts: ParameterStat
+    unroutable: ParameterStat
+    by_component: Mapping[str, ParameterStat]
+    by_route: Mapping[str, ParameterStat]
+    by_parameter_class: Mapping[str, ParameterStat]
+
+
+@dataclass(frozen=True)
+class RoutingPlan:
+    assignments: tuple[RoutingAssignment, ...]
+    issues: tuple[RoutingIssue, ...]
+    stats: RoutingStats
+
+    @property
+    def is_valid(self) -> bool:
+        return not any(issue.severity == "error" for issue in self.issues)
+
+
+@dataclass(frozen=True)
+class _TrainableOwnership:
+    descriptor: ParameterDescriptor
+    component_id: str
+    parameter_class: ParameterClass
+    route: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class _OwnershipPass:
+    policy: Mapping[str, Any]
+    profile: ModelComponentProfile
+    target: TrainingTargetProfile
+    assignments: tuple[RoutingAssignment, ...]
+    trainable: tuple[_TrainableOwnership, ...]
+    issues: tuple[RoutingIssue, ...]
+    observed_components: frozenset[str]
+    unassigned: tuple[ParameterDescriptor, ...]
+    conflicts: tuple[ParameterDescriptor, ...]
 
 
 @dataclass
@@ -604,11 +690,474 @@ def scan_parameter_roots(
     return tuple(sorted(descriptors, key=_descriptor_sort_key))
 
 
+def _issue_sort_key(issue: RoutingIssue) -> tuple[object, ...]:
+    return (
+        0 if issue.severity == "error" else 1,
+        issue.code,
+        issue.component_id or "",
+        issue.examples,
+        issue.message,
+    )
+
+
+def _assignment_sort_key(assignment: RoutingAssignment) -> tuple[object, ...]:
+    return (
+        assignment.canonical_name,
+        assignment.component_id,
+        assignment.route_kind,
+    )
+
+
+def _descriptor_identity_issues(
+    descriptors: Sequence[ParameterDescriptor],
+) -> tuple[set[int], list[RoutingIssue]]:
+    by_parameter_id: dict[int, list[ParameterDescriptor]] = {}
+    issues: list[RoutingIssue] = []
+    conflict_ids: set[int] = set()
+
+    for descriptor in descriptors:
+        if not isinstance(descriptor, ParameterDescriptor):
+            raise TypeError(
+                "Parameter routing requires ParameterDescriptor instances from "
+                "scan_parameter_roots()."
+            )
+        by_parameter_id.setdefault(descriptor.parameter_id, []).append(descriptor)
+        if id(descriptor.parameter) != descriptor.parameter_id:
+            conflict_ids.add(descriptor.parameter_id)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="descriptor_identity_mismatch",
+                    message=(
+                        f"Descriptor {descriptor.canonical_name!r} carries "
+                        "parameter_id that does not match id(parameter)."
+                    ),
+                    parameter_id=descriptor.parameter_id,
+                    examples=(descriptor.canonical_name,),
+                )
+            )
+
+    for parameter_id, group in by_parameter_id.items():
+        if len(group) <= 1:
+            continue
+        conflict_ids.add(parameter_id)
+        examples = tuple(sorted({item.canonical_name for item in group})[:5])
+        issues.append(
+            RoutingIssue(
+                severity="error",
+                code="duplicate_descriptor_identity",
+                message=(
+                    "Routing input contains multiple descriptors for one physical "
+                    "parameter identity."
+                ),
+                parameter_id=parameter_id,
+                count=len(group),
+                examples=examples,
+            )
+        )
+
+    return conflict_ids, issues
+
+
+def _effective_root(alias: ParameterAlias) -> str:
+    if alias.adapter_target is not None:
+        return alias.adapter_target.root
+    return alias.root
+
+
+def _routing_assignment(
+    descriptor: ParameterDescriptor,
+    *,
+    component_id: str,
+    parameter_class: ParameterClass,
+    route_kind: Literal["frozen", "unavailable"],
+    reason: str,
+) -> RoutingAssignment:
+    return RoutingAssignment(
+        parameter=descriptor.parameter,
+        parameter_id=descriptor.parameter_id,
+        canonical_name=descriptor.canonical_name,
+        parameter_class=parameter_class,
+        component_id=component_id,
+        route_kind=route_kind,
+        optimizer_profile=None,
+        learning_rate=None,
+        reason=reason,
+    )
+
+
+def _aggregate_issue(
+    *,
+    code: str,
+    message: str,
+    descriptors: Sequence[ParameterDescriptor],
+    component_id: str | None = None,
+) -> RoutingIssue:
+    ordered = sorted(descriptors, key=_descriptor_sort_key)
+    return RoutingIssue(
+        severity="error",
+        code=code,
+        message=message,
+        component_id=component_id,
+        count=len(ordered),
+        examples=tuple(item.canonical_name for item in ordered[:5]),
+    )
+
+
+def _unique_descriptors(
+    descriptors: Sequence[ParameterDescriptor],
+) -> list[ParameterDescriptor]:
+    seen: set[int] = set()
+    result: list[ParameterDescriptor] = []
+    for descriptor in descriptors:
+        marker = id(descriptor)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        result.append(descriptor)
+    return result
+
+
+def _resolve_parameter_ownership_pass(
+    policy: Mapping[str, Any],
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+    descriptors: Sequence[ParameterDescriptor],
+) -> _OwnershipPass:
+    """Resolve model ownership and higher-level target semantics.
+
+    This is the Commit 3C pass. It intentionally stops before optimizer
+    eligibility/fallback routing. Target-available Train=true descriptors are
+    returned as trainable candidates for Commit 3D.
+    """
+
+    canonical_policy = validate_parameter_policy(policy)
+    profile = get_model_component_profile(train_type)
+    target = resolve_training_target_profile(train_type, effective_config)
+
+    ordered_descriptors = tuple(sorted(descriptors, key=_descriptor_sort_key))
+    identity_conflicts, identity_issues = _descriptor_identity_issues(
+        ordered_descriptors
+    )
+
+    issues: list[RoutingIssue] = list(identity_issues)
+    assignments: list[RoutingAssignment] = []
+    trainable: list[_TrainableOwnership] = []
+    conflicts: list[ParameterDescriptor] = []
+    unassigned: list[ParameterDescriptor] = []
+    observed_components: set[str] = set()
+
+    policy_components = canonical_policy["components"]
+
+    for component_id in sorted(policy_components):
+        route = policy_components[component_id]
+        if component_id not in profile.components:
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="unknown_policy_component",
+                    message=(
+                        f"Parameter Policy Component {component_id!r} does not exist "
+                        f"in Model Component Profile {profile.train_type!r}."
+                    ),
+                    component_id=component_id,
+                )
+            )
+            continue
+        if route["train"] and not target.is_available(component_id):
+            reason = target.unavailable_reasons.get(
+                component_id,
+                "Disabled by the current trainer target/effective configuration.",
+            )
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="target_unavailable_train_enabled",
+                    message=(
+                        f"Component {component_id!r} has Train=true but the current "
+                        f"trainer target marks it unavailable: {reason}"
+                    ),
+                    component_id=component_id,
+                )
+            )
+
+    unknown_descriptors: list[ParameterDescriptor] = []
+    missing_policy: dict[str, list[ParameterDescriptor]] = {}
+
+    for descriptor in ordered_descriptors:
+        if descriptor.parameter_id in identity_conflicts:
+            conflicts.append(descriptor)
+            continue
+
+        if not descriptor.aliases:
+            conflicts.append(descriptor)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="descriptor_without_alias",
+                    message="Parameter descriptor contains no aliases.",
+                    parameter_id=descriptor.parameter_id,
+                )
+            )
+            continue
+
+        parameter_classes = {alias.parameter_class for alias in descriptor.aliases}
+        adapter_targets = {alias.adapter_target for alias in descriptor.aliases}
+        descriptor_has_conflict = False
+
+        if len(parameter_classes) != 1:
+            descriptor_has_conflict = True
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="alias_parameter_class_conflict",
+                    message=(
+                        f"Aliases for {descriptor.canonical_name!r} disagree on "
+                        "structural ParameterClass."
+                    ),
+                    parameter_id=descriptor.parameter_id,
+                    count=len(descriptor.aliases),
+                    examples=tuple(
+                        alias.qualified_name
+                        for alias in sorted(descriptor.aliases, key=_alias_sort_key)[:5]
+                    ),
+                )
+            )
+
+        if len(adapter_targets) != 1:
+            descriptor_has_conflict = True
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="alias_adapter_target_conflict",
+                    message=(
+                        f"Aliases for {descriptor.canonical_name!r} disagree on "
+                        "AdapterTargetMetadata."
+                    ),
+                    parameter_id=descriptor.parameter_id,
+                    count=len(descriptor.aliases),
+                    examples=tuple(
+                        alias.qualified_name
+                        for alias in sorted(descriptor.aliases, key=_alias_sort_key)[:5]
+                    ),
+                )
+            )
+
+        classified: list[tuple[ParameterAlias, str | None]] = []
+        classifier_failed = False
+        for alias in descriptor.aliases:
+            try:
+                component_id = profile.classify_alias(alias)
+            except Exception as exc:
+                classifier_failed = True
+                descriptor_has_conflict = True
+                issues.append(
+                    RoutingIssue(
+                        severity="error",
+                        code="component_classifier_error",
+                        message=(
+                            f"Model Component Profile {profile.train_type!r} failed "
+                            f"while classifying alias {alias.qualified_name!r}: {exc}"
+                        ),
+                        parameter_id=descriptor.parameter_id,
+                        examples=(alias.qualified_name,),
+                    )
+                )
+                continue
+
+            classified.append((alias, component_id))
+            if component_id is not None and component_id in profile.components:
+                observed_components.add(component_id)
+
+        if classifier_failed:
+            conflicts.append(descriptor)
+            continue
+
+        component_values = [component_id for _, component_id in classified]
+        non_null_components = {item for item in component_values if item is not None}
+
+        for component_id in sorted(non_null_components):
+            if component_id not in profile.components:
+                descriptor_has_conflict = True
+                issues.append(
+                    RoutingIssue(
+                        severity="error",
+                        code="classifier_unknown_component",
+                        message=(
+                            f"Model Component Profile {profile.train_type!r} returned "
+                            f"unknown Component {component_id!r} for "
+                            f"{descriptor.canonical_name!r}."
+                        ),
+                        component_id=component_id,
+                        parameter_id=descriptor.parameter_id,
+                        examples=(descriptor.canonical_name,),
+                    )
+                )
+
+        if descriptor_has_conflict:
+            conflicts.append(descriptor)
+            continue
+
+        if not non_null_components:
+            unknown_descriptors.append(descriptor)
+            unassigned.append(descriptor)
+            continue
+
+        if len(non_null_components) != 1 or any(item is None for item in component_values):
+            conflicts.append(descriptor)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="alias_component_conflict",
+                    message=(
+                        f"Aliases for {descriptor.canonical_name!r} do not agree on "
+                        "one Model Component."
+                    ),
+                    parameter_id=descriptor.parameter_id,
+                    count=len(descriptor.aliases),
+                    examples=tuple(
+                        alias.qualified_name
+                        for alias in sorted(descriptor.aliases, key=_alias_sort_key)[:5]
+                    ),
+                )
+            )
+            continue
+
+        component_id = next(iter(non_null_components))
+        definition = profile.components.get(component_id)
+        if definition is None:
+            conflicts.append(descriptor)
+            continue
+
+        invalid_roots = sorted(
+            {
+                _effective_root(alias)
+                for alias, _ in classified
+                if _effective_root(alias) not in definition.roots
+            }
+        )
+        if invalid_roots:
+            conflicts.append(descriptor)
+            issues.append(
+                RoutingIssue(
+                    severity="error",
+                    code="alias_component_root_conflict",
+                    message=(
+                        f"Aliases for {descriptor.canonical_name!r} resolve to "
+                        f"Component {component_id!r} from invalid architectural "
+                        f"root(s): {', '.join(invalid_roots)}."
+                    ),
+                    component_id=component_id,
+                    parameter_id=descriptor.parameter_id,
+                    examples=tuple(
+                        alias.qualified_name
+                        for alias in sorted(descriptor.aliases, key=_alias_sort_key)[:5]
+                    ),
+                )
+            )
+            continue
+
+        parameter_class = next(iter(parameter_classes))
+
+        if not target.is_available(component_id):
+            assignments.append(
+                _routing_assignment(
+                    descriptor,
+                    component_id=component_id,
+                    parameter_class=parameter_class,
+                    route_kind="unavailable",
+                    reason=target.unavailable_reasons.get(
+                        component_id,
+                        "Disabled by the current trainer target/effective configuration.",
+                    ),
+                )
+            )
+            continue
+
+        route = policy_components.get(component_id)
+        if route is None:
+            unassigned.append(descriptor)
+            missing_policy.setdefault(component_id, []).append(descriptor)
+            continue
+
+        if not route["train"]:
+            assignments.append(
+                _routing_assignment(
+                    descriptor,
+                    component_id=component_id,
+                    parameter_class=parameter_class,
+                    route_kind="frozen",
+                    reason="Component policy sets Train=false.",
+                )
+            )
+            continue
+
+        trainable.append(
+            _TrainableOwnership(
+                descriptor=descriptor,
+                component_id=component_id,
+                parameter_class=parameter_class,
+                route=MappingProxyType(dict(route)),
+            )
+        )
+
+    if unknown_descriptors:
+        issues.append(
+            _aggregate_issue(
+                code="unassigned_parameter",
+                message=(
+                    "One or more real parameters could not be classified into any "
+                    f"Component for Model Component Profile {profile.train_type!r}."
+                ),
+                descriptors=unknown_descriptors,
+            )
+        )
+
+    for component_id in sorted(missing_policy):
+        descriptors_for_component = missing_policy[component_id]
+        issues.append(
+            _aggregate_issue(
+                code="missing_component_policy",
+                message=(
+                    f"Target-available Component {component_id!r} has real parameters "
+                    "but no Parameter Policy row."
+                ),
+                component_id=component_id,
+                descriptors=descriptors_for_component,
+            )
+        )
+
+    return _OwnershipPass(
+        policy=MappingProxyType(canonical_policy),
+        profile=profile,
+        target=target,
+        assignments=tuple(sorted(assignments, key=_assignment_sort_key)),
+        trainable=tuple(
+            sorted(trainable, key=lambda item: _descriptor_sort_key(item.descriptor))
+        ),
+        issues=tuple(sorted(issues, key=_issue_sort_key)),
+        observed_components=frozenset(observed_components),
+        unassigned=tuple(
+            sorted(_unique_descriptors(unassigned), key=_descriptor_sort_key)
+        ),
+        conflicts=tuple(
+            sorted(_unique_descriptors(conflicts), key=_descriptor_sort_key)
+        ),
+    )
+
+
+
 __all__ = [
     "AdapterTargetMetadata",
     "ParameterAlias",
     "ParameterDescriptor",
     "ParameterScanError",
+    "ParameterStat",
+    "RoutingAssignment",
+    "RoutingIssue",
+    "RoutingPlan",
+    "RoutingStats",
     "classify_parameter_class",
     "scan_parameter_roots",
 ]

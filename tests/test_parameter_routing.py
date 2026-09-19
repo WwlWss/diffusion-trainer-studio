@@ -5,6 +5,7 @@ import unittest
 from mikazuki.parameter_routing import (
     AdapterTargetMetadata,
     ParameterScanError,
+    _resolve_parameter_ownership_pass,
     classify_parameter_class,
     scan_parameter_roots,
 )
@@ -379,6 +380,404 @@ class ParameterScannerTests(unittest.TestCase):
                     "torch.nn.Linear",
                 )},
             )
+
+
+def _policy(components, *, profiles=None):
+    return {
+        "version": 1,
+        "optimizer_profiles": profiles
+        or {"main": {"type": "AdamW", "args": {}}},
+        "components": components,
+    }
+
+
+def _train_route(profile="main", lr=1e-4):
+    return {
+        "train": True,
+        "optimizer_profile": profile,
+        "learning_rate": lr,
+    }
+
+
+def _nested_linear(parts, parameter, *, role="weight", leaf_cls=Linear):
+    node = module(cls=leaf_cls, parameters=[(role, parameter)])
+    for part in reversed(parts):
+        node = module(children=[(part, node)])
+    return node
+
+
+def _flux_single_descriptor(
+    *,
+    component="double",
+    parameter=None,
+    role="weight",
+    requires_grad=True,
+):
+    parameter = parameter or FakeParameter((4, 4), requires_grad=requires_grad)
+    prefix = "double_blocks" if component == "double" else "single_blocks"
+    root = _nested_linear((prefix, "0", "linear1"), parameter, role=role)
+    return scan_parameter_roots({"transformer": root}), parameter
+
+
+class ParameterOwnershipTests(unittest.TestCase):
+    def test_train_true_available_component_becomes_trainable_candidate(self):
+        descriptors, parameter = _flux_single_descriptor()
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(result.assignments, ())
+        self.assertEqual(len(result.trainable), 1)
+        candidate = result.trainable[0]
+        self.assertIs(candidate.descriptor.parameter, parameter)
+        self.assertEqual(candidate.component_id, "transformer.double_stream")
+        self.assertEqual(candidate.parameter_class, "matrix_weight")
+        self.assertTrue(candidate.route["train"])
+        self.assertEqual(candidate.route["optimizer_profile"], "main")
+        self.assertFalse(any(issue.severity == "error" for issue in result.issues))
+
+    def test_train_false_available_component_routes_frozen_without_mutation(self):
+        descriptors, parameter = _flux_single_descriptor(requires_grad=True)
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(result.trainable, ())
+        self.assertEqual(len(result.assignments), 1)
+        assignment = result.assignments[0]
+        self.assertIs(assignment.parameter, parameter)
+        self.assertEqual(assignment.route_kind, "frozen")
+        self.assertIsNone(assignment.optimizer_profile)
+        self.assertIsNone(assignment.learning_rate)
+        self.assertTrue(parameter.requires_grad)
+
+    def test_target_unavailable_parameter_routes_unavailable_without_policy_row(self):
+        parameter = FakeParameter((4, 4))
+        root = module(
+            children=[("encoder", module(cls=Linear, parameters=[("weight", parameter)]))]
+        )
+        descriptors = scan_parameter_roots({"text_encoder_1": root})
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"unet.transformer": {"train": False}}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(result.assignments), 1)
+        self.assertEqual(result.assignments[0].route_kind, "unavailable")
+        self.assertEqual(result.assignments[0].component_id, "text_encoder_1")
+        self.assertFalse(
+            any(issue.code == "missing_component_policy" for issue in result.issues)
+        )
+
+    def test_target_unavailable_train_true_is_error_but_parameter_stays_unavailable(self):
+        parameter = FakeParameter((4, 4))
+        root = module(
+            children=[("encoder", module(cls=Linear, parameters=[("weight", parameter)]))]
+        )
+        descriptors = scan_parameter_roots({"text_encoder_1": root})
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"text_encoder_1": _train_route()}),
+            train_type="sdxl-finetune",
+            effective_config={"train_text_encoder": False},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(result.assignments[0].route_kind, "unavailable")
+        self.assertIn(
+            "target_unavailable_train_enabled",
+            {issue.code for issue in result.issues},
+        )
+
+    def test_missing_policy_row_is_aggregated_per_available_component(self):
+        first = FakeParameter((4, 4))
+        second = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "double_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("a", module(cls=Linear, parameters=[("weight", first)])),
+                                        ("b", module(cls=Linear, parameters=[("weight", second)])),
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.final": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        issues = [issue for issue in result.issues if issue.code == "missing_component_policy"]
+        self.assertEqual(len(issues), 1)
+        self.assertEqual(issues[0].component_id, "transformer.double_stream")
+        self.assertEqual(issues[0].count, 2)
+        self.assertEqual(len(result.unassigned), 2)
+
+    def test_unknown_policy_component_fails_closed_even_when_frozen(self):
+        descriptors, _ = _flux_single_descriptor()
+        result = _resolve_parameter_ownership_pass(
+            _policy(
+                {
+                    "transformer.double_stream": {"train": False},
+                    "made.up.component": {"train": False},
+                }
+            ),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        issue = next(
+            issue for issue in result.issues if issue.code == "unknown_policy_component"
+        )
+        self.assertEqual(issue.component_id, "made.up.component")
+
+    def test_shared_parameter_with_component_conflict_is_not_routed(self):
+        shared = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "double_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("linear1", module(cls=Linear, parameters=[("weight", shared)]))
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                ),
+                (
+                    "single_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("linear1", module(cls=Linear, parameters=[("weight", shared)]))
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                ),
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+        result = _resolve_parameter_ownership_pass(
+            _policy(
+                {
+                    "transformer.double_stream": {"train": False},
+                    "transformer.single_stream": {"train": False},
+                }
+            ),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(result.assignments, ())
+        self.assertEqual(result.trainable, ())
+        self.assertEqual(len(result.conflicts), 1)
+        self.assertIn("alias_component_conflict", {issue.code for issue in result.issues})
+        self.assertEqual(
+            result.observed_components,
+            frozenset({"transformer.double_stream", "transformer.single_stream"}),
+        )
+
+    def test_shared_parameter_with_parameter_class_conflict_is_not_routed(self):
+        shared = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "double_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("a", module(cls=Linear, parameters=[("weight", shared)])),
+                                        ("b", module(cls=Linear, parameters=[("bias", shared)])),
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(result.conflicts), 1)
+        self.assertIn(
+            "alias_parameter_class_conflict",
+            {issue.code for issue in result.issues},
+        )
+
+    def test_shared_lora_parameter_with_adapter_target_conflict_is_not_routed(self):
+        shared = FakeParameter((4, 4))
+        left_adapter = module(
+            cls=LoRAModule,
+            children=[("lora_down", module(cls=Linear, parameters=[("weight", shared)]))],
+        )
+        right_adapter = module(
+            cls=LoRAModule,
+            children=[("lora_down", module(cls=Linear, parameters=[("weight", shared)]))],
+        )
+        root = module(children=[("left", left_adapter), ("right", right_adapter)])
+        descriptors = scan_parameter_roots(
+            {"network": root},
+            adapter_targets={
+                id(left_adapter): AdapterTargetMetadata(
+                    "transformer",
+                    "double_blocks.0.img_attn.qkv",
+                    "torch.nn.Linear",
+                ),
+                id(right_adapter): AdapterTargetMetadata(
+                    "transformer",
+                    "double_blocks.1.img_attn.qkv",
+                    "torch.nn.Linear",
+                ),
+            },
+        )
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream.adapter": {"train": False}}),
+            train_type="flux-lora",
+            effective_config={"network_train_unet_only": True},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(result.conflicts), 1)
+        self.assertIn(
+            "alias_adapter_target_conflict",
+            {issue.code for issue in result.issues},
+        )
+
+    def test_lora_without_original_target_metadata_is_unassigned_not_guessed(self):
+        parameter = FakeParameter((4, 4))
+        adapter = module(
+            cls=LoRAModule,
+            children=[("lora_down", module(cls=Linear, parameters=[("weight", parameter)]))],
+        )
+        descriptors = scan_parameter_roots(
+            {"network": module(children=[("x", adapter)])}
+        )
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream.adapter": {"train": False}}),
+            train_type="flux-lora",
+            effective_config={"network_train_unet_only": True},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(result.unassigned), 1)
+        self.assertEqual(result.assignments, ())
+        self.assertIn("unassigned_parameter", {issue.code for issue in result.issues})
+
+    def test_duplicate_descriptor_identity_is_rejected_before_routing(self):
+        descriptors, _ = _flux_single_descriptor()
+        descriptor = descriptors[0]
+
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=[descriptor, descriptor],
+        )
+
+        self.assertIn(
+            "duplicate_descriptor_identity",
+            {issue.code for issue in result.issues},
+        )
+        self.assertEqual(result.assignments, ())
+        self.assertEqual(result.trainable, ())
+
+    def test_requires_grad_does_not_suppress_trainable_ownership(self):
+        descriptors, parameter = _flux_single_descriptor(requires_grad=False)
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.double_stream": _train_route()}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+
+        self.assertEqual(len(result.trainable), 1)
+        self.assertFalse(result.trainable[0].descriptor.requires_grad)
+        self.assertFalse(parameter.requires_grad)
+
+    def test_assignment_order_is_semantic_not_object_identity(self):
+        first = FakeParameter((4, 4))
+        second = FakeParameter((4, 4))
+        root = module(
+            children=[
+                (
+                    "single_blocks",
+                    module(
+                        children=[
+                            (
+                                "0",
+                                module(
+                                    children=[
+                                        ("z", module(cls=Linear, parameters=[("weight", second)])),
+                                        ("a", module(cls=Linear, parameters=[("weight", first)])),
+                                    ]
+                                ),
+                            )
+                        ]
+                    ),
+                )
+            ]
+        )
+        descriptors = scan_parameter_roots({"transformer": root})
+        result = _resolve_parameter_ownership_pass(
+            _policy({"transformer.single_stream": {"train": False}}),
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+        self.assertEqual(
+            [item.canonical_name for item in result.assignments],
+            [
+                "transformer.single_blocks.0.a.weight",
+                "transformer.single_blocks.0.z.weight",
+            ],
+        )
 
 
 if __name__ == "__main__":
