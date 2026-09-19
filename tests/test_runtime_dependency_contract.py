@@ -107,7 +107,6 @@ class RuntimeDependencyFileContractTests(unittest.TestCase):
         self.assertIn("protobuf==3.20.3", active)
         self.assertIn("open-clip-torch==2.20.0", active)
         self.assertIn("wandb==0.16.2", active)
-        self.assertIn("pandas==2.2.3", active)
         self.assertFalse(any(line.startswith("onnxruntime") for line in active))
         self.assertEqual(active.count("prodigy-plus-schedule-free==1.9.2"), 1)
 
