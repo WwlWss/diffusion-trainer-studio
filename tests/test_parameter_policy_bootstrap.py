@@ -7,6 +7,7 @@ from mikazuki.parameter_policy_bootstrap import (
     LEGACY_BOOTSTRAP_PROFILE,
     _bootstrap_component_rows,
     _component_route_from_legacy_lr,
+    bootstrap_parameter_policy_from_standard,
     _expand_text_encoder_lrs,
     _parse_legacy_lr,
     _prepare_standard_snapshot,
@@ -642,6 +643,338 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
     def test_mapper_rejects_unknown_backend(self):
         with self.assertRaises(ValueError):
             _bootstrap_component_rows({"learning_rate": 1e-4}, "unknown-backend")
+
+
+class ParameterPolicyFullBootstrapTests(unittest.TestCase):
+    def test_public_bootstrap_returns_strict_canonical_policy(self):
+        from mikazuki.parameter_policy import validate_parameter_policy
+
+        raw = {
+            "optimizer_type": "AdamW",
+            "learning_rate": "1e-4",
+            "unet_lr": "2e-4",
+            "text_encoder_lr": "0",
+            "lora_target": "both",
+        }
+        before = copy.deepcopy(raw)
+
+        policy = bootstrap_parameter_policy_from_standard(
+            raw,
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+
+        self.assertEqual(raw, before)
+        self.assertEqual(policy, validate_parameter_policy(policy))
+        self.assertEqual(policy["version"], 1)
+        self.assertEqual(set(policy["optimizer_profiles"]), {LEGACY_BOOTSTRAP_PROFILE})
+        self.assertEqual(
+            policy["optimizer_profiles"][LEGACY_BOOTSTRAP_PROFILE]["type"],
+            "AdamW",
+        )
+        self.assertEqual(
+            policy["components"]["unet.attention.adapter"]["learning_rate"],
+            2e-4,
+        )
+        self.assertEqual(
+            policy["components"]["text_encoder.adapter"],
+            {"train": False},
+        )
+
+    def test_public_bootstrap_honors_standard_custom_override_before_migration(self):
+        policy = bootstrap_parameter_policy_from_standard(
+            {
+                "optimizer_type": "AdamW",
+                "learning_rate": "1e-4",
+                "lora_target": "unet",
+                "ui_custom_params": (
+                    'optimizer_type = "Lion"\n'
+                    'learning_rate = 0.0003'
+                ),
+            },
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+        self.assertEqual(
+            policy["optimizer_profiles"][LEGACY_BOOTSTRAP_PROFILE]["type"],
+            "Lion",
+        )
+        for component_id, route in policy["components"].items():
+            if component_id.startswith("unet."):
+                self.assertEqual(route["learning_rate"], 3e-4)
+            else:
+                self.assertEqual(route, {"train": False})
+
+    def test_public_bootstrap_runs_compatibility_gate_before_profile_or_mapping(self):
+        prepared = PreparedTrainingConfig(
+            train_type="sdxl-finetune",
+            trainer_file="trainer/sdxl.py",
+            config={
+                "learning_rate": 1e-6,
+                "block_lr": ",".join(["1e-6"] * 23),
+                "optimizer_type": "Custom",
+            },
+        )
+
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ), patch(
+            "mikazuki.parameter_policy_bootstrap.bootstrap_legacy_optimizer_profile"
+        ) as profile_bootstrap, patch(
+            "mikazuki.parameter_policy_bootstrap._bootstrap_component_rows"
+        ) as component_bootstrap:
+            with self.assertRaisesRegex(ValueError, "block_lr"):
+                bootstrap_parameter_policy_from_standard(
+                    {},
+                    "sdxl-finetune",
+                    resolve_backend=_resolver,
+                )
+
+        profile_bootstrap.assert_not_called()
+        component_bootstrap.assert_not_called()
+
+    def test_public_bootstrap_reports_all_compatibility_blockers_in_order(self):
+        prepared = PreparedTrainingConfig(
+            train_type="flux-lora",
+            trainer_file="trainer/flux.py",
+            config={
+                "learning_rate": 1e-4,
+                "network_module": "custom.network",
+                "network_args": [
+                    "loraplus_lr_ratio=2",
+                    "network_reg_lrs=foo=1e-4",
+                ],
+                "fused_backward_pass": True,
+                "deepspeed": True,
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                bootstrap_parameter_policy_from_standard(
+                    {},
+                    "flux-lora",
+                    resolve_backend=_resolver,
+                )
+
+        message = str(ctx.exception)
+        markers = (
+            "fused_backward_pass",
+            "DeepSpeed",
+            "LoRA+",
+            "network_reg_lrs",
+            "network_module",
+        )
+        positions = [message.index(marker) for marker in markers]
+        self.assertEqual(positions, sorted(positions))
+
+    def test_public_bootstrap_never_invents_fallback_optimizer(self):
+        prepared = PreparedTrainingConfig(
+            train_type="flux-finetune",
+            trainer_file="trainer/flux.py",
+            config={
+                "optimizer_type": "Muon",
+                "optimizer_args": [],
+                "learning_rate": 2e-4,
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ):
+            policy = bootstrap_parameter_policy_from_standard(
+                {},
+                "flux-finetune",
+                resolve_backend=_resolver,
+            )
+
+        self.assertEqual(set(policy["optimizer_profiles"]), {LEGACY_BOOTSTRAP_PROFILE})
+        self.assertEqual(
+            policy["optimizer_profiles"][LEGACY_BOOTSTRAP_PROFILE]["type"],
+            "Muon",
+        )
+        for route in policy["components"].values():
+            self.assertNotIn("fallback_optimizer_profile", route)
+            self.assertNotIn("fallback_learning_rate", route)
+
+    def test_public_bootstrap_is_deterministic_for_equivalent_input(self):
+        first = {
+            "optimizer_type": "AdamW",
+            "learning_rate": "1e-4",
+            "lora_target": "unet",
+        }
+        second = {
+            "lora_target": "unet",
+            "learning_rate": "1e-4",
+            "optimizer_type": "AdamW",
+        }
+        policy_a = bootstrap_parameter_policy_from_standard(
+            first,
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+        policy_b = bootstrap_parameter_policy_from_standard(
+            second,
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+        self.assertEqual(policy_a, policy_b)
+        self.assertEqual(
+            list(policy_a["components"]),
+            sorted(policy_a["components"]),
+        )
+
+    def test_public_bootstrap_profile_and_component_keys_match_every_backend(self):
+        from mikazuki.model_component_profiles import get_model_component_profile
+
+        cases = {
+            "sd-lora": {"learning_rate": 1e-4},
+            "sdxl-lora": {"learning_rate": 1e-4},
+            "flux-lora": {"learning_rate": 1e-4},
+            "chroma-lora": {"learning_rate": 1e-4},
+            "sd3-lora": {"learning_rate": 1e-4},
+            "anima-lora": {"learning_rate": 1e-4},
+            "sd-dreambooth": {"learning_rate": 1e-6},
+            "sdxl-finetune": {
+                "learning_rate": 1e-6,
+                "train_text_encoder": False,
+            },
+            "flux-finetune": {"learning_rate": 1e-6},
+            "anima-finetune": {
+                "learning_rate": 1e-6,
+                "train_qwen3_text_encoder": False,
+            },
+        }
+
+        for train_type, effective in cases.items():
+            with self.subTest(train_type=train_type):
+                prepared = PreparedTrainingConfig(
+                    train_type=train_type,
+                    trainer_file=f"trainer/{train_type}.py",
+                    config={
+                        "optimizer_type": "AdamW",
+                        **effective,
+                    },
+                )
+                with patch(
+                    "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+                    return_value=prepared,
+                ):
+                    policy = bootstrap_parameter_policy_from_standard(
+                        {},
+                        train_type,
+                        resolve_backend=_resolver,
+                    )
+
+                self.assertEqual(
+                    set(policy["components"]),
+                    set(get_model_component_profile(train_type).components),
+                )
+                self.assertEqual(
+                    set(policy["optimizer_profiles"]),
+                    {LEGACY_BOOTSTRAP_PROFILE},
+                )
+
+    def test_public_bootstrap_rejects_dreambooth_temporal_text_encoder_stop(self):
+        prepared = PreparedTrainingConfig(
+            train_type="sd-dreambooth",
+            trainer_file="trainer/sd.py",
+            config={
+                "optimizer_type": "AdamW",
+                "learning_rate": 1e-6,
+                "stop_text_encoder_training": 100,
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ):
+            with self.assertRaisesRegex(
+                ValueError,
+                "stop_text_encoder_training",
+            ):
+                bootstrap_parameter_policy_from_standard(
+                    {},
+                    "sd-dreambooth",
+                    resolve_backend=_resolver,
+                )
+
+    def test_public_bootstrap_rejects_loraplus_instead_of_approximating(self):
+        prepared = PreparedTrainingConfig(
+            train_type="sd-lora",
+            trainer_file="trainer/sd-lora.py",
+            config={
+                "optimizer_type": "AdamW",
+                "learning_rate": 1e-4,
+                "network_module": "networks.lora",
+                "network_args": ["loraplus_lr_ratio=1"],
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ):
+            with self.assertRaisesRegex(ValueError, "LoRA\\+"):
+                bootstrap_parameter_policy_from_standard(
+                    {},
+                    "sd-lora",
+                    resolve_backend=_resolver,
+                )
+
+    def test_public_bootstrap_uses_strict_validator_as_final_round_trip(self):
+        prepared = PreparedTrainingConfig(
+            train_type="flux-finetune",
+            trainer_file="trainer/flux.py",
+            config={
+                "optimizer_type": "AdamW",
+                "learning_rate": 1e-6,
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ), patch(
+            "mikazuki.parameter_policy_bootstrap.validate_parameter_policy",
+            wraps=__import__(
+                "mikazuki.parameter_policy",
+                fromlist=["validate_parameter_policy"],
+            ).validate_parameter_policy,
+        ) as validator:
+            policy = bootstrap_parameter_policy_from_standard(
+                {},
+                "flux-finetune",
+                resolve_backend=_resolver,
+            )
+
+        validator.assert_called_once()
+        self.assertEqual(policy, validator.return_value)
+
+    def test_profile_only_bootstrap_remains_independent_of_compatibility_gate(self):
+        prepared = PreparedTrainingConfig(
+            train_type="sdxl-finetune",
+            trainer_file="trainer/sdxl.py",
+            config={
+                "optimizer_type": "AdamW",
+                "block_lr": "legacy-block-values",
+            },
+        )
+        with patch(
+            "mikazuki.parameter_policy_bootstrap._prepare_standard_snapshot",
+            return_value=prepared,
+        ), patch(
+            "mikazuki.parameter_policy_bootstrap.parameter_policy_compatibility_blockers",
+            side_effect=AssertionError("profile-only bootstrap must not call compatibility gate"),
+        ):
+            profiles = bootstrap_parameter_policy_optimizer_profile(
+                {},
+                "sdxl-finetune",
+                resolve_backend=_resolver,
+            )
+
+        self.assertEqual(set(profiles), {LEGACY_BOOTSTRAP_PROFILE})
 
 
 if __name__ == "__main__":

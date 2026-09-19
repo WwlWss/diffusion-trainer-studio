@@ -4,11 +4,13 @@ This module deliberately avoids importing the FastAPI application layer. The
 caller supplies the backend resolver, which keeps the helper testable in the
 same lightweight host-only CI used by the rest of the semantic compiler.
 
-Commit 4B provides only:
+Commit 4 now provides:
 - one exact Standard effective-config snapshot helper;
-- strict legacy learning-rate primitives.
+- strict legacy learning-rate primitives;
+- backend-specific Component/LR mapping;
+- the fail-closed public Standard -> Component bootstrap.
 
-Backend-specific Component mapping is added in Commit 4C.
+It remains host-only and does not alter request/launch/runtime behavior.
 """
 
 from __future__ import annotations
@@ -24,7 +26,12 @@ from mikazuki.model_component_profiles import (
 )
 from mikazuki.parameter_policy import (
     PARAMETER_POLICY_GUI_KEYS,
+    PARAMETER_POLICY_VERSION,
     bootstrap_legacy_optimizer_profile,
+    validate_parameter_policy,
+)
+from mikazuki.parameter_policy_compat import (
+    parameter_policy_compatibility_blockers,
 )
 from mikazuki.training_config import PreparedTrainingConfig, prepare_training_config
 from mikazuki.utils import train_utils
@@ -569,6 +576,78 @@ def _bootstrap_component_rows(
     return {component_id: rows[component_id] for component_id in sorted(rows)}
 
 
+
+def _format_compatibility_failure(
+    blockers: Sequence[str],
+) -> str:
+    return (
+        "当前 Standard 配置不能无损迁移到 Component-wise Parameter Policy v1：\n"
+        + "\n".join(f"- {message}" for message in blockers)
+    )
+
+
+def bootstrap_parameter_policy_from_standard(
+    config: Mapping[str, Any],
+    page_type: str | None,
+    *,
+    resolve_backend: Callable,
+) -> dict[str, Any]:
+    """Compile Standard once and return one strict canonical v1 policy.
+
+    Migration is exact-or-fail:
+    1. compile the ordinary Standard effective configuration;
+    2. reject every known incompatible optimizer/LR/grouping semantic;
+    3. derive exactly one legacy_main Optimizer Profile;
+    4. map the backend's complete Model Component Profile;
+    5. strict-validate the resulting sidecar-shaped policy.
+
+    No fallback Optimizer Profile is invented.
+    """
+
+    prepared = _prepare_standard_snapshot(
+        config,
+        page_type,
+        resolve_backend=resolve_backend,
+    )
+
+    blockers = parameter_policy_compatibility_blockers(
+        prepared.config,
+        prepared.train_type,
+    )
+    if blockers:
+        raise ValueError(_format_compatibility_failure(blockers))
+
+    optimizer_profiles = bootstrap_legacy_optimizer_profile(prepared.config)
+    if set(optimizer_profiles) != {LEGACY_BOOTSTRAP_PROFILE}:
+        raise RuntimeError(
+            "Parameter Policy bootstrap invariant failed: expected exactly "
+            f"{LEGACY_BOOTSTRAP_PROFILE!r}."
+        )
+
+    components = _bootstrap_component_rows(
+        prepared.config,
+        prepared.train_type,
+    )
+
+    candidate = {
+        "version": PARAMETER_POLICY_VERSION,
+        "optimizer_profiles": optimizer_profiles,
+        "components": components,
+    }
+    canonical = validate_parameter_policy(candidate)
+
+    # Commit 4 must never synthesize a fallback route. Keep this invariant
+    # explicit so later runtime work cannot accidentally leak into migration.
+    for component_id, route in canonical["components"].items():
+        if "fallback_optimizer_profile" in route or "fallback_learning_rate" in route:
+            raise RuntimeError(
+                "Parameter Policy bootstrap invariant failed: migration invented "
+                f"a fallback optimizer for Component {component_id!r}."
+            )
+
+    return canonical
+
+
 def bootstrap_parameter_policy_optimizer_profile(
     config: Mapping[str, Any],
     page_type: str | None,
@@ -590,5 +669,6 @@ def bootstrap_parameter_policy_optimizer_profile(
 
 
 __all__ = [
+    "bootstrap_parameter_policy_from_standard",
     "bootstrap_parameter_policy_optimizer_profile",
 ]
