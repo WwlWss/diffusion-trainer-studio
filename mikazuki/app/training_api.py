@@ -77,6 +77,27 @@ def _write_text_atomic(path: str, content: str) -> None:
     os.replace(tmp, target)
 
 
+_ALLOWED_BUNDLE_SIDECAR_ROOTS = (
+    (Path("config") / "autosave" / "multi-caption").as_posix() + "/",
+    (Path("config") / "autosave" / "prompts").as_posix() + "/",
+)
+
+
+def _validated_bundle_sidecars(raw: object) -> dict[str, str]:
+    if not isinstance(raw, dict):
+        raise ValueError("Training bundle sidecars 必须是 object。")
+    sidecars: dict[str, str] = {}
+    for raw_path, raw_content in raw.items():
+        path = str(raw_path).replace("\\", "/")
+        pure = Path(path)
+        if pure.is_absolute() or ".." in pure.parts:
+            raise ValueError(f"Training bundle sidecar 路径不安全: {raw_path!r}")
+        if not any(path.startswith(prefix) for prefix in _ALLOWED_BUNDLE_SIDECAR_ROOTS):
+            raise ValueError(f"Training bundle sidecar 路径不属于 DTS 托管目录: {raw_path!r}")
+        sidecars[path] = str(raw_content)
+    return sidecars
+
+
 @router.post("/training/preview")
 async def preview_training_config(request: Request):
     try:
@@ -119,11 +140,13 @@ async def rehydrate_training_config(request: Request):
             toml_text = bundle.get("toml")
             if not isinstance(toml_text, str):
                 raise ValueError("Training bundle 缺少 toml 文本。")
-            raw_sidecars = bundle.get("sidecars", {})
-            if not isinstance(raw_sidecars, dict):
-                raise ValueError("Training bundle sidecars 必须是 object。")
-            sidecars = {str(key): str(value) for key, value in raw_sidecars.items()}
+            sidecars = _validated_bundle_sidecars(bundle.get("sidecars", {}))
             effective = toml.loads(toml_text)
+            # Import is the one place where unpacking a portable bundle is an
+            # explicit user action. Materialize only validated DTS-owned
+            # content-addressed paths so generated prompt sidecars are portable
+            # too; Preview remains side-effect free.
+            materialize_sidecars(sidecars)
         gui_state = rehydrate_trainer_config(effective, str(page_type), sidecars=sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "rehydrate"})
