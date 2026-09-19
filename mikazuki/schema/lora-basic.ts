@@ -73,12 +73,12 @@ Schema.intersect([
         }).description("网络设置"),
     ]),
 
-    Schema.object({
-        shuffle_caption: Schema.boolean().default(true).description("训练时随机打乱 tokens"),
-        keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("在随机打乱 tokens 时，保留前 N 个不变"),
-    }).description("caption 选项"),
-
-    SHARED_SCHEMAS.MULTI_CAPTION_BASIC,
+    SHARED_SCHEMAS.CAPTION_MODE_BASIC(
+        Schema.object({
+            shuffle_caption: Schema.boolean().default(true).description("训练时随机打乱 tokens"),
+            keep_tokens: Schema.number().min(0).max(255).step(1).default(0).description("在随机打乱 tokens 时，保留前 N 个不变"),
+        }).description("Standard Caption")
+    ),
 
     Schema.object({
         mixed_precision: Schema.union(["no", "fp16", "bf16"]).default("fp16").description("混合精度, RTX30系列以后也可以指定`bf16`"),
