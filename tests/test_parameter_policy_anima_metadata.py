@@ -130,6 +130,23 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
         self.assertNotIn("mikazuki.parameter_routing", text)
         self.assertNotIn("AdapterTargetMetadata", text)
 
+    def test_standard_anima_multi_caption_runtime_does_not_gain_metadata(self):
+        source = Path("sd-scripts").resolve()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tree = materialize_anima_runtime_tree(
+                ("multi_caption",),
+                source_dir=source,
+                cache_root=temp_dir,
+            )
+            lora_text = (tree / "networks/lora_anima.py").read_text(
+                encoding="utf-8"
+            )
+            self.assertNotIn(metadata_patch.MARKER_ATTR, lora_text)
+            payload = json.loads(
+                (tree / ".mikazuki-anima-runtime").read_text(encoding="utf-8")
+            )
+            self.assertEqual(payload["features"], ["multi_caption"])
+
     def test_metadata_only_runtime_is_isolated_and_capability_checked(self):
         source = Path("sd-scripts").resolve()
         before = subprocess.run(

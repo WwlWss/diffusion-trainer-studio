@@ -67,6 +67,7 @@ on:
       - "tests/test_full_schema_contract.py"
       - "tools/apply_anima_qwen3_sd_scripts_patch.py"
       - "tools/apply_anima_multi_caption_patch.py"
+      - "tools/apply_anima_parameter_policy_metadata_patch.py"
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/stable/train_network.py"
@@ -145,6 +146,7 @@ jobs:
             mikazuki/utils/train_utils.py \
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tools/apply_anima_multi_caption_patch.py \
+            tools/apply_anima_parameter_policy_metadata_patch.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
             scripts/stable/train_network.py \
