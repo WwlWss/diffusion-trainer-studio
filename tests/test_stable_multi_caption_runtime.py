@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts.stable.library.multi_caption import CaptionProcessingOptions, MultiCaptionResolver
+from scripts.stable.library.multi_caption import CaptionProcessingOptions, MultiCaptionResolver, _cleanup_index
 from scripts.stable.library.train_util import BaseDataset
 
 
@@ -230,6 +230,36 @@ class StableMultiCaptionResolverTests(unittest.TestCase):
             val = train.clone(deterministic=True)
             chosen = {val.choose(image_path=str(image)).group_name for _ in range(10)}
             self.assertEqual(len(chosen), 1)
+
+
+    def test_sqlite_cleanup_is_owned_by_creator_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            probe = Path(tmp) / "probe.sqlite3"
+            probe.write_text("x", encoding="utf-8")
+            _cleanup_index(str(probe), os.getpid() + 1)
+            self.assertTrue(probe.exists())
+            _cleanup_index(str(probe), os.getpid())
+            self.assertFalse(probe.exists())
+
+    def test_inherited_sqlite_connection_is_reopened_for_new_pid(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            image = Path(tmp) / "001.png"
+            image.write_bytes(b"x")
+            (Path(tmp) / "001.txt").write_text("tags", encoding="utf-8")
+            policy = {
+                "version": 1,
+                "selection": {"mode": "weighted_one"},
+                "storage": {"mode": "files"},
+                "groups": {
+                    "tags": {"enabled": True, "weight": 1, "source": {"extension": ".txt"}, "processing": {}},
+                },
+            }
+            resolver = MultiCaptionResolver.from_file(str(write_policy(tmp, policy)), [Info(image)])
+            self.assertEqual(resolver.choose(image_path=str(image)).caption, "tags")
+            original_connection = resolver._conn
+            with patch("scripts.stable.library.multi_caption.os.getpid", return_value=os.getpid() + 1000):
+                self.assertEqual(resolver.choose(image_path=str(image)).caption, "tags")
+                self.assertIsNot(resolver._conn, original_connection)
 
 
 if __name__ == "__main__":
