@@ -68,8 +68,9 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
 
     def test_parameter_policy_bundle_and_runtime_readiness_are_exposed(self):
         self.assertIn('autosave" / "parameter-policy"', TRAINING_API)
-        self.assertIn('"runtime_ready": not bool(prepared.runtime_blockers)', TRAINING_API)
-        self.assertIn('"runtime_blockers": list(prepared.runtime_blockers)', TRAINING_API)
+        self.assertIn('if prepared.config.get("parameter_policy_config"):', TRAINING_API)
+        self.assertIn('payload["runtime_ready"] = not bool(prepared.runtime_blockers)', TRAINING_API)
+        self.assertIn('payload["runtime_blockers"] = list(prepared.runtime_blockers)', TRAINING_API)
         self.assertIn("RuntimeError, OSError", TRAINING_API)
 
 
