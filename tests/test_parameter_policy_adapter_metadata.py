@@ -342,13 +342,14 @@ class NativeLoRAMetadataEmitterContractTests(unittest.TestCase):
 
     def test_stable_roots_cover_sd_and_sdxl_without_guessing_lora_name(self):
         source = self._source("stable")
-        for marker in (
-            'target_root = "unet"',
-            'target_root = "text_encoder"',
-            'target_root = "text_encoder_1"',
-            'target_root = "text_encoder_2"',
+        self.assertIn('target_root = "unet"', source)
+        for root_name in (
+            "text_encoder",
+            "text_encoder_1",
+            "text_encoder_2",
         ):
-            self.assertIn(marker, source)
+            with self.subTest(root_name=root_name):
+                self.assertIn(f'"{root_name}"', source)
         self.assertIn(
             "_attach_dts_parameter_policy_target(\n                                lora,\n                                target_root,\n                                target_path,\n                                child_module,",
             source,
