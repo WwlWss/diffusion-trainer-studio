@@ -227,10 +227,11 @@ def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, An
     result: dict[str, Any] = {}
 
     if "momentum" in raw:
-        momentum = _finite_number(raw["momentum"], field="momentum", minimum=0.0)
-        if momentum >= 1.0:
-            raise ValueError("Muon momentum must be < 1.0.")
-        result["momentum"] = momentum
+        # Match torch.optim.Muon: momentum is required to be non-negative,
+        # but the native implementation does not impose an artificial < 1 cap.
+        result["momentum"] = _finite_number(
+            raw["momentum"], field="momentum", minimum=0.0
+        )
 
     if "weight_decay" in raw:
         result["weight_decay"] = _finite_number(
@@ -257,8 +258,8 @@ def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, An
 
     if "ns_steps" in raw:
         value = raw["ns_steps"]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-            raise ValueError("Muon ns_steps must be an integer >= 1.")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value >= 100:
+            raise ValueError("Muon ns_steps must be an integer in [1, 99].")
         result["ns_steps"] = value
 
     if "adjust_lr_fn" in raw:
