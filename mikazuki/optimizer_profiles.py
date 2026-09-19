@@ -2,10 +2,10 @@ from __future__ import annotations
 
 """Optimizer capability metadata for the future Parameter Training Policy.
 
-This module is intentionally host-side and opt-in.  Importing it does not alter
-legacy optimizer selection, trainer arguments, device placement, or PyTorch.
-The existing Standard training path must continue to use sd-scripts'
-get_optimizer() until a Parameter Policy is explicitly enabled.
+This module is deliberately host-side and opt-in. Importing it does not alter
+legacy optimizer selection, trainer arguments, device placement, dependencies,
+or PyTorch. Standard training must continue to use sd-scripts' get_optimizer()
+until a Parameter Policy is explicitly enabled.
 """
 
 from dataclasses import dataclass
@@ -24,29 +24,51 @@ class OptimizerCapability:
     uses_external_scheduler: bool
     lr_semantics: Literal["normal", "adaptive", "optimizer_managed"]
     dependency: str | None = None
+    implementation: str | None = None
     requires_parameter_eligibility: bool = False
     restriction: str | None = None
 
 
-# Keep this registry independent from the legacy Standard optimizer dropdown.
-# Muon deliberately appears here first: exposing it through the old global
-# optimizer_type would incorrectly route non-hidden/non-2D parameters to Muon.
+# "supported" means intended for Component v1 without an extra semantic gate.
+# "restricted" means intended for v1 only after its optimizer-specific contract
+# is validated. "planned" is known to DTS but deliberately unavailable in v1.
 _CAPABILITIES: tuple[OptimizerCapability, ...] = (
-    OptimizerCapability("AdamW", "supported", True, True, "normal"),
+    OptimizerCapability("AdamW", "supported", True, True, "normal", implementation="torch.optim.AdamW"),
     OptimizerCapability("AdamW8bit", "supported", True, True, "normal", dependency="bitsandbytes"),
     OptimizerCapability("PagedAdamW8bit", "supported", True, True, "normal", dependency="bitsandbytes"),
+    OptimizerCapability("PagedAdamW", "supported", True, True, "normal", dependency="bitsandbytes"),
+    OptimizerCapability("PagedAdamW32bit", "supported", True, True, "normal", dependency="bitsandbytes"),
     OptimizerCapability("Lion", "supported", True, True, "normal", dependency="lion-pytorch"),
     OptimizerCapability("Lion8bit", "supported", True, True, "normal", dependency="bitsandbytes"),
     OptimizerCapability("PagedLion8bit", "supported", True, True, "normal", dependency="bitsandbytes"),
-    OptimizerCapability("SGDNesterov", "supported", True, True, "normal"),
+    OptimizerCapability("SGDNesterov", "supported", True, True, "normal", implementation="torch.optim.SGD"),
     OptimizerCapability("SGDNesterov8bit", "supported", True, True, "normal", dependency="bitsandbytes"),
     OptimizerCapability(
         "RAdamScheduleFree",
-        "supported",
+        "restricted",
         True,
         False,
         "optimizer_managed",
         dependency="schedulefree",
+        restriction="Requires schedule-free train/eval lifecycle handling and no external LR scheduler.",
+    ),
+    OptimizerCapability(
+        "AdamWScheduleFree",
+        "restricted",
+        True,
+        False,
+        "optimizer_managed",
+        dependency="schedulefree",
+        restriction="Requires schedule-free train/eval lifecycle handling and no external LR scheduler.",
+    ),
+    OptimizerCapability(
+        "SGDScheduleFree",
+        "restricted",
+        True,
+        False,
+        "optimizer_managed",
+        dependency="schedulefree",
+        restriction="Requires schedule-free train/eval lifecycle handling and no external LR scheduler.",
     ),
     OptimizerCapability(
         "DAdaptation",
@@ -55,7 +77,16 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
+    ),
+    OptimizerCapability(
+        "DAdaptAdamPreprint",
+        "restricted",
+        False,
+        True,
+        "adaptive",
+        dependency="dadaptation",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "DAdaptAdam",
@@ -64,7 +95,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "DAdaptAdaGrad",
@@ -73,7 +104,16 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
+    ),
+    OptimizerCapability(
+        "DAdaptAdan",
+        "restricted",
+        False,
+        True,
+        "adaptive",
+        dependency="dadaptation",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "DAdaptAdanIP",
@@ -82,7 +122,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "DAdaptLion",
@@ -91,7 +131,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "DAdaptSGD",
@@ -100,7 +140,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="dadaptation",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "Prodigy",
@@ -109,7 +149,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "adaptive",
         dependency="prodigyopt",
-        restriction="Component mode must use profile-owned adaptive LR semantics.",
+        restriction="Component v1 must use profile-owned adaptive LR semantics.",
     ),
     OptimizerCapability(
         "AdaFactor",
@@ -118,7 +158,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         "normal",
         dependency="transformers",
-        restriction="Component mode v1 requires relative_step=False.",
+        restriction="Component v1 requires relative_step=False.",
     ),
     OptimizerCapability(
         "prodigyplus.ProdigyPlusScheduleFree",
@@ -127,7 +167,7 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         False,
         "adaptive",
         dependency="prodigy-plus-schedule-free",
-        restriction="Needs dedicated adaptive/schedule-free profile handling before training integration.",
+        restriction="Needs dedicated adaptive and schedule-free profile handling.",
     ),
     OptimizerCapability(
         "pytorch_optimizer.CAME",
@@ -135,8 +175,16 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         True,
         "normal",
-        dependency="pytorch-optimizer",
+        dependency="pytorch-optimizer==3.10.0",
         restriction="Enable only after dedicated GPU smoke coverage.",
+    ),
+    OptimizerCapability(
+        "Custom",
+        "planned",
+        False,
+        True,
+        "normal",
+        restriction="Arbitrary custom optimizers need an explicit capability contract before Component-wise use.",
     ),
     OptimizerCapability(
         "Muon",
@@ -144,27 +192,35 @@ _CAPABILITIES: tuple[OptimizerCapability, ...] = (
         True,
         True,
         "normal",
-        dependency="torch.optim.Muon",
+        dependency="pytorch-optimizer==3.10.0",
+        implementation="pytorch_optimizer.Muon",
         requires_parameter_eligibility=True,
-        restriction="Only model-profile-approved hidden-layer 2D weights are eligible; other parameters require fallback routing.",
+        restriction=(
+            "Only model-profile-approved hidden-layer 2D weights are eligible; "
+            "other parameters require fallback routing."
+        ),
     ),
 )
 
 _BY_NAME = {cap.name.casefold(): cap for cap in _CAPABILITIES}
 
+# DTS pins pytorch-optimizer 3.10.0. Use that Muon implementation instead of
+# requiring a newer torch build. Do not expose the class's internal AdamW
+# fallback controls: Parameter Policy owns fallback routing as a separate
+# Optimizer Profile.
 MUON_ARGUMENTS = frozenset(
     {
         "momentum",
         "weight_decay",
+        "weight_decouple",
         "nesterov",
-        "ns_coefficients",
-        "eps",
         "ns_steps",
-        "adjust_lr_fn",
+        "ns_coeffs",
+        "use_adjusted_lr",
     }
 )
-MUON_ADJUST_LR_MODES = frozenset({"original", "match_rms_adamw", "spectral_unclamped"})
-_PROFILE_RESERVED_ARGUMENTS = frozenset({"params", "lr"})
+MUON_NS_PRESETS = frozenset({"original", "quintic", "polar_express", "polar_express_safer"})
+_PROFILE_RESERVED_ARGUMENTS = frozenset({"params", "lr", "use_muon", "adamw_lr", "adamw_betas", "adamw_wd", "adamw_eps"})
 
 
 def list_optimizer_capabilities() -> tuple[OptimizerCapability, ...]:
@@ -187,7 +243,39 @@ def canonical_optimizer_type(optimizer_type: str) -> str:
     return get_optimizer_capability(optimizer_type).name
 
 
-def _finite_number(value: Any, *, field: str, minimum: float | None = None, strict_minimum: bool = False) -> float:
+def require_component_optimizer_candidate(optimizer_type: str) -> OptimizerCapability:
+    """Reject v1-deferred optimizers but preserve restricted ones for explicit validators."""
+
+    capability = get_optimizer_capability(optimizer_type)
+    if capability.component_support == "planned":
+        raise ValueError(
+            f"Optimizer {capability.name} is registered but not enabled for Component-wise v1: "
+            f"{capability.restriction or 'dedicated validation is still required.'}"
+        )
+    return capability
+
+
+def require_unrestricted_component_optimizer(optimizer_type: str) -> OptimizerCapability:
+    """Return only optimizers that need no additional semantic gate."""
+
+    capability = require_component_optimizer_candidate(optimizer_type)
+    if capability.component_support != "supported":
+        raise ValueError(
+            f"Optimizer {capability.name} requires optimizer-specific Component-wise validation: "
+            f"{capability.restriction or 'restricted capability.'}"
+        )
+    return capability
+
+
+def _finite_number(
+    value: Any,
+    *,
+    field: str,
+    minimum: float | None = None,
+    maximum: float | None = None,
+    strict_minimum: bool = False,
+    strict_maximum: bool = False,
+) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError(f"Muon {field} must be a finite number.")
     number = float(value)
@@ -198,16 +286,39 @@ def _finite_number(value: Any, *, field: str, minimum: float | None = None, stri
         if invalid:
             relation = ">" if strict_minimum else ">="
             raise ValueError(f"Muon {field} must be {relation} {minimum}.")
+    if maximum is not None:
+        invalid = number >= maximum if strict_maximum else number > maximum
+        if invalid:
+            relation = "<" if strict_maximum else "<="
+            raise ValueError(f"Muon {field} must be {relation} {maximum}.")
     return number
 
 
-def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, Any]:
-    """Validate only arguments accepted by the native torch.optim.Muon API.
+def _canonical_json_value(value: Any, *, field: str) -> Any:
+    if value is None or isinstance(value, (str, bool)):
+        return value
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise ValueError(f"Optimizer Profile {field} must not contain NaN or infinity.")
+        return value
+    if isinstance(value, (list, tuple)):
+        return [_canonical_json_value(item, field=field) for item in value]
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key, item in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"Optimizer Profile {field} object keys must be strings.")
+            result[key] = _canonical_json_value(item, field=field)
+        return result
+    raise ValueError(
+        f"Optimizer Profile {field} contains unsupported non-JSON value {type(value).__name__}."
+    )
 
-    Learning rate intentionally does not belong here.  In Parameter Training
-    Policy it belongs to each Component/param-group so one Muon profile can
-    serve multiple components with different LRs.
-    """
+
+def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Validate the DTS-supported subset of pytorch_optimizer.Muon arguments."""
 
     raw = dict(arguments or {})
     reserved = _PROFILE_RESERVED_ARGUMENTS.intersection(raw)
@@ -215,22 +326,18 @@ def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, An
         raise ValueError(
             "Optimizer Profile args may not define "
             + ", ".join(sorted(reserved))
-            + "; Parameter Policy owns parameter routing and LR."
+            + "; Parameter Policy owns parameter routing, fallback routing, and LR."
         )
 
     unknown = set(raw).difference(MUON_ARGUMENTS)
     if unknown:
-        raise ValueError(
-            "Unsupported Muon argument(s): " + ", ".join(sorted(unknown))
-        )
+        raise ValueError("Unsupported Muon argument(s): " + ", ".join(sorted(unknown)))
 
     result: dict[str, Any] = {}
 
     if "momentum" in raw:
-        # Match torch.optim.Muon: momentum is required to be non-negative,
-        # but the native implementation does not impose an artificial < 1 cap.
         result["momentum"] = _finite_number(
-            raw["momentum"], field="momentum", minimum=0.0
+            raw["momentum"], field="momentum", minimum=0.0, maximum=1.0, strict_maximum=True
         )
 
     if "weight_decay" in raw:
@@ -238,45 +345,36 @@ def validate_muon_arguments(arguments: Mapping[str, Any] | None) -> dict[str, An
             raw["weight_decay"], field="weight_decay", minimum=0.0
         )
 
-    if "nesterov" in raw:
-        if not isinstance(raw["nesterov"], bool):
-            raise ValueError("Muon nesterov must be boolean.")
-        result["nesterov"] = raw["nesterov"]
-
-    if "ns_coefficients" in raw:
-        coeffs = raw["ns_coefficients"]
-        if not isinstance(coeffs, (list, tuple)) or len(coeffs) != 3:
-            raise ValueError("Muon ns_coefficients must contain exactly three numbers.")
-        result["ns_coefficients"] = tuple(
-            _finite_number(value, field="ns_coefficients") for value in coeffs
-        )
-
-    if "eps" in raw:
-        result["eps"] = _finite_number(
-            raw["eps"], field="eps", minimum=0.0, strict_minimum=True
-        )
+    for field in ("weight_decouple", "nesterov", "use_adjusted_lr"):
+        if field in raw:
+            if not isinstance(raw[field], bool):
+                raise ValueError(f"Muon {field} must be boolean.")
+            result[field] = raw[field]
 
     if "ns_steps" in raw:
         value = raw["ns_steps"]
-        if isinstance(value, bool) or not isinstance(value, int) or value < 1 or value >= 100:
-            raise ValueError("Muon ns_steps must be an integer in [1, 99].")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("Muon ns_steps must be an integer >= 1.")
         result["ns_steps"] = value
 
-    if "adjust_lr_fn" in raw:
-        value = raw["adjust_lr_fn"]
-        if value is not None and value not in MUON_ADJUST_LR_MODES:
+    if "ns_coeffs" in raw:
+        value = raw["ns_coeffs"]
+        if not isinstance(value, str) or value not in MUON_NS_PRESETS:
             raise ValueError(
-                "Muon adjust_lr_fn must be one of: "
-                + ", ".join(sorted(MUON_ADJUST_LR_MODES))
-                + ", or null."
+                "Muon ns_coeffs must be one of: " + ", ".join(sorted(MUON_NS_PRESETS)) + "."
             )
-        result["adjust_lr_fn"] = value
+        result["ns_coeffs"] = value
 
     return result
 
 
 def normalize_optimizer_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
-    """Return a canonical optimizer profile without constructing an optimizer."""
+    """Canonicalize a profile into JSON-safe host configuration.
+
+    This does not construct an optimizer and does not make a restricted
+    optimizer valid; policy-level validators must apply the capability's
+    restriction before training.
+    """
 
     if not isinstance(profile, Mapping):
         raise ValueError("Optimizer Profile must be an object.")
@@ -293,47 +391,41 @@ def normalize_optimizer_profile(profile: Mapping[str, Any]) -> dict[str, Any]:
         raise ValueError(
             "Optimizer Profile args may not define "
             + ", ".join(sorted(reserved))
-            + "; Parameter Policy owns parameter routing and LR."
+            + "; Parameter Policy owns parameter routing, fallback routing, and LR."
         )
 
     if optimizer_type == "Muon":
         args = validate_muon_arguments(raw_args)
     else:
-        args = dict(raw_args)
+        args = _canonical_json_value(dict(raw_args), field="args")
 
-    return {
-        "type": capability.name,
-        "args": args,
-    }
+    return {"type": capability.name, "args": args}
 
 
-def require_component_optimizer_support(optimizer_type: str) -> OptimizerCapability:
-    capability = get_optimizer_capability(optimizer_type)
-    if capability.component_support == "planned":
-        raise ValueError(
-            f"Optimizer {capability.name} is registered but not enabled for Component-wise training yet: "
-            f"{capability.restriction or 'GPU validation is still required.'}"
-        )
-    return capability
+def resolve_muon_class(pytorch_optimizer_module: Any | None = None) -> type:
+    """Resolve the pinned pytorch-optimizer Muon lazily and fail closed.
 
-
-def resolve_native_muon_class(torch_module: Any | None = None) -> type:
-    """Resolve torch.optim.Muon lazily and fail closed when unavailable.
-
-    This function never installs packages, changes PyTorch, changes device
-    placement, or falls back to CPU/another optimizer.
+    The resolver never installs packages, upgrades PyTorch, changes CUDA,
+    changes device placement, falls back to another optimizer, or moves
+    training to CPU.
     """
 
-    if torch_module is None:
-        import torch as torch_module  # type: ignore[no-redef]
+    if pytorch_optimizer_module is None:
+        try:
+            import pytorch_optimizer as pytorch_optimizer_module  # type: ignore[no-redef]
+        except ImportError as exc:
+            raise RuntimeError(
+                "Muon requires DTS's pinned pytorch-optimizer dependency. "
+                "DTS will not auto-install packages, upgrade PyTorch, fall back "
+                "to another optimizer, or move training to CPU."
+            ) from exc
 
-    optim = getattr(torch_module, "optim", None)
-    muon = getattr(optim, "Muon", None) if optim is not None else None
+    muon = getattr(pytorch_optimizer_module, "Muon", None)
     if muon is None:
-        version = getattr(torch_module, "__version__", "unknown")
+        version = getattr(pytorch_optimizer_module, "__version__", "unknown")
         raise RuntimeError(
-            "Muon requires a PyTorch build that provides torch.optim.Muon "
-            f"(current torch={version}). DTS will not auto-upgrade PyTorch, "
-            "fall back to another optimizer, or move training to CPU."
+            "The installed pytorch-optimizer build does not provide Muon "
+            f"(current pytorch-optimizer={version}). DTS will not auto-upgrade "
+            "dependencies, fall back to another optimizer, or move training to CPU."
         )
     return muon
