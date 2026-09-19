@@ -6,6 +6,7 @@ on:
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_runtime.py"
       - "mikazuki/multi_caption_config.py"
+      - "mikazuki/optimizer_profiles.py"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -72,6 +73,7 @@ on:
       - "scripts/dev/flux_train.py"
       - "scripts/dev/sd3_train.py"
       - "tests/test_multi_caption*.py"
+      - "tests/test_optimizer_profile_capabilities.py"
       - "tests/test_anima_multi_caption_runtime.py"
       - "ANIMA.md"
       - ".gitmodules"
@@ -102,6 +104,7 @@ jobs:
             mikazuki/anima_qwen_config.py \
             mikazuki/anima_runtime.py \
             mikazuki/multi_caption_config.py \
+            mikazuki/optimizer_profiles.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -146,6 +149,7 @@ jobs:
             tests/test_multi_caption_safety.py \
             tests/test_multi_caption_backend_matrix.py \
             tests/test_anima_multi_caption_runtime.py \
+            tests/test_optimizer_profile_capabilities.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -233,6 +237,9 @@ jobs:
           validate_patch(Path("sd-scripts"))
           print("Anima Multi-Caption patch validation passed")
           PY
+
+      - name: Optimizer capability registry
+        run: python -m unittest tests.test_optimizer_profile_capabilities -v
 
       - name: Run existing Anima configuration regression tests
         run: python -m unittest discover -s tests -p 'test_anima*.py' -v
