@@ -2,12 +2,12 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 import numpy as np
-import pandas as pd
 from PIL import Image
 from huggingface_hub import hf_hub_download
 
 from mikazuki.tagger.interrogators.base import Interrogator
 from mikazuki.tagger.interrogators.onnx_gpu import create_cuda_onnx_session
+from mikazuki.tagger.interrogators.tag_metadata import load_selected_tags
 
 
 class PixAITaggerInterrogator(Interrogator):
@@ -26,7 +26,7 @@ class PixAITaggerInterrogator(Interrogator):
     def load(self) -> None:
         model_path, tags_path = self.download()
         self.model = create_cuda_onnx_session(model_path)
-        self.tags = pd.read_csv(tags_path)
+        self.tag_names, self.tag_categories = load_selected_tags(tags_path)
         print(f"Loaded {self.name} model from {model_path} with providers {self.model.get_providers()}")
 
     def _preprocess(self, image: Image.Image) -> np.ndarray:
@@ -50,7 +50,19 @@ class PixAITaggerInterrogator(Interrogator):
         probs = self.model.run([pred_name], {img_input.name: self._preprocess(image)})[0][0]
         result = {k: [] for k in ("rating", "general", "character", "copyright", "artist", "meta", "quality", "model")}
         category_map = {0: "general", 1: "rating", 2: "quality", 3: "meta", 4: "character", 5: "copyright", 6: "artist", 9: "rating"}
-        for (_, row), score in zip(self.tags.iterrows(), probs):
-            category = category_map.get(int(row.get("category", 0)), "general")
-            result[category].append((str(row["name"]), float(score)))
+        probs = np.asarray(probs).reshape(-1)
+        if len(probs) != len(self.tag_names):
+            raise RuntimeError(
+                f"{self.name} output/tag count mismatch: "
+                f"model returned {len(probs)} scores, "
+                f"but selected_tags.csv contains {len(self.tag_names)} tags"
+            )
+
+        for name, category_id, score in zip(
+            self.tag_names,
+            self.tag_categories,
+            probs,
+        ):
+            category = category_map.get(category_id, "general")
+            result[category].append((name, float(score)))
         return result
