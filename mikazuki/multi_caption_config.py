@@ -14,6 +14,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -33,34 +34,30 @@ MULTI_CAPTION_GUI_KEYS = {
     "multi_caption_json_groups",
 }
 
+_COMMON_PROCESSING_FIELDS = {
+    "caption_separator",
+    "secondary_separator",
+    "enable_wildcard",
+    "caption_prefix",
+    "caption_suffix",
+    "shuffle_caption",
+    "keep_tokens",
+    "keep_tokens_separator",
+    "token_warmup_min",
+    "token_warmup_step",
+    "caption_dropout_rate",
+    "caption_dropout_every_n_epochs",
+    "caption_tag_dropout_rate",
+}
+
+# Every sd-scripts Dataset implementation used by DTS exposes the same
+# process_caption() contract. Keep one capability set across pages so a Group
+# does not silently lose wildcard/prefix/warmup merely because the model family
+# changed.
 PROCESSING_FIELDS = {
-    "basic": {
-        "shuffle_caption",
-        "keep_tokens",
-    },
-    "shared": {
-        "shuffle_caption",
-        "keep_tokens",
-        "keep_tokens_separator",
-        "caption_dropout_rate",
-        "caption_dropout_every_n_epochs",
-        "caption_tag_dropout_rate",
-    },
-    "anima": {
-        "caption_separator",
-        "secondary_separator",
-        "enable_wildcard",
-        "caption_prefix",
-        "caption_suffix",
-        "shuffle_caption",
-        "keep_tokens",
-        "keep_tokens_separator",
-        "token_warmup_min",
-        "token_warmup_step",
-        "caption_dropout_rate",
-        "caption_dropout_every_n_epochs",
-        "caption_tag_dropout_rate",
-    },
+    "basic": set(_COMMON_PROCESSING_FIELDS),
+    "shared": set(_COMMON_PROCESSING_FIELDS),
+    "anima": set(_COMMON_PROCESSING_FIELDS),
 }
 
 _BOOL_PROCESSING_FIELDS = {
@@ -115,17 +112,24 @@ def _as_bool(value: object, default: bool = False) -> bool:
 
 def _as_float(value: object, field: str) -> float:
     try:
-        return float(value)
+        result = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Multi-Caption: {field} 必须是有效数字。") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"Multi-Caption: {field} 不能是 NaN 或无穷大。")
+    return result
 
 
 def _as_int(value: object, field: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"Multi-Caption: {field} 必须是整数。")
     try:
-        result = int(value)
+        numeric = float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"Multi-Caption: {field} 必须是整数。") from exc
-    return result
+    if not math.isfinite(numeric) or not numeric.is_integer():
+        raise ValueError(f"Multi-Caption: {field} 必须是整数，不能自动截断小数。")
+    return int(numeric)
 
 
 def _normalize_extension(value: object, field: str) -> str:
@@ -205,6 +209,10 @@ def _normalize_groups(
         name = str(raw_name).strip()
         if not name:
             raise ValueError("Multi-Caption: Group Name 不能为空。")
+        if name in groups:
+            raise ValueError(
+                f"Multi-Caption: Group Name 规范化后重复: {raw_name!r} -> {name!r}。"
+            )
         raw = raw_groups[raw_name]
         if not isinstance(raw, dict):
             raise ValueError(f"Multi-Caption: Group {name!r} 必须是 object。")
