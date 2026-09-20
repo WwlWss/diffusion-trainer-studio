@@ -53,7 +53,13 @@ from library.custom_train_functions import apply_masked_loss, add_custom_train_a
 
 
 def train(args):
-    train_util.verify_training_args(args)
+    parameter_policy_requested = bool(
+        str(getattr(args, "parameter_policy_config", "") or "").strip()
+    )
+    train_util.verify_training_args(
+        args,
+        parameter_policy_runtime_enabled=parameter_policy_requested,
+    )
     train_util.prepare_dataset_args(args, True)
     # sdxl_train_util.verify_sdxl_training_args(args)
     deepspeed_utils.prepare_deepspeed_args(args)
@@ -284,10 +290,21 @@ def train(args):
         args.pretrained_model_name_or_path, weight_dtype, "cpu", args.disable_mmap_load_safetensors, model_type="flux"
     )
 
+    parameter_policy_session = None
+    parameter_policy_bridge = None
+    if parameter_policy_requested:
+        from library import dts_parameter_policy_bridge as parameter_policy_bridge
+
+        parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(
+            args=args,
+            train_type="flux-finetune",
+            roots={"transformer": flux},
+        )
+    else:
+        flux.requires_grad_(True)
+
     if args.gradient_checkpointing:
         flux.enable_gradient_checkpointing(cpu_offload=args.cpu_offload_checkpointing)
-
-    flux.requires_grad_(True)
 
     # block swap
 
@@ -321,13 +338,15 @@ def train(args):
         ae.eval()
         ae.to(accelerator.device, dtype=weight_dtype)
 
-    training_models = []
+    training_models = [flux]
     params_to_optimize = []
-    training_models.append(flux)
     name_and_params = list(flux.named_parameters())
-    # single param group for now
-    params_to_optimize.append({"params": [p for _, p in name_and_params], "lr": args.learning_rate})
-    param_names = [[n for n, _ in name_and_params]]
+    if parameter_policy_session is None:
+        # single param group for now
+        params_to_optimize.append({"params": [p for _, p in name_and_params], "lr": args.learning_rate})
+        param_names = [[n for n, _ in name_and_params]]
+    else:
+        param_names = []
 
     # calculate number of trainable parameters
     n_params = 0
@@ -340,7 +359,11 @@ def train(args):
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
-    if args.blockwise_fused_optimizers:
+    if parameter_policy_session is not None:
+        optimizer = parameter_policy_session.optimizer
+        optimizer_train_fn = optimizer.train
+        optimizer_eval_fn = optimizer.eval
+    elif args.blockwise_fused_optimizers:
         # fused backward pass: https://pytorch.org/tutorials/intermediate/optimizer_step_in_backward_tutorial.html
         # Instead of creating an optimizer for all parameters as in the tutorial, we create an optimizer for each block of parameters.
         # This balances memory usage and management complexity.
@@ -424,7 +447,14 @@ def train(args):
     train_dataset_group.set_max_train_steps(args.max_train_steps)
 
     # lr schedulerを用意する
-    if args.blockwise_fused_optimizers:
+    if parameter_policy_session is not None:
+        scheduler_factory = parameter_policy_bridge.make_legacy_scheduler_factory(
+            args=args,
+            get_scheduler_fix=train_util.get_scheduler_fix,
+            num_processes=accelerator.num_processes,
+        )
+        lr_scheduler = parameter_policy_session.build_scheduler(scheduler_factory)
+    elif args.blockwise_fused_optimizers:
         # prepare lr schedulers for each optimizer
         lr_schedulers = [train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes) for optimizer in optimizers]
         lr_scheduler = lr_schedulers[0]  # avoid error in the following code
@@ -473,6 +503,16 @@ def train(args):
         if is_swapping_blocks:
             accelerator.unwrap_model(flux).move_to_device_except_swap_blocks(accelerator.device)  # reduce peak memory usage
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
+
+    if parameter_policy_session is not None:
+        parameter_policy_session.audit_after_prepare(
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
+        parameter_policy_session.register_checkpoint_manifest(
+            accelerator,
+            scheduler=lr_scheduler,
+        )
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
     if args.full_fp16:
@@ -596,6 +636,8 @@ def train(args):
 
         for m in training_models:
             m.train()
+        if parameter_policy_session is not None:
+            parameter_policy_session.assert_requires_grad_contract()
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
@@ -694,9 +736,12 @@ def train(args):
 
                 if not (args.fused_backward_pass or args.blockwise_fused_optimizers):
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                        params_to_clip = []
-                        for m in training_models:
-                            params_to_clip.extend(m.parameters())
+                        if parameter_policy_session is not None:
+                            params_to_clip = parameter_policy_session.trainable_parameters
+                        else:
+                            params_to_clip = []
+                            for m in training_models:
+                                params_to_clip.extend(m.parameters())
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                     optimizer.step()
@@ -738,7 +783,10 @@ def train(args):
             current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
             if len(accelerator.trackers) > 0:
                 logs = {"loss": current_loss}
-                train_util.append_lr_to_logs(logs, lr_scheduler, args.optimizer_type, including_unet=True)
+                if parameter_policy_session is not None:
+                    logs.update(parameter_policy_session.component_lr_logs(lr_scheduler))
+                else:
+                    train_util.append_lr_to_logs(logs, lr_scheduler, args.optimizer_type, including_unet=True)
 
                 accelerator.log(logs, step=global_step)
 
