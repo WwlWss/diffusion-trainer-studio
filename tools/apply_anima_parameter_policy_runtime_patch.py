@@ -318,7 +318,8 @@ def validate_patch(sd_scripts_dir: Path) -> None:
         sd_scripts_dir / "train_network.py": (
             "parameter_policy_session",
             "component_lr_logs",
-            "register_checkpoint_manifest",
+            "finalize_after_prepare",
+            "model_metadata",
         ),
         sd_scripts_dir / "anima_train_network.py": (
             'return "anima-lora"',
