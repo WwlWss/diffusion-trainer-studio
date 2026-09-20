@@ -80,10 +80,24 @@ def normalize_qwen_training_config(config: dict, anima_training_mode: str) -> bo
     old LoRA/full-finetune configurations serialize exactly as before.
     """
     train_qwen3 = bool(config.get("train_qwen3_text_encoder"))
+    component_policy = bool(str(config.get("parameter_policy_config") or "").strip())
 
     if anima_training_mode != "finetune" or not train_qwen3:
         strip_qwen_training_keys(config)
         return False
+
+    if component_policy:
+        # Parameter Policy owns optimizer type and all component learning rates.
+        # Cache compatibility is deferred until the managed policy route for
+        # qwen3 is known; train_qwen3_text_encoder is only target permission.
+        config.pop("qwen3_lr", None)
+        if not config.get("qwen3_output_dir"):
+            config.pop("qwen3_output_dir", None)
+        else:
+            output_dir = Path(str(config["qwen3_output_dir"]))
+            if output_dir.exists() and not output_dir.is_dir():
+                raise ValueError(f"Anima: Qwen3 输出位置不是目录: {output_dir}")
+        return True
 
     if text_encoder_cache_enabled(config):
         raise ValueError(
