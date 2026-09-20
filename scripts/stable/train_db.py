@@ -48,7 +48,13 @@ logger = logging.getLogger(__name__)
 
 
 def train(args):
-    train_util.verify_training_args(args)
+    parameter_policy_requested = bool(
+        str(getattr(args, "parameter_policy_config", "") or "").strip()
+    )
+    train_util.verify_training_args(
+        args,
+        parameter_policy_runtime_enabled=parameter_policy_requested,
+    )
     train_util.prepare_dataset_args(args, False)
     deepspeed_utils.prepare_deepspeed_args(args)
     setup_logging(args, reset=True)
@@ -161,9 +167,29 @@ def train(args):
         accelerator.wait_for_everyone()
 
     # 学習を準備する：モデルを適切な状態にする
-    train_text_encoder = args.stop_text_encoder_training is None or args.stop_text_encoder_training >= 0
-    unet.requires_grad_(True)  # 念のため追加
-    text_encoder.requires_grad_(train_text_encoder)
+    parameter_policy_session = None
+    parameter_policy_bridge = None
+    if parameter_policy_requested:
+        from library import dts_parameter_policy_bridge as parameter_policy_bridge
+
+        parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(
+            args=args,
+            train_type="sd-dreambooth",
+            roots={
+                "unet": unet,
+                "text_encoder": text_encoder,
+            },
+        )
+        train_unet = parameter_policy_session.trains_prefix("unet.")
+        train_text_encoder = parameter_policy_session.trains_component("text_encoder")
+    else:
+        train_unet = True
+        train_text_encoder = args.stop_text_encoder_training is None or args.stop_text_encoder_training >= 0
+        unet.requires_grad_(True)  # 念のため追加
+        text_encoder.requires_grad_(train_text_encoder)
+
+    if not train_unet:
+        accelerator.print("U-Net is not trained.")
     if not train_text_encoder:
         accelerator.print("Text Encoder is not trained.")
 
@@ -178,19 +204,26 @@ def train(args):
 
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
-    if train_text_encoder:
-        if args.learning_rate_te is None:
-            # wightout list, adamw8bit is crashed
-            trainable_params = list(itertools.chain(unet.parameters(), text_encoder.parameters()))
+    if parameter_policy_session is None:
+        if train_text_encoder:
+            if args.learning_rate_te is None:
+                # wightout list, adamw8bit is crashed
+                trainable_params = list(itertools.chain(unet.parameters(), text_encoder.parameters()))
+            else:
+                trainable_params = [
+                    {"params": list(unet.parameters()), "lr": args.learning_rate},
+                    {"params": list(text_encoder.parameters()), "lr": args.learning_rate_te},
+                ]
         else:
-            trainable_params = [
-                {"params": list(unet.parameters()), "lr": args.learning_rate},
-                {"params": list(text_encoder.parameters()), "lr": args.learning_rate_te},
-            ]
-    else:
-        trainable_params = unet.parameters()
+            trainable_params = unet.parameters()
 
-    _, _, optimizer = train_util.get_optimizer(args, trainable_params)
+        _, _, optimizer = train_util.get_optimizer(args, trainable_params)
+        optimizer_train_fn = lambda: None
+        optimizer_eval_fn = lambda: None
+    else:
+        optimizer = parameter_policy_session.optimizer
+        optimizer_train_fn = optimizer.train
+        optimizer_eval_fn = optimizer.eval
 
     # dataloaderを準備する
     # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
@@ -216,11 +249,19 @@ def train(args):
     # データセット側にも学習ステップを送信
     train_dataset_group.set_max_train_steps(args.max_train_steps)
 
-    if args.stop_text_encoder_training is None:
+    if parameter_policy_session is None and args.stop_text_encoder_training is None:
         args.stop_text_encoder_training = args.max_train_steps + 1  # do not stop until end
 
     # lr schedulerを用意する TODO gradient_accumulation_stepsの扱いが何かおかしいかもしれない。後で確認する
-    lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+    if parameter_policy_session is None:
+        lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+    else:
+        scheduler_factory = parameter_policy_bridge.make_legacy_scheduler_factory(
+            args=args,
+            get_scheduler_fix=train_util.get_scheduler_fix,
+            num_processes=accelerator.num_processes,
+        )
+        lr_scheduler = parameter_policy_session.build_scheduler(scheduler_factory)
 
     # 実験的機能：勾配も含めたfp16学習を行う　モデル全体をfp16にする
     if args.full_fp16:
@@ -233,7 +274,7 @@ def train(args):
 
     # acceleratorがなんかよろしくやってくれるらしい
     if args.deepspeed:
-        if args.train_text_encoder:
+        if train_text_encoder:
             ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet, text_encoder=text_encoder)
         else:
             ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet)
@@ -243,17 +284,33 @@ def train(args):
         training_models = [ds_model]
 
     else:
-        if train_text_encoder:
-            unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-                unet, text_encoder, optimizer, train_dataloader, lr_scheduler
-            )
-            training_models = [unet, text_encoder]
+        training_models = []
+        if train_unet:
+            unet = accelerator.prepare(unet)
+            training_models.append(unet)
         else:
-            unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(unet, optimizer, train_dataloader, lr_scheduler)
-            training_models = [unet]
+            unet.to(accelerator.device, dtype=weight_dtype)
+        if train_text_encoder:
+            text_encoder = accelerator.prepare(text_encoder)
+            training_models.append(text_encoder)
+        else:
+            text_encoder.to(accelerator.device, dtype=weight_dtype)
 
-    if not train_text_encoder:
-        text_encoder.to(accelerator.device, dtype=weight_dtype)  # to avoid 'cpu' vs 'cuda' error
+        optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+            optimizer,
+            train_dataloader,
+            lr_scheduler,
+        )
+
+    if parameter_policy_session is not None:
+        parameter_policy_session.audit_after_prepare(
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
+        parameter_policy_session.register_checkpoint_manifest(
+            accelerator,
+            scheduler=lr_scheduler,
+        )
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
     if args.full_fp16:
@@ -301,7 +358,9 @@ def train(args):
         accelerator.init_trackers("dreambooth" if args.log_tracker_name is None else args.log_tracker_name, config=train_util.get_sanitized_config_or_none(args), init_kwargs=init_kwargs)
 
     # For --sample_at_first
+    optimizer_eval_fn()
     train_util.sample_images(accelerator, args, 0, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+    optimizer_train_fn()
 
     loss_recorder = train_util.LossRecorder()
     for epoch in range(num_train_epochs):
@@ -310,14 +369,18 @@ def train(args):
 
         # 指定したステップ数までText Encoderを学習する：epoch最初の状態
         unet.train()
-        # train==True is required to enable gradient_checkpointing
-        if args.gradient_checkpointing or global_step < args.stop_text_encoder_training:
+        if parameter_policy_session is None:
+            # train==True is required to enable gradient_checkpointing
+            if args.gradient_checkpointing or global_step < args.stop_text_encoder_training:
+                text_encoder.train()
+        elif train_text_encoder:
             text_encoder.train()
+            parameter_policy_session.assert_requires_grad_contract()
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
             # 指定したステップ数でText Encoderの学習を止める
-            if global_step == args.stop_text_encoder_training:
+            if parameter_policy_session is None and global_step == args.stop_text_encoder_training:
                 accelerator.print(f"stop text encoder training at step {global_step}")
                 if not args.gradient_checkpointing:
                     text_encoder.train(False)
@@ -336,7 +399,11 @@ def train(args):
                 b_size = latents.shape[0]
 
                 # Get the text embedding for conditioning
-                with torch.set_grad_enabled(global_step < args.stop_text_encoder_training):
+                with torch.set_grad_enabled(
+                    train_text_encoder
+                    if parameter_policy_session is not None
+                    else global_step < args.stop_text_encoder_training
+                ):
                     if args.weighted_captions:
                         encoder_hidden_states = get_weighted_text_embeddings(
                             tokenizer,
@@ -385,7 +452,9 @@ def train(args):
 
                 accelerator.backward(loss)
                 if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                    if train_text_encoder:
+                    if parameter_policy_session is not None:
+                        params_to_clip = parameter_policy_session.trainable_parameters
+                    elif train_text_encoder:
                         params_to_clip = itertools.chain(unet.parameters(), text_encoder.parameters())
                     else:
                         params_to_clip = unet.parameters()
@@ -400,6 +469,7 @@ def train(args):
                 progress_bar.update(1)
                 global_step += 1
 
+                optimizer_eval_fn()
                 train_util.sample_images(
                     accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet
                 )
@@ -424,11 +494,15 @@ def train(args):
                             accelerator.unwrap_model(unet),
                             vae,
                         )
+                optimizer_train_fn()
 
             current_loss = loss.detach().item()
             if args.logging_dir is not None:
                 logs = {"loss": current_loss}
-                train_util.append_lr_to_logs(logs, lr_scheduler, args.optimizer_type, including_unet=True)
+                if parameter_policy_session is not None:
+                    logs.update(parameter_policy_session.component_lr_logs(lr_scheduler))
+                else:
+                    train_util.append_lr_to_logs(logs, lr_scheduler, args.optimizer_type, including_unet=True)
                 accelerator.log(logs, step=global_step)
 
             loss_recorder.add(epoch=epoch, step=step, loss=current_loss)
@@ -445,6 +519,7 @@ def train(args):
 
         accelerator.wait_for_everyone()
 
+        optimizer_eval_fn()
         if args.save_every_n_epochs is not None:
             if accelerator.is_main_process:
                 # checking for saving is in util
@@ -466,12 +541,14 @@ def train(args):
                 )
 
         train_util.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+        optimizer_train_fn()
 
     is_main_process = accelerator.is_main_process
     if is_main_process:
         unet = accelerator.unwrap_model(unet)
         text_encoder = accelerator.unwrap_model(text_encoder)
 
+    optimizer_eval_fn()
     accelerator.end_training()
 
     if is_main_process and (args.save_state or args.save_state_on_train_end):
