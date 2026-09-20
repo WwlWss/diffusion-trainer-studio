@@ -134,7 +134,8 @@ class ParameterPolicyStep3RegressionTests(unittest.TestCase):
             "integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES",
             request,
         )
-        self.assertIn("if launch:", request)
+        self.assertIn("if launch and blockers:", request)
+        self.assertIn("parameter_policy_gpu_selection_blockers(", request)
 
     def test_standard_request_launch_contract_is_still_covered_behaviorally(self):
         request_test = _source("tests/test_parameter_policy_request_contract.py")
