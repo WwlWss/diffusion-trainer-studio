@@ -204,11 +204,22 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
                 self.assertIsNone(scheduler.entries[0].scheduler)
 
                 before = parameter.detach().clone()
-                parameter.grad = torch.ones_like(parameter)
-                optimizer.step()
-                scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                # RAdamScheduleFree defaults silent_sgd_phase=True, so its early
+                # unrectified RAdam phase intentionally advances optimizer
+                # statistics without changing model weights. Run enough steps
+                # to validate real update behavior for every supported
+                # ScheduleFree implementation instead of assuming step 1 must
+                # move parameters.
+                for _ in range(8):
+                    parameter.grad = torch.ones_like(parameter)
+                    optimizer.step()
+                    scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
 
+                self.assertEqual(
+                    optimizer.entries[0].optimizer.param_groups[0]["k"],
+                    8,
+                )
                 self.assertFalse(torch.equal(before, parameter.detach()))
                 self.assertEqual(
                     scheduler.get_last_lr(),
