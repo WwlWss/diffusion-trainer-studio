@@ -18,6 +18,7 @@ if _RUNTIME_DEPS_AVAILABLE:
 
     from mikazuki.parameter_policy_trainer import (
         PARAMETER_POLICY_CHECKPOINT_MANIFEST,
+        PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
         ParameterPolicyTrainerRuntimeError,
         create_parameter_policy_session,
         make_legacy_scheduler_factory,
@@ -249,6 +250,159 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertEqual(session2.optimizer.state_dict(), optimizer_before)
             self.assertEqual(scheduler2.state_dict(), scheduler_before)
             load_accelerator.end_training()
+
+    def test_manifest_v2_metadata_diagnostics_and_finalize_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, _bias, session, scheduler = self._build_runtime(policy_path)
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            manifest = session.checkpoint_manifest(scheduler)
+            self.assertEqual(
+                manifest["version"],
+                PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
+            )
+            self.assertEqual(PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION, 2)
+            self.assertEqual(
+                manifest["trainable_components"],
+                ["transformer.double_stream"],
+            )
+            self.assertEqual(manifest["optimizer_profiles"], {"main": "AdamW"})
+            self.assertEqual(manifest["trainable_parameter_tensors"], 1)
+            self.assertEqual(
+                manifest["trainable_parameter_elements"],
+                model.double_blocks[0].weight.numel(),
+            )
+
+            metadata = session.model_metadata()
+            self.assertEqual(
+                metadata["ss_dts_parameter_policy_train_type"],
+                "flux-finetune",
+            )
+            self.assertEqual(
+                metadata["ss_dts_parameter_policy_manifest_version"],
+                "2",
+            )
+            self.assertIn(
+                "transformer.double_stream",
+                metadata["ss_dts_parameter_policy_trainable_components"],
+            )
+            diagnostics = session.startup_diagnostics()
+            self.assertEqual(diagnostics["optimizer_profiles"], {"main": "AdamW"})
+            self.assertEqual(diagnostics["trainable_parameter_tensors"], 1)
+            accelerator.end_training()
+
+    def test_runtime_contract_detects_requires_grad_mutation_with_phase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, structural_bias, session, scheduler = self._build_runtime(policy_path)
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+            structural_bias.requires_grad_(True)
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "epoch_start.*requires-grad contract",
+            ):
+                session.assert_runtime_contract(
+                    phase="epoch_start",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
+            accelerator.end_training()
+
+    def test_runtime_contract_detects_frozen_optimizer_leak(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, structural_bias, session, scheduler = self._build_runtime(policy_path)
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            composite = optimizer.optimizer
+            composite.param_groups[0]["params"].append(structural_bias)
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "Frozen Parameter Policy parameters leaked",
+            ):
+                session.assert_runtime_contract(
+                    phase="test_optimizer_leak",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
+            accelerator.end_training()
+
+    def test_runtime_contract_detects_trainable_device_mismatch(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, _model, _bias, session, _scheduler = self._build_runtime(policy_path)
+
+            fake_accelerator = SimpleNamespace(device=torch.device("meta"))
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "device audit failed",
+            ):
+                session.assert_runtime_contract(
+                    phase="device_test",
+                    accelerator=fake_accelerator,
+                    optimizer=session.optimizer,
+                )
+
+    def test_checkpoint_save_hook_rejects_mutated_runtime_before_manifest_write(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, _bias, session, scheduler = self._build_runtime(policy_path)
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+            model.double_blocks[0].weight.requires_grad_(False)
+            state_dir = Path(temp_dir) / "bad-state"
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "checkpoint_save.*requires-grad contract",
+            ):
+                accelerator.save_state(state_dir)
+            self.assertFalse(
+                (state_dir / PARAMETER_POLICY_CHECKPOINT_MANIFEST).is_file()
+            )
+            accelerator.end_training()
 
     def test_optimizer_managed_scheduler_ignores_unused_global_scheduler_fields(self):
         with tempfile.TemporaryDirectory() as temp_dir:
