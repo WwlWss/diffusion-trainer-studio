@@ -320,6 +320,25 @@ def train(args):
         train_text_encoder1 = False
         train_text_encoder2 = False
 
+    if parameter_policy_session is not None:
+        # Parameter Policy owns requires_grad. The trainer still owns module
+        # mode, dtype placement, and gradient-checkpointing behavior.
+        if train_text_encoder1:
+            if args.gradient_checkpointing:
+                text_encoder1.gradient_checkpointing_enable()
+            text_encoder1.train()
+        else:
+            text_encoder1.to(weight_dtype)
+            text_encoder1.eval()
+
+        if train_text_encoder2:
+            if args.gradient_checkpointing:
+                text_encoder2.gradient_checkpointing_enable()
+            text_encoder2.train()
+        else:
+            text_encoder2.to(weight_dtype)
+            text_encoder2.eval()
+
     if parameter_policy_session is None and args.train_text_encoder:
         # TODO each option for two text encoders?
         accelerator.print("enable text encoder training")
