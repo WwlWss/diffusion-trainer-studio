@@ -2,9 +2,12 @@
 """Real-CUDA Parameter Policy optimizer/runtime qualification matrix.
 
 This probe intentionally uses tiny synthetic CUDA tensors. It qualifies the
-shared Component optimizer facade, precision/scaler behavior, supported
-optimizer implementations, mixed profiles, and optimizer save/resume without
-requiring model checkpoints or datasets.
+shared Component optimizer facade, precision/autocast-scaler behavior,
+supported optimizer implementations, mixed optimizer children, and optimizer
+state_dict reload without requiring model checkpoints or datasets.
+
+It does not claim to qualify Accelerator.prepare, scheduler construction,
+gradient accumulation, trainer checkpoint hooks, or model-family integration.
 
 Backend/model-family smoke is a separate release axis documented in
 docs/parameter-policy-step6f-plan.md.
@@ -184,7 +187,7 @@ def _cases() -> list[tuple[str, list[str], str]]:
             ("precision:adamw-fp16", ["AdamW"], "fp16"),
             ("precision:adamw-bf16", ["AdamW"], "bf16"),
             ("mixed:adamw-schedulefree", ["AdamW", "AdamWScheduleFree"], "fp32"),
-            ("mixed:muon-fallback", ["Muon", "AdamW"], "fp32"),
+            ("mixed:muon-adamw", ["Muon", "AdamW"], "fp32"),
         ]
     )
     return cases
