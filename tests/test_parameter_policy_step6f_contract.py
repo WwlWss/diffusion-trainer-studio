@@ -36,7 +36,7 @@ class ParameterPolicyStep6FContractTests(unittest.TestCase):
         source = (ROOT / "mikazuki" / "app" / "api.py").read_text(encoding="utf-8")
         for train_type, row in PARAMETER_POLICY_BACKEND_MATRIX.items():
             with self.subTest(train_type=train_type):
-                self.assertIn(repr(train_type), source)
+                self.assertIn(f'"{train_type}"', source)
                 self.assertIn(row["trainer"], source)
 
     def test_explicit_multi_gpu_component_start_remains_fail_closed(self):
