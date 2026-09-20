@@ -103,8 +103,8 @@ def patch_train_network(text: str) -> str:
     )
     text = replace_once(
         text,
-        """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n""",
-        """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_runtime_contract(\n                phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n            )\n""",
+        """        # resumeする\n        args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n""",
+        """        # resumeする\n        args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_runtime_contract(\n                phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n            )\n""",
         "NetworkTrainer post-resume runtime contract",
     )
     return text
