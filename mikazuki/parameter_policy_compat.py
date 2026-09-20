@@ -38,7 +38,7 @@ _LORAPLUS_KEYS = frozenset(
 _SD_BLOCK_LR_KEYS = frozenset({"down_lr_weight", "mid_lr_weight", "up_lr_weight"})
 _REGEX_LR_BACKENDS = frozenset({"flux-lora", "chroma-lora", "anima-lora"})
 _CACHED_TE_PRELOAD_UNSAFE_LORA_BACKENDS = frozenset(
-    {"sdxl-lora", "flux-lora", "chroma-lora", "sd3-lora"}
+    {"sdxl-lora", "flux-lora", "chroma-lora", "sd3-lora", "anima-lora"}
 )
 
 
@@ -195,6 +195,18 @@ def parameter_policy_v1_semantic_blockers(
     network_args = _parse_network_args(effective_config.get("network_args"))
     blockers: list[str] = []
     seen: set[str] = set()
+
+    if train_type in {"anima-lora", "anima-finetune"} and _as_bool(
+        effective_config.get("compile"),
+        field="compile",
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "Anima compile 会对 DiT block 应用独立 torch.compile 包装；"
+            "Component-wise v1 尚未验证 adapter/parameter identity、CompositeOptimizer "
+            "与 checkpoint save/resume 语义。",
+        )
 
     if _as_bool(
         effective_config.get("torch_compile"),
