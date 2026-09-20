@@ -22,6 +22,69 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
                     blockers,
                 )
 
+    def test_preloaded_lora_with_text_encoder_cache_is_fail_closed(self):
+        affected = ("sdxl-lora", "flux-lora", "chroma-lora", "sd3-lora")
+        for train_type in affected:
+            with self.subTest(train_type=train_type, cache="memory"):
+                blockers = parameter_policy_v1_semantic_blockers(
+                    {
+                        "network_weights": "existing.safetensors",
+                        "cache_text_encoder_outputs": True,
+                    },
+                    train_type,
+                )
+                self.assertTrue(
+                    any("network_weights" in item and "Text Encoder" in item for item in blockers),
+                    blockers,
+                )
+
+            with self.subTest(train_type=train_type, cache="disk"):
+                blockers = parameter_policy_v1_semantic_blockers(
+                    {
+                        "network_weights": "existing.safetensors",
+                        "cache_text_encoder_outputs": False,
+                        "cache_text_encoder_outputs_to_disk": True,
+                    },
+                    train_type,
+                )
+                self.assertTrue(
+                    any("network_weights" in item and "Text Encoder" in item for item in blockers),
+                    blockers,
+                )
+
+    def test_preloaded_lora_cache_blocker_does_not_overreach(self):
+        cases = (
+            (
+                "sdxl-lora",
+                {
+                    "network_weights": "",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "flux-lora",
+                {
+                    "network_weights": "existing.safetensors",
+                    "cache_text_encoder_outputs": False,
+                    "cache_text_encoder_outputs_to_disk": False,
+                },
+            ),
+            (
+                "sd-lora",
+                {
+                    "network_weights": "existing.safetensors",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+        )
+        for train_type, config in cases:
+            with self.subTest(train_type=train_type, config=config):
+                blockers = parameter_policy_v1_semantic_blockers(config, train_type)
+                self.assertFalse(
+                    any("network_weights" in item and "Text Encoder" in item for item in blockers),
+                    blockers,
+                )
+
     def test_stable_network_trainer_owns_component_runtime_without_legacy_fallback(self):
         source = (ROOT / "scripts" / "stable" / "train_network.py").read_text(encoding="utf-8")
         self.assertIn('return "sdxl-lora" if self.is_sdxl else "sd-lora"', source)
