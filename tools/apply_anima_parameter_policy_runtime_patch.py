@@ -212,7 +212,7 @@ def patch_anima_train(text: str) -> str:
     base_resume_anchor = """    # resume\n    args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n"""
     if has_qwen_patch:
         qwen_marker_anchor = """    # Save-state compatibility marker. Frozen-Qwen jobs keep their old\n"""
-        insert = """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n"""
+        insert = """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n        args._dts_parameter_policy_model_metadata = parameter_policy_session.model_metadata()\n\n"""
         if qwen_marker_anchor not in text:
             raise RuntimeError("Anima Full Qwen resume marker missing")
         text = text.replace(qwen_marker_anchor, insert + qwen_marker_anchor, 1)
@@ -220,7 +220,7 @@ def patch_anima_train(text: str) -> str:
         text = replace_once(
             text,
             base_resume_anchor,
-            """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n""" + base_resume_anchor,
+            """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n        args._dts_parameter_policy_model_metadata = parameter_policy_session.model_metadata()\n\n""" + base_resume_anchor,
             "Anima Full manifest before resume",
         )
 
@@ -272,11 +272,23 @@ def patch_anima_train(text: str) -> str:
     return text
 
 
+def patch_anima_train_utils(text: str) -> str:
+    marker = """).to_metadata_dict()\n        dit_sd = dit.state_dict()\n"""
+    replacement = """).to_metadata_dict()\n        sai_metadata.update(\n            getattr(args, \"_dts_parameter_policy_model_metadata\", {}) or {}\n        )\n        dit_sd = dit.state_dict()\n"""
+    count = text.count(marker)
+    if count < 2:
+        raise RuntimeError(
+            f"Anima saver metadata: expected at least two source matches, found {count}"
+        )
+    return text.replace(marker, replacement)
+
+
 def patch_files(sd_scripts_dir: Path) -> dict[Path, str]:
     targets = {
         sd_scripts_dir / "train_network.py": patch_train_network,
         sd_scripts_dir / "anima_train_network.py": patch_anima_train_network,
         sd_scripts_dir / "anima_train.py": patch_anima_train,
+        sd_scripts_dir / "library" / "anima_train_utils.py": patch_anima_train_utils,
     }
     patched: dict[Path, str] = {}
     for path, patcher in targets.items():
@@ -317,6 +329,10 @@ def validate_patch(sd_scripts_dir: Path) -> None:
             '"anima-finetune"',
             "parameter_policy_session",
             "--parameter_policy_config",
+            "_dts_parameter_policy_model_metadata",
+        ),
+        sd_scripts_dir / "library" / "anima_train_utils.py": (
+            "_dts_parameter_policy_model_metadata",
         ),
         sd_scripts_dir / "library" / "dts_parameter_policy_bridge.py": (
             "load_parameter_policy_file",
