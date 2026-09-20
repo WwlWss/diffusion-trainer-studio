@@ -107,7 +107,7 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
         marker = 'optimizer_name = "DTSParameterPolicy"'
         branch = source[source.rfind("else:", 0, source.index(marker)):source.index("# prepare dataloader")]
         self.assertIn("text_encoder_lr = None", branch)
-        self.assertIn("text_encoder_lr=text_encoder_lr", source)
+        self.assertIn('"ss_text_encoder_lr": text_encoder_lr', source)
 
     def test_stable_sdxl_defers_cache_conflict_to_final_policy_flags(self):
         source = (ROOT / "scripts" / "stable" / "sdxl_train_network.py").read_text(encoding="utf-8")
