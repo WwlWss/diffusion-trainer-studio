@@ -7,6 +7,7 @@ Standard mode never imports it through the lazy trainer bridges.
 
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
@@ -39,6 +40,7 @@ from mikazuki.parameter_routing import (
 
 PARAMETER_POLICY_CHECKPOINT_MANIFEST = "dts_parameter_policy_manifest.json"
 PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 1
+PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
 
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
@@ -142,6 +144,187 @@ def _unwrap_composite_scheduler(scheduler: object | None) -> CompositeLRSchedule
     )
 
 
+def _canonical_scheduler_value(value: Any, *, path: str) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, tuple):
+        return [
+            _canonical_scheduler_value(item, path=f"{path}[]")
+            for item in value
+        ]
+    if isinstance(value, list):
+        return [
+            _canonical_scheduler_value(item, path=f"{path}[]")
+            for item in value
+        ]
+    if isinstance(value, Mapping):
+        result: dict[str, Any] = {}
+        for key in sorted(value, key=lambda item: str(item)):
+            if not isinstance(key, str):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Scheduler identity requires string mapping keys at {path}; got {key!r}."
+                )
+            result[key] = _canonical_scheduler_value(
+                value[key],
+                path=f"{path}.{key}",
+            )
+        return result
+    raise ParameterPolicyTrainerRuntimeError(
+        f"Scheduler identity cannot canonicalize {path}={value!r} "
+        f"({type(value).__name__})."
+    )
+
+
+def _parse_scheduler_arguments(raw_args: object) -> dict[str, Any]:
+    if raw_args in (None, "", []):
+        return {}
+    if isinstance(raw_args, str):
+        items = [raw_args]
+    elif isinstance(raw_args, (list, tuple)):
+        items = list(raw_args)
+    else:
+        raise ParameterPolicyTrainerRuntimeError(
+            "lr_scheduler_args must be a string or a sequence of strings."
+        )
+
+    parsed: dict[str, Any] = {}
+    for item in items:
+        if not isinstance(item, str) or "=" not in item:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid lr_scheduler_args item {item!r}; expected key=value."
+            )
+        key, raw_value = item.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid lr_scheduler_args item {item!r}; key cannot be empty."
+            )
+        try:
+            value = ast.literal_eval(raw_value)
+        except (ValueError, SyntaxError) as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid lr_scheduler_args value for {key!r}: {raw_value!r}."
+            ) from exc
+        parsed[key] = _canonical_scheduler_value(
+            value,
+            path=f"lr_scheduler_args.{key}",
+        )
+    return {key: parsed[key] for key in sorted(parsed)}
+
+
+def _effective_step_count(value: object, *, total_steps: int, field: str) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        raise ParameterPolicyTrainerRuntimeError(
+            f"{field} must be an int, float ratio, or None."
+        )
+    if isinstance(value, float):
+        return int(value * total_steps)
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            f"{field} must be an int, float ratio, or None; got {value!r}."
+        ) from exc
+
+
+def _scheduler_identity_from_args(
+    args: object,
+    *,
+    num_processes: int,
+) -> tuple[dict[str, Any], str]:
+    config = _effective_config(args)
+    try:
+        max_train_steps = int(config.get("max_train_steps"))
+        processes = int(num_processes)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Scheduler identity requires integer max_train_steps and num_processes."
+        ) from exc
+    if max_train_steps < 0 or processes <= 0:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Scheduler identity requires max_train_steps >= 0 and num_processes > 0."
+        )
+
+    num_training_steps = max_train_steps * processes
+    warmup = _effective_step_count(
+        config.get("lr_warmup_steps", 0),
+        total_steps=num_training_steps,
+        field="lr_warmup_steps",
+    )
+    decay = _effective_step_count(
+        config.get("lr_decay_steps", 0),
+        total_steps=num_training_steps,
+        field="lr_decay_steps",
+    )
+    if warmup is None:
+        warmup = 0
+    if decay is None:
+        decay = 0
+
+    identity = {
+        "schema": "dts.parameter-policy.scheduler-identity",
+        "version": PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION,
+        "provider": "sd-scripts.get_scheduler_fix",
+        "lr_scheduler": str(config.get("lr_scheduler") or "constant"),
+        "lr_scheduler_type": str(config.get("lr_scheduler_type") or ""),
+        "lr_scheduler_args": _parse_scheduler_arguments(
+            config.get("lr_scheduler_args")
+        ),
+        "max_train_steps": max_train_steps,
+        "num_processes": processes,
+        "num_training_steps": num_training_steps,
+        "num_warmup_steps": warmup,
+        "num_decay_steps": decay,
+        "num_stable_steps": num_training_steps - warmup - decay,
+        "num_cycles": _canonical_scheduler_value(
+            config.get("lr_scheduler_num_cycles", 1),
+            path="lr_scheduler_num_cycles",
+        ),
+        "power": _canonical_scheduler_value(
+            config.get("lr_scheduler_power", 1.0),
+            path="lr_scheduler_power",
+        ),
+        "timescale": _canonical_scheduler_value(
+            config.get("lr_scheduler_timescale"),
+            path="lr_scheduler_timescale",
+        ),
+        "min_lr_ratio": _canonical_scheduler_value(
+            config.get("lr_scheduler_min_lr_ratio"),
+            path="lr_scheduler_min_lr_ratio",
+        ),
+    }
+    canonical = json.dumps(
+        identity,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return identity, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class LegacySchedulerFactory:
+    base_args: object
+    get_scheduler_fix: Any
+    num_processes: int
+    scheduler_identity: dict[str, Any]
+    scheduler_signature: str
+
+    def __call__(self, spec, child_optimizer):
+        if isinstance(self.base_args, Mapping):
+            child_args = SimpleNamespace(**dict(self.base_args))
+        else:
+            child_args = copy.copy(self.base_args)
+        setattr(child_args, "optimizer_type", spec.optimizer_type)
+        return self.get_scheduler_fix(
+            child_args,
+            child_optimizer,
+            self.num_processes,
+        )
+
+
 @dataclass
 class ParameterPolicyTrainerSession:
     """One immutable routing/runtime topology plus mutable trainability contract."""
@@ -155,6 +338,8 @@ class ParameterPolicyTrainerSession:
     runtime_spec: ParameterPolicyRuntimeSpec
     optimizer: CompositeOptimizer
     structural_frozen_parameters: tuple[Any, ...]
+    scheduler_identity: dict[str, Any] | None = None
+    scheduler_signature: str | None = None
 
     @property
     def trainable_parameters(self) -> tuple[Any, ...]:
@@ -241,7 +426,35 @@ class ParameterPolicyTrainerSession:
                 )
 
     def build_scheduler(self, scheduler_factory) -> CompositeLRScheduler:
-        return build_parameter_policy_scheduler(self.optimizer, scheduler_factory)
+        scheduler = build_parameter_policy_scheduler(self.optimizer, scheduler_factory)
+        has_external = any(entry.mode == "external" for entry in scheduler.entries)
+        if has_external:
+            identity = getattr(scheduler_factory, "scheduler_identity", None)
+            signature = getattr(scheduler_factory, "scheduler_signature", None)
+            if not isinstance(identity, Mapping) or not isinstance(signature, str) or not signature:
+                raise ParameterPolicyTrainerRuntimeError(
+                    "External Parameter Policy schedulers require an audited scheduler "
+                    "identity/signature factory."
+                )
+            self.scheduler_identity = dict(identity)
+            self.scheduler_signature = signature
+        else:
+            identity = {
+                "schema": "dts.parameter-policy.scheduler-identity",
+                "version": PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION,
+                "mode": "optimizer_managed",
+            }
+            canonical = json.dumps(
+                identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            self.scheduler_identity = identity
+            self.scheduler_signature = hashlib.sha256(
+                canonical.encode("utf-8")
+            ).hexdigest()
+        return scheduler
 
     def audit_after_prepare(self, *, accelerator: object, optimizer: object) -> None:
         composite = _unwrap_composite_optimizer(optimizer)
@@ -298,6 +511,15 @@ class ParameterPolicyTrainerSession:
 
     def checkpoint_manifest(self, scheduler: object | None = None) -> dict[str, Any]:
         composite_scheduler = _unwrap_composite_scheduler(scheduler)
+        if composite_scheduler is not None and (
+            not isinstance(self.scheduler_identity, Mapping)
+            or not isinstance(self.scheduler_signature, str)
+            or not self.scheduler_signature
+        ):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy scheduler identity was not established before checkpointing."
+            )
+
         manifest: dict[str, Any] = {
             "version": PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
             "train_type": self.train_type,
@@ -313,6 +535,8 @@ class ParameterPolicyTrainerSession:
             ],
         }
         if composite_scheduler is not None:
+            manifest["scheduler_identity"] = dict(self.scheduler_identity)
+            manifest["scheduler_signature"] = self.scheduler_signature
             manifest["schedulers"] = [
                 {
                     "profile_name": entry.profile_name,
@@ -343,9 +567,27 @@ class ParameterPolicyTrainerSession:
                 f"Invalid Parameter Policy checkpoint manifest: {path}: {exc}"
             ) from exc
         expected = self.checkpoint_manifest(scheduler)
+        if actual.get("policy_hash") != expected.get("policy_hash"):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint Parameter Policy identity does not match the current run. "
+                "Load model weights only when intentionally starting a new policy/stage."
+            )
+        if (
+            actual.get("runtime_topology_fingerprint")
+            != expected.get("runtime_topology_fingerprint")
+        ):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer/runtime topology does not match the current run. "
+                "Load model weights only when intentionally starting a new policy/stage."
+            )
+        if actual.get("scheduler_signature") != expected.get("scheduler_signature"):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint scheduler configuration does not match the current run. "
+                "Load model weights only when intentionally starting a new policy/stage."
+            )
         if actual != expected:
             raise ParameterPolicyTrainerRuntimeError(
-                "Checkpoint Parameter Policy identity/topology does not match the current run. "
+                "Checkpoint Parameter Policy manifest does not match the current run. "
                 "Load model weights only when intentionally starting a new policy/stage."
             )
 
@@ -388,21 +630,26 @@ def make_legacy_scheduler_factory(
     args: object,
     get_scheduler_fix,
     num_processes: int,
-):
-    """Adapt sd-scripts' global scheduler helper to one child optimizer at a time."""
+) -> LegacySchedulerFactory:
+    """Freeze sd-scripts scheduler construction and its resume identity together."""
 
     if not callable(get_scheduler_fix):
         raise ParameterPolicyTrainerRuntimeError("get_scheduler_fix must be callable.")
-
-    def factory(spec, child_optimizer):
-        if isinstance(args, Mapping):
-            child_args = SimpleNamespace(**dict(args))
-        else:
-            child_args = copy.copy(args)
-        setattr(child_args, "optimizer_type", spec.optimizer_type)
-        return get_scheduler_fix(child_args, child_optimizer, num_processes)
-
-    return factory
+    if isinstance(args, Mapping):
+        base_args: object = dict(args)
+    else:
+        base_args = copy.copy(args)
+    identity, signature = _scheduler_identity_from_args(
+        base_args,
+        num_processes=num_processes,
+    )
+    return LegacySchedulerFactory(
+        base_args=base_args,
+        get_scheduler_fix=get_scheduler_fix,
+        num_processes=num_processes,
+        scheduler_identity=identity,
+        scheduler_signature=signature,
+    )
 
 
 def create_parameter_policy_session(
@@ -476,6 +723,7 @@ def create_parameter_policy_session(
 __all__ = [
     "PARAMETER_POLICY_CHECKPOINT_MANIFEST",
     "PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION",
+    "LegacySchedulerFactory",
     "ParameterPolicyTrainerRuntimeError",
     "ParameterPolicyTrainerSession",
     "create_parameter_policy_session",
