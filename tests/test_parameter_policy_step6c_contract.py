@@ -72,6 +72,36 @@ class ParameterPolicyStep6CContractTests(unittest.TestCase):
             source,
         )
 
+    def test_dreambooth_standard_prepare_topology_is_preserved(self):
+        source = (ROOT / "scripts" / "stable" / "train_db.py").read_text(encoding="utf-8")
+        self.assertIn(
+            "if parameter_policy_session is None:\n        # Preserve the historical Standard-mode prepare topology verbatim.",
+            source,
+        )
+        self.assertIn(
+            "unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(",
+            source,
+        )
+        self.assertIn(
+            "unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(",
+            source,
+        )
+
+    def test_sdxl_component_owns_grad_but_restores_module_runtime_state(self):
+        source = (ROOT / "scripts" / "stable" / "sdxl_train.py").read_text(encoding="utf-8")
+        marker = "if parameter_policy_session is not None:\n        # Parameter Policy owns requires_grad."
+        self.assertIn(marker, source)
+        component_state = source[source.index(marker):source.index("if parameter_policy_session is None and args.train_text_encoder:")]
+        self.assertIn("text_encoder1.gradient_checkpointing_enable()", component_state)
+        self.assertIn("text_encoder2.gradient_checkpointing_enable()", component_state)
+        self.assertIn("text_encoder1.to(weight_dtype)", component_state)
+        self.assertIn("text_encoder2.to(weight_dtype)", component_state)
+        self.assertIn("text_encoder1.eval()", component_state)
+        self.assertIn("text_encoder2.eval()", component_state)
+        self.assertIn("text_encoder1.train()", component_state)
+        self.assertIn("text_encoder2.train()", component_state)
+        self.assertNotIn("requires_grad_(", component_state)
+
     def test_sdxl_structural_freeze_is_passed_before_runtime_build(self):
         source = (ROOT / "scripts" / "stable" / "sdxl_train.py").read_text(encoding="utf-8")
         self.assertIn("structural_frozen_parameters = tuple(", source)
