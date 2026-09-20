@@ -83,7 +83,9 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
             trainer = (tree / "anima_train.py").read_text(encoding="utf-8")
             self.assertIn("anima_qwen3_training.json", trainer)
             self.assertIn("parameter_policy_session", trainer)
-            self.assertIn("register_checkpoint_manifest", trainer)
+            self.assertIn("finalize_after_prepare", trainer)
+            self.assertIn('phase="post_resume"', trainer)
+            self.assertIn('phase="epoch_start"', trainer)
             self.assertLess(
                 trainer.index("register_checkpoint_manifest"),
                 trainer.index("register_load_state_pre_hook(load_qwen3_mode_hook)"),
@@ -103,6 +105,10 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
             component_end = network_trainer.index("# prepare dataloader", component_start)
             component_branch = network_trainer[component_start:component_end]
             self.assertIn("text_encoder_lr = None", component_branch)
+            self.assertIn("model_metadata()", network_trainer)
+            self.assertIn("finalize_after_prepare", network_trainer)
+            self.assertIn('phase="post_resume"', network_trainer)
+            self.assertIn('phase="epoch_start"', network_trainer)
 
             full_trainer = (tree / "anima_train.py").read_text(encoding="utf-8")
             epoch_restore = (
