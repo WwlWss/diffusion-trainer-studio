@@ -529,13 +529,9 @@ class NetworkTrainer:
         if parameter_policy_session is None:
             accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
         else:
-            parameter_policy_session.audit_after_prepare(
+            parameter_policy_session.finalize_after_prepare(
                 accelerator=accelerator,
                 optimizer=optimizer,
-            )
-            parameter_policy_session.assert_requires_grad_contract()
-            parameter_policy_session.register_checkpoint_manifest(
-                accelerator,
                 scheduler=lr_scheduler,
             )
 
@@ -595,6 +591,12 @@ class NetworkTrainer:
 
         # resumeする
         train_util.resume_from_local_or_hf_if_specified(accelerator, args)
+        if parameter_policy_session is not None:
+            parameter_policy_session.assert_runtime_contract(
+                phase="post_resume",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
 
         # epoch数を計算する
         num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -826,17 +828,7 @@ class NetworkTrainer:
             metadata["ss_vae_name"] = vae_name
 
         if parameter_policy_session is not None:
-            metadata["ss_dts_parameter_policy_hash"] = parameter_policy_session.policy_hash
-            metadata["ss_dts_parameter_policy_topology"] = (
-                parameter_policy_session.runtime_spec.topology_fingerprint
-            )
-            metadata["ss_dts_parameter_policy_profiles"] = json.dumps(
-                {
-                    spec.profile_name: spec.optimizer_type
-                    for spec in parameter_policy_session.runtime_spec.optimizers
-                },
-                sort_keys=True,
-            )
+            metadata.update(parameter_policy_session.model_metadata())
 
         metadata = {k: str(v) for k, v in metadata.items()}
 
@@ -968,7 +960,11 @@ class NetworkTrainer:
 
             accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)
             if parameter_policy_session is not None:
-                parameter_policy_session.assert_requires_grad_contract()
+                parameter_policy_session.assert_runtime_contract(
+                    phase="epoch_start",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
 
             skipped_dataloader = None
             if initial_step > 0:
