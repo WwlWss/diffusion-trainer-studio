@@ -101,15 +101,14 @@ def patch_train_network(text: str) -> str:
         """            accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here\n            if parameter_policy_session is not None:\n                parameter_policy_session.assert_runtime_contract(\n                    phase=\"epoch_start\", accelerator=accelerator, optimizer=optimizer\n                )\n\n            # TRAINING\n""",
         "NetworkTrainer epoch ownership assertion",
     )
-    return text
-
-
     text = replace_once(
         text,
         """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n""",
         """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_runtime_contract(\n                phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n            )\n""",
         "NetworkTrainer post-resume runtime contract",
     )
+    return text
+
 
 def patch_anima_train_network(text: str) -> str:
     text = replace_once(
@@ -210,20 +209,28 @@ def patch_anima_train(text: str) -> str:
             "Anima Full base selective prepare",
         )
 
-    resume_anchor = """    # resume\n    args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n    if parameter_policy_session is not None:\n        parameter_policy_session.assert_runtime_contract(\n            phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n        )\n"""
+    base_resume_anchor = """    # resume\n    args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n"""
     if has_qwen_patch:
-        resume_anchor = """    # Save-state compatibility marker. Frozen-Qwen jobs keep their old\n"""
+        qwen_marker_anchor = """    # Save-state compatibility marker. Frozen-Qwen jobs keep their old\n"""
         insert = """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n"""
-        if resume_anchor not in text:
+        if qwen_marker_anchor not in text:
             raise RuntimeError("Anima Full Qwen resume marker missing")
-        text = text.replace(resume_anchor, insert + resume_anchor, 1)
+        text = text.replace(qwen_marker_anchor, insert + qwen_marker_anchor, 1)
     else:
         text = replace_once(
             text,
-            resume_anchor,
-            """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n""" + resume_anchor,
+            base_resume_anchor,
+            """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n""" + base_resume_anchor,
             "Anima Full manifest before resume",
         )
+
+    text = replace_once(
+        text,
+        base_resume_anchor,
+        base_resume_anchor
+        + """    if parameter_policy_session is not None:\n        parameter_policy_session.assert_runtime_contract(\n            phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n        )\n""",
+        "Anima Full post-resume runtime contract",
+    )
 
     text = replace_once(
         text,
