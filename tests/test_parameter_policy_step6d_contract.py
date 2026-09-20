@@ -92,6 +92,48 @@ class ParameterPolicyStep6DContractTests(unittest.TestCase):
         )
         self.assertTrue(any("network_weights" in item for item in blockers), blockers)
 
+    def test_anima_base_weights_with_text_encoder_cache_is_fail_closed(self):
+        for field in ("cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk"):
+            with self.subTest(cache_field=field):
+                blockers = parameter_policy_v1_semantic_blockers(
+                    {
+                        "base_weights": ["qwen_lora.safetensors"],
+                        field: True,
+                    },
+                    "anima-lora",
+                )
+                self.assertTrue(
+                    any("base_weights" in item and "Text Encoder" in item for item in blockers),
+                    blockers,
+                )
+
+    def test_anima_base_weights_cache_blocker_does_not_overreach(self):
+        self.assertFalse(
+            any(
+                "base_weights" in item
+                for item in parameter_policy_v1_semantic_blockers(
+                    {
+                        "base_weights": [],
+                        "cache_text_encoder_outputs": True,
+                    },
+                    "anima-lora",
+                )
+            )
+        )
+        self.assertFalse(
+            any(
+                "base_weights" in item
+                for item in parameter_policy_v1_semantic_blockers(
+                    {
+                        "base_weights": ["dit_only.safetensors"],
+                        "cache_text_encoder_outputs": False,
+                        "cache_text_encoder_outputs_to_disk": False,
+                    },
+                    "anima-lora",
+                )
+            )
+        )
+
     def test_global_start_gate_remains_closed(self):
         source = Path("mikazuki/training_request.py").read_text(encoding="utf-8")
         self.assertIn(
