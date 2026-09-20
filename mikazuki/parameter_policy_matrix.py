@@ -80,6 +80,10 @@ PARAMETER_POLICY_QUALIFICATION_BLOCKER_FIELDS: Final[frozenset[str]] = frozenset
         "blocks_to_swap",
         "double_blocks_to_swap",
         "single_blocks_to_swap",
+        "full_fp16",
+        "full_bf16",
+        "fp8_base",
+        "fp8_base_unet",
     }
 )
 
