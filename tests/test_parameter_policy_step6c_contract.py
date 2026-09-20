@@ -124,11 +124,12 @@ class ParameterPolicyStep6CContractTests(unittest.TestCase):
         self.assertIn("blocks_to_swap", joined)
         self.assertIn("cpu_offload_checkpointing", joined)
 
-    def test_step6c_does_not_open_global_start_gate(self):
-        source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
-        self.assertIn(
-            "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()",
-            source,
+    def test_step6c_full_integrations_are_present_in_step6f_matrix(self):
+        from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+
+        self.assertTrue(
+            {"sd-dreambooth", "sdxl-finetune", "flux-finetune"}
+            <= PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
         )
 
 
