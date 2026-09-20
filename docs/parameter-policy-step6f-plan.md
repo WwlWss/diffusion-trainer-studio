@@ -1,0 +1,105 @@
+# Parameter Policy Step 6F — GPU Matrix and Component Start
+
+Step 6F closes the trainer-integration phase. Baseline Component-wise Start is
+opened only for the ten backends integrated in Steps 6B–6D, while execution
+modes that change optimizer ownership, parameter residency, distributed state,
+or model wrapping remain fail-closed until they have a dedicated runtime
+contract and qualification evidence.
+
+## Baseline backend matrix
+
+The machine-readable source of truth is
+`mikazuki/parameter_policy_matrix.py`.
+
+Baseline Start backends:
+
+- `sd-lora`
+- `sdxl-lora`
+- `sd-dreambooth`
+- `sdxl-finetune`
+- `sd3-lora`
+- `flux-lora`
+- `chroma-lora`
+- `flux-finetune`
+- `anima-lora`
+- `anima-finetune`
+
+"Baseline" means the ordinary single-process trainer path with no blocked
+execution feature enabled. Standard mode remains unchanged.
+
+## Qualification matrix
+
+The GPU matrix has three orthogonal axes rather than one Cartesian product.
+
+1. Backend matrix: every integrated backend must preserve the Step 6E lifecycle,
+   policy-owned optimizer membership, requires-grad contract, metadata, and
+   checkpoint identity.
+2. Optimizer/runtime matrix: CUDA covers ordinary external-scheduler optimizers,
+   ScheduleFree, bitsandbytes, Muon eligibility, FP16 GradScaler, BF16,
+   accumulation, and save/resume.
+3. Execution-feature matrix: compile, distributed/sharded ownership, fused
+   optimizer paths, swap and offload are qualified independently.
+
+`tools/run_parameter_policy_gpu_matrix.py` is the reproducible CUDA runtime
+probe. It emits JSON containing repository/runtime versions, GPU identity, case
+name, and pass/fail details. Real model-family smoke can be layered on top of
+the same release matrix without weakening the host gate.
+
+## Blocker policy
+
+Step 6F distinguishes two blocker classes.
+
+Qualification blockers may eventually be removed after a dedicated runtime
+contract and GPU evidence:
+
+- Accelerate Dynamo `torch_compile`;
+- Anima per-block `compile`;
+- DeepSpeed/distributed optimizer ownership;
+- fused backward / fused optimizer groups / blockwise fused optimizers;
+- CPU/Unsloth checkpoint offload;
+- Flux/Anima block swap.
+
+Semantic blockers remain blocked in v1 even if a one-off training run succeeds,
+because the current Component schema cannot represent their semantics exactly:
+
+- LoRA+;
+- regex-specific LR;
+- SD/SDXL LoRA block LR;
+- SDXL Full block LR;
+- `scale_weight_norms`;
+- DreamBooth dynamic `stop_text_encoder_training`;
+- preloaded adapter + Text Encoder cache hazards;
+- Anima Qwen-only;
+- unreviewed custom `network_module`.
+
+Explicit multi-GPU selection also remains fail-closed until the DDP matrix is
+qualified. A machine with multiple visible GPUs still uses the existing
+single-process Accelerate config unless the user explicitly selects multiple
+GPU ids.
+
+## Start pipeline
+
+Component Start keeps launch side effects behind the runtime gate:
+
+1. compile effective config without Component launch-only side effects;
+2. evaluate backend/runtime/optimizer/GPU blockers;
+3. perform read-only trainer/model/dataset validation;
+4. materialize any reviewed staged Anima runtime;
+5. perform Component launch-only finalization;
+6. materialize content-addressed sidecars and final TOML;
+7. spawn Accelerate.
+
+A blocked Component request therefore cannot create a staged trainer, policy
+sidecar, or training TOML.
+
+## Release invariants
+
+- `PARAMETER_POLICY_RUNTIME_TRAIN_TYPES` comes only from the release matrix.
+- All ten entries must agree with the host trainer mapping.
+- Unknown/new backends remain blocked by default.
+- Standard mode never imports or constructs Parameter Policy torch runtime.
+- Specific compatibility blockers remain authoritative after the global backend
+  gate opens.
+- Component multi-GPU remains explicitly blocked until DDP qualification.
+- The Step 6E manifest v2/runtime assertions remain mandatory on every opened
+  backend.
