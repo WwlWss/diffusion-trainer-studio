@@ -26,9 +26,10 @@ class SdxlNetworkTrainer(train_network.NetworkTrainer):
                 train_dataset_group.is_text_encoder_output_cacheable()
             ), "when caching Text Encoder output, either caption_dropout_rate, shuffle_caption, token_warmup_step or caption_tag_dropout_rate cannot be used / Text Encoderの出力をキャッシュするときはcaption_dropout_rate, shuffle_caption, token_warmup_step, caption_tag_dropout_rateは使えません"
 
-        assert (
-            args.network_train_unet_only or not args.cache_text_encoder_outputs
-        ), "network for Text Encoder cannot be trained with caching Text Encoder outputs / Text Encoderの出力をキャッシュしながらText Encoderのネットワークを学習することはできません"
+        if not str(getattr(args, "parameter_policy_config", "") or "").strip():
+            assert (
+                args.network_train_unet_only or not args.cache_text_encoder_outputs
+            ), "network for Text Encoder cannot be trained with caching Text Encoder outputs / Text Encoderの出力をキャッシュしながらText Encoderのネットワークを学習することはできません"
 
         train_dataset_group.verify_bucket_reso_steps(32)
 
