@@ -38,8 +38,11 @@ Flux/Chroma and SD3 convert policy component ownership into final per-encoder
 training flags after routing. SD3 tracks CLIP-L, CLIP-G, and T5XXL independently.
 
 Legacy cache conflicts are deferred in Component mode until these final routing
-flags exist. Caching is rejected only when the policy actually trains an adapter
-whose text-encoder outputs would otherwise be cached.
+flags exist. Flux/Chroma and SD3 create text-encoder caches before the LoRA
+network/session exists, so Component mode deliberately stages that pre-session
+cache as a full cache with all TE train flags false. Routing then restores the
+exact policy-owned flags. Caching is rejected only when the policy actually
+trains an adapter whose text-encoder outputs would otherwise be cached.
 
 ## ScheduleFree lifecycle
 
