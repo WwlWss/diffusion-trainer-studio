@@ -98,6 +98,26 @@ def _positive_count(value: object, *, field: str) -> bool:
     return parsed > 0
 
 
+def _positive_float(value: object, *, field: str) -> bool:
+    if value in (None, "", 0, 0.0, "0", "0.0"):
+        return False
+    if isinstance(value, bool):
+        raise ValueError(
+            f"Parameter Policy compatibility: {field} 必须是非负数值，收到 {value!r}。"
+        )
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            f"Parameter Policy compatibility: {field} 必须是非负数值，收到 {value!r}。"
+        ) from exc
+    if parsed < 0:
+        raise ValueError(
+            f"Parameter Policy compatibility: {field} 必须是非负数值，收到 {value!r}。"
+        )
+    return parsed > 0
+
+
 def _parse_network_args(raw_args: object) -> dict[str, str]:
     """Parse normalized network_args by exact key, with later duplicates winning."""
 
@@ -220,6 +240,18 @@ def parameter_policy_v1_semantic_blockers(
                 f"{field} 会在训练期间动态迁移模型 block；"
                 "Component-wise v1 尚未完成 optimizer parameter device 审计。",
             )
+
+    if train_type in _LORA_NETWORK_MODULES and _positive_float(
+        effective_config.get("scale_weight_norms"),
+        field="scale_weight_norms",
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "scale_weight_norms 会直接修改 LoRA state_dict 中的 adapter 权重，"
+            "包括 Parameter Policy 已冻结的组件；Component-wise v1 尚未实现"
+            "仅对 policy-owned trainable adapter 应用 max-norm regularization。",
+        )
 
     if train_type == "sdxl-finetune" and effective_config.get("block_lr") not in (
         None,
