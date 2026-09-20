@@ -111,6 +111,17 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
             self.assertIn('phase="epoch_start"', network_trainer)
 
             full_trainer = (tree / "anima_train.py").read_text(encoding="utf-8")
+            anima_utils = (tree / "library/anima_train_utils.py").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(
+                "_dts_parameter_policy_model_metadata",
+                full_trainer,
+            )
+            self.assertIn(
+                "_dts_parameter_policy_model_metadata",
+                anima_utils,
+            )
             epoch_restore = (
                 "if parameter_policy_session is not None:\n"
                 "            optimizer_train_fn()\n\n"
