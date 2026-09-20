@@ -407,10 +407,13 @@ def train(args):
             params_to_optimize.append({"params": list(text_encoder2.parameters()), "lr": args.learning_rate_te2 or args.learning_rate})
 
     # calculate number of trainable parameters
-    n_params = 0
-    for group in params_to_optimize:
-        for p in group["params"]:
-            n_params += p.numel()
+    if parameter_policy_session is not None:
+        n_params = sum(p.numel() for p in parameter_policy_session.trainable_parameters)
+    else:
+        n_params = 0
+        for group in params_to_optimize:
+            for p in group["params"]:
+                n_params += p.numel()
 
     accelerator.print(f"train unet: {train_unet}, text_encoder1: {train_text_encoder1}, text_encoder2: {train_text_encoder2}")
     accelerator.print(f"number of models: {len(training_models)}")
@@ -419,6 +422,8 @@ def train(args):
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
+    optimizer_train_fn = lambda: None
+    optimizer_eval_fn = lambda: None
     if parameter_policy_session is not None:
         optimizer = parameter_policy_session.optimizer
         optimizer_train_fn = optimizer.train
