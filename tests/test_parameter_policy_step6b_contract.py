@@ -102,6 +102,13 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
         self.assertIn("train_util.get_optimizer", component_branch)
         self.assertIn("else:\n            lr_descriptions = None", component_branch)
 
+    def test_dev_component_metadata_lr_is_always_initialized(self):
+        source = (ROOT / "scripts" / "dev" / "train_network.py").read_text(encoding="utf-8")
+        marker = 'optimizer_name = "DTSParameterPolicy"'
+        branch = source[source.rfind("else:", 0, source.index(marker)):source.index("# prepare dataloader")]
+        self.assertIn("text_encoder_lr = None", branch)
+        self.assertIn("text_encoder_lr=text_encoder_lr", source)
+
     def test_stable_sdxl_defers_cache_conflict_to_final_policy_flags(self):
         source = (ROOT / "scripts" / "stable" / "sdxl_train_network.py").read_text(encoding="utf-8")
         self.assertIn('if not str(getattr(args, "parameter_policy_config", "") or "").strip():', source)
