@@ -48,33 +48,7 @@ jobs:
 
           try {
             py -0p 2>$null | ForEach-Object {
-              if ($_ -match '([A-Za-z]:\\.*python\.exe)\s*
-      - name: Upgrade pip on non-Windows runners
-        if: runner.os != 'Windows'
-        run: python -m pip install --upgrade pip
-
-      - name: Install pinned Component runtime dependencies on non-Windows runners
-        if: runner.os != 'Windows'
-        run: python -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0
-
-      - name: Run synthetic CUDA optimizer matrix on non-Windows runners
-        if: runner.os != 'Windows'
-        run: python tools/run_parameter_policy_gpu_matrix.py --output parameter-policy-gpu-matrix.json
-
-      - name: Run real backend matrix on non-Windows runners
-        if: runner.os != 'Windows' && inputs.backend_manifest != ''
-        run: python tools/run_parameter_policy_backend_gpu_matrix.py --manifest "${{ inputs.backend_manifest }}" --output parameter-policy-backend-gpu-matrix.json
-
-      - name: Upload matrix evidence
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: parameter-policy-gpu-matrix
-          path: |
-            parameter-policy-gpu-matrix.json
-            parameter-policy-backend-gpu-matrix.json
-          if-no-files-found: warn
-) {
+              if ($_ -match '([A-Za-z]:\\.*python\.exe)\s*$') {
                 $candidates.Add($Matches[1].Trim())
               }
             }
@@ -82,7 +56,9 @@ jobs:
 
           try {
             $pathPython = (Get-Command python.exe -ErrorAction Stop).Source
-            if ($pathPython) { $candidates.Add($pathPython) }
+            if ($pathPython) {
+              $candidates.Add($pathPython)
+            }
           } catch {}
 
           $selected = $null
@@ -96,7 +72,7 @@ jobs:
           }
 
           if (-not $selected) {
-            throw "No Windows Python with working ssl + pip was found. Install/repair Python 3.11+ with OpenSSL support."
+            throw "No Windows Python with working ssl + pip was found. Install or repair Python 3.11+ with OpenSSL support."
           }
 
           Write-Host "Selected Python: $selected"
