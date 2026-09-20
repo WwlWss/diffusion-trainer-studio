@@ -59,8 +59,7 @@ def _scheduler_args(policy_path: Path, **overrides):
     return SimpleNamespace(**values)
 
 
-@unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
-class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
+if _RUNTIME_DEPS_AVAILABLE:
     class TinyFlux(torch.nn.Module):
         def __init__(self):
             super().__init__()
@@ -68,7 +67,12 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
 
         def forward(self, value):
             return self.double_blocks[0](value)
+else:
+    TinyFlux = object
 
+
+@unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
+class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
     @staticmethod
     def _scheduler_factory(args, observed=None):
         def get_scheduler_fix(child_args, optimizer, num_processes):
@@ -90,7 +94,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
 
     def _build_runtime(self, policy_path, *, scheduler_overrides=None):
         args = _scheduler_args(policy_path, **(scheduler_overrides or {}))
-        model = self.TinyFlux()
+        model = TinyFlux()
         structural_bias = model.double_blocks[0].bias
         session = create_parameter_policy_session(
             args=args,
@@ -258,7 +262,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 lr_scheduler="definitely-unused",
                 lr_scheduler_args=["not-even-key-value"],
             )
-            model = self.TinyFlux()
+            model = TinyFlux()
             session = create_parameter_policy_session(
                 args=args,
                 train_type="flux-finetune",
