@@ -84,6 +84,58 @@ class ParameterPolicyStep6AContractTests(unittest.TestCase):
                 self.assertNotIn("mikazuki.parameter_policy_trainer", top_imports)
                 self.assertNotIn("torch", top_imports)
 
+    def test_trainer_runtime_guard_precedes_legacy_mutation_and_optimizer_creation(self):
+        for path, first_legacy_statement in (
+            (
+                ROOT / "scripts" / "stable" / "library" / "train_util.py",
+                "if args.highvram:",
+            ),
+            (
+                ROOT / "scripts" / "dev" / "library" / "train_util.py",
+                "enable_high_vram(args)",
+            ),
+        ):
+            with self.subTest(path=path):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn("def _guard_parameter_policy_runtime(", source)
+                verify_start = source.index("def verify_training_args(")
+                guard_call = source.index(
+                    "_guard_parameter_policy_runtime(",
+                    verify_start + len("def verify_training_args("),
+                )
+                legacy_start = source.index(first_legacy_statement, verify_start)
+                self.assertLess(guard_call, legacy_start)
+
+                optimizer_start = source.index("def get_optimizer(")
+                optimizer_guard = source.index(
+                    "_guard_parameter_policy_runtime(",
+                    optimizer_start,
+                )
+                self.assertLess(
+                    optimizer_guard,
+                    source.index("optimizer_type = args.optimizer_type", optimizer_start),
+                )
+                optimizer_guard_block = source[
+                    optimizer_guard : optimizer_guard + 220
+                ]
+                self.assertIn("parameter_policy_runtime_enabled=False", optimizer_guard_block)
+
+    def test_unintegrated_component_sidecar_is_rejected_by_default(self):
+        for path in (
+            ROOT / "scripts" / "stable" / "library" / "train_util.py",
+            ROOT / "scripts" / "dev" / "library" / "train_util.py",
+        ):
+            with self.subTest(path=path):
+                source = path.read_text(encoding="utf-8")
+                self.assertIn(
+                    "parameter_policy_runtime_enabled: bool = False",
+                    source,
+                )
+                self.assertIn(
+                    "Refusing to fall back to the legacy optimizer path.",
+                    source,
+                )
+
     def test_training_config_guards_legacy_adaptive_lr_normalization(self):
         source = (ROOT / "mikazuki" / "training_config.py").read_text(encoding="utf-8")
         self.assertIn("def _normalize_legacy_optimizer_learning_rates", source)
