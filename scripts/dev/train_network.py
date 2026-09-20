@@ -220,6 +220,9 @@ class NetworkTrainer:
         return [True] * len(text_encoders) if self.is_train_text_encoder(args) else [False] * len(text_encoders)
 
     def is_train_text_encoder(self, args):
+        policy_value = getattr(self, "_parameter_policy_train_text_encoder", None)
+        if policy_value is not None:
+            return policy_value
         return not args.network_train_unet_only
 
     def get_parameter_policy_train_type(self, args):
