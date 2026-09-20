@@ -73,7 +73,7 @@ def patch_train_network(text: str) -> str:
     text = replace_once(
         text,
         """        accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)\n\n        if not cache_latents:""",
-        """        if parameter_policy_session is None:\n            accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)\n        else:\n            parameter_policy_session.audit_after_prepare(\n                accelerator=accelerator, optimizer=optimizer\n            )\n            parameter_policy_session.assert_requires_grad_contract()\n            parameter_policy_session.register_checkpoint_manifest(\n                accelerator, scheduler=lr_scheduler\n            )\n\n        if not cache_latents:""",
+        """        if parameter_policy_session is None:\n            accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)\n        else:\n            parameter_policy_session.finalize_after_prepare(\n                accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n            )\n\n        if not cache_latents:""",
         "NetworkTrainer post-prepare audit",
     )
     text = replace_once(
@@ -84,6 +84,13 @@ def patch_train_network(text: str) -> str:
     )
     text = replace_once(
         text,
+        """        self._build_metadata(\n            args,\n            session_id=session_id,\n            training_started_at=training_started_at,\n            model_version=model_version,\n            text_encoder_lr=text_encoder_lr,\n            optimizer_name=optimizer_name,\n            optimizer_args=optimizer_args,\n            num_train_epochs=num_train_epochs,\n            num_batches_per_epoch=len(train_dataloader),\n            net_kwargs=net_kwargs,\n            total_batch_size=total_batch_size,\n            train_dataset_group=train_dataset_group,\n            val_dataset_group=val_dataset_group,\n            use_user_config=use_user_config,\n            use_dreambooth_method=use_dreambooth_method,\n        )\n""",
+        """        self._build_metadata(\n            args,\n            session_id=session_id,\n            training_started_at=training_started_at,\n            model_version=model_version,\n            text_encoder_lr=text_encoder_lr,\n            optimizer_name=optimizer_name,\n            optimizer_args=optimizer_args,\n            num_train_epochs=num_train_epochs,\n            num_batches_per_epoch=len(train_dataloader),\n            net_kwargs=net_kwargs,\n            total_batch_size=total_batch_size,\n            train_dataset_group=train_dataset_group,\n            val_dataset_group=val_dataset_group,\n            use_user_config=use_user_config,\n            use_dreambooth_method=use_dreambooth_method,\n        )\n        if parameter_policy_session is not None:\n            self._metadata.update(parameter_policy_session.model_metadata())\n""",
+        "NetworkTrainer unified Parameter Policy metadata",
+    )
+
+    text = replace_once(
+        text,
         """                        mean_grad_norm,\n                        mean_combined_norm,\n                    )\n""",
         """                        mean_grad_norm,\n                        mean_combined_norm,\n                        parameter_policy_session,\n                    )\n""",
         "NetworkTrainer component log call",
@@ -91,11 +98,18 @@ def patch_train_network(text: str) -> str:
     text = replace_once(
         text,
         """            accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here\n\n            # TRAINING\n""",
-        """            accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here\n            if parameter_policy_session is not None:\n                parameter_policy_session.assert_requires_grad_contract()\n\n            # TRAINING\n""",
+        """            accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here\n            if parameter_policy_session is not None:\n                parameter_policy_session.assert_runtime_contract(\n                    phase=\"epoch_start\", accelerator=accelerator, optimizer=optimizer\n                )\n\n            # TRAINING\n""",
         "NetworkTrainer epoch ownership assertion",
     )
     return text
 
+
+    text = replace_once(
+        text,
+        """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n""",
+        """        # resumeする\n        train_util.resume_from_local_or_hf_if_specified(accelerator, args)\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_runtime_contract(\n                phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n            )\n""",
+        "NetworkTrainer post-resume runtime contract",
+    )
 
 def patch_anima_train_network(text: str) -> str:
     text = replace_once(
@@ -196,10 +210,10 @@ def patch_anima_train(text: str) -> str:
             "Anima Full base selective prepare",
         )
 
-    resume_anchor = """    # resume\n    args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n"""
+    resume_anchor = """    # resume\n    args_util.resume_from_local_or_hf_if_specified(accelerator, args)\n    if parameter_policy_session is not None:\n        parameter_policy_session.assert_runtime_contract(\n            phase=\"post_resume\", accelerator=accelerator, optimizer=optimizer\n        )\n"""
     if has_qwen_patch:
         resume_anchor = """    # Save-state compatibility marker. Frozen-Qwen jobs keep their old\n"""
-        insert = """    if parameter_policy_session is not None:\n        parameter_policy_session.audit_after_prepare(\n            accelerator=accelerator, optimizer=optimizer\n        )\n        parameter_policy_session.assert_requires_grad_contract()\n        parameter_policy_session.register_checkpoint_manifest(\n            accelerator, scheduler=lr_scheduler\n        )\n\n"""
+        insert = """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n"""
         if resume_anchor not in text:
             raise RuntimeError("Anima Full Qwen resume marker missing")
         text = text.replace(resume_anchor, insert + resume_anchor, 1)
@@ -207,7 +221,7 @@ def patch_anima_train(text: str) -> str:
         text = replace_once(
             text,
             resume_anchor,
-            """    if parameter_policy_session is not None:\n        parameter_policy_session.audit_after_prepare(\n            accelerator=accelerator, optimizer=optimizer\n        )\n        parameter_policy_session.assert_requires_grad_contract()\n        parameter_policy_session.register_checkpoint_manifest(\n            accelerator, scheduler=lr_scheduler\n        )\n\n""" + resume_anchor,
+            """    if parameter_policy_session is not None:\n        parameter_policy_session.finalize_after_prepare(\n            accelerator=accelerator, optimizer=optimizer, scheduler=lr_scheduler\n        )\n\n""" + resume_anchor,
             "Anima Full manifest before resume",
         )
 
@@ -231,7 +245,7 @@ def patch_anima_train(text: str) -> str:
     text = replace_once(
         text,
         """        for m in training_models:\n            m.train()\n\n        for step, batch in enumerate(train_dataloader):\n""",
-        """        for m in training_models:\n            m.train()\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_requires_grad_contract()\n\n        for step, batch in enumerate(train_dataloader):\n""",
+        """        for m in training_models:\n            m.train()\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_runtime_contract(\n                phase=\"epoch_start\", accelerator=accelerator, optimizer=optimizer\n            )\n\n        for step, batch in enumerate(train_dataloader):\n""",
         "Anima Full epoch ownership assertion",
     )
 
