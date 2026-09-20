@@ -4407,11 +4407,37 @@ def enable_high_vram(args: argparse.Namespace):
         HIGH_VRAM = True
 
 
-def verify_training_args(args: argparse.Namespace):
+def _guard_parameter_policy_runtime(
+    args: argparse.Namespace,
+    *,
+    parameter_policy_runtime_enabled: bool,
+) -> None:
+    """Fail closed when a managed policy would otherwise reach legacy trainer code."""
+
+    raw_path = getattr(args, "parameter_policy_config", None)
+    if raw_path is None or not str(raw_path).strip():
+        return
+    if not parameter_policy_runtime_enabled:
+        raise ValueError(
+            "--parameter_policy_config was provided, but this trainer has not enabled "
+            "DTS Parameter Policy runtime. Refusing to fall back to the legacy optimizer path."
+        )
+
+
+def verify_training_args(
+    args: argparse.Namespace,
+    *,
+    parameter_policy_runtime_enabled: bool = False,
+):
     r"""
     Verify training arguments. Also reflect highvram option to global variable
     学習用引数を検証する。あわせて highvram オプションの指定をグローバル変数に反映する
     """
+    _guard_parameter_policy_runtime(
+        args,
+        parameter_policy_runtime_enabled=parameter_policy_runtime_enabled,
+    )
+
     enable_high_vram(args)
 
     if args.v2 and args.clip_skip is not None:
@@ -4825,6 +4851,10 @@ def resume_from_local_or_hf_if_specified(accelerator, args):
 
 
 def get_optimizer(args, trainable_params) -> tuple[str, str, object]:
+    _guard_parameter_policy_runtime(
+        args,
+        parameter_policy_runtime_enabled=False,
+    )
     # "Optimizer to use: AdamW, AdamW8bit, Lion, SGDNesterov, SGDNesterov8bit, PagedAdamW, PagedAdamW8bit, PagedAdamW32bit, Lion8bit, PagedLion8bit, AdEMAMix8bit, PagedAdEMAMix8bit, DAdaptation(DAdaptAdamPreprint), DAdaptAdaGrad, DAdaptAdam, DAdaptAdan, DAdaptAdanIP, DAdaptLion, DAdaptSGD, Adafactor"
 
     optimizer_type = args.optimizer_type
