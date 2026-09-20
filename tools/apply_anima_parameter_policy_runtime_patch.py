@@ -58,7 +58,7 @@ def patch_train_network(text: str) -> str:
     block = text[start:end]
     lines = block.splitlines(True)
     # first two lines already have the correct nesting; indent the remaining legacy body
-    rebuilt = "".join(lines[:2]) + "".join("    " + line if line.strip() else line for line in lines[2:])
+    rebuilt = "".join(lines[:3]) + "".join("    " + line if line.strip() else line for line in lines[3:])
     if rebuilt == block:
         raise RuntimeError("NetworkTrainer legacy optimizer indentation did not change")
     rebuilt += """        else:\n            lr_descriptions = None\n            optimizer_name = \"DTSParameterPolicy\"\n            optimizer_args = \"\"\n            optimizer = parameter_policy_session.optimizer\n            optimizer_train_fn = optimizer.train\n            optimizer_eval_fn = optimizer.eval\n\n"""
@@ -126,7 +126,7 @@ def patch_anima_train(text: str) -> str:
         text = replace_once(
             text,
             """    train_qwen3 = bool(getattr(args, \"train_qwen3_text_encoder\", False))\n    if train_qwen3:\n""",
-            """    parameter_policy_requested = bool(\n        str(getattr(args, \"parameter_policy_config\", \"\") or \"\").strip()\n    )\n    parameter_policy_bridge = None\n    policy_qwen3_train = False\n    if parameter_policy_requested:\n        from library import dts_parameter_policy_bridge as parameter_policy_bridge\n        policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file(\n            args.parameter_policy_config\n        )\n        policy_qwen3_train = bool(policy[\"components\"].get(\"qwen3\", {\"train\": False}).get(\"train\"))\n\n    target_qwen3 = bool(getattr(args, \"train_qwen3_text_encoder\", False))\n    train_qwen3 = policy_qwen3_train if parameter_policy_requested else target_qwen3\n    if train_qwen3:\n""",
+            """    parameter_policy_requested = bool(\n        str(getattr(args, \"parameter_policy_config\", \"\") or \"\").strip()\n    )\n    parameter_policy_bridge = None\n    policy_qwen3_train = False\n    train_qwen3 = False\n    if parameter_policy_requested:\n        from library import dts_parameter_policy_bridge as parameter_policy_bridge\n        policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file(\n            args.parameter_policy_config\n        )\n        policy_qwen3_train = bool(policy[\"components\"].get(\"qwen3\", {\"train\": False}).get(\"train\"))\n\n    target_qwen3 = bool(getattr(args, \"train_qwen3_text_encoder\", False))\n    train_qwen3 = policy_qwen3_train if parameter_policy_requested else target_qwen3\n    if train_qwen3:\n""",
             "Anima Full policy/Qwen preflight",
         )
         text = text.replace(
@@ -136,8 +136,8 @@ def patch_anima_train(text: str) -> str:
         )
         text = replace_once(
             text,
-            """        optimizer_name = str(args.optimizer_type or \"AdamW\").lower()\n        if optimizer_name not in supported_qwen_optimizers:\n""",
-            """        optimizer_name = str(args.optimizer_type or \"AdamW\").lower()\n        if parameter_policy_requested:\n            optimizer_name = \"dtsparameterpolicy\"\n        if not parameter_policy_requested and optimizer_name not in supported_qwen_optimizers:\n""",
+            """        if optimizer_name not in supported_qwen_optimizers:\n""",
+            """        if not parameter_policy_requested and optimizer_name not in supported_qwen_optimizers:\n""",
             "Anima Full Qwen legacy optimizer guard",
         )
         text = replace_once(
