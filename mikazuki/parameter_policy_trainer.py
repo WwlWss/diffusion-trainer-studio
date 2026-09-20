@@ -304,15 +304,26 @@ def _scheduler_identity_from_args(
     return identity, hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-@dataclass(frozen=True)
+@dataclass
 class LegacySchedulerFactory:
     base_args: object
     get_scheduler_fix: Any
     num_processes: int
-    scheduler_identity: dict[str, Any]
-    scheduler_signature: str
+    scheduler_identity: dict[str, Any] | None = None
+    scheduler_signature: str | None = None
+
+    def _ensure_identity(self) -> None:
+        if self.scheduler_identity is not None and self.scheduler_signature is not None:
+            return
+        identity, signature = _scheduler_identity_from_args(
+            self.base_args,
+            num_processes=self.num_processes,
+        )
+        self.scheduler_identity = identity
+        self.scheduler_signature = signature
 
     def __call__(self, spec, child_optimizer):
+        self._ensure_identity()
         if isinstance(self.base_args, Mapping):
             child_args = SimpleNamespace(**dict(self.base_args))
         else:
@@ -566,6 +577,10 @@ class ParameterPolicyTrainerSession:
             raise ParameterPolicyTrainerRuntimeError(
                 f"Invalid Parameter Policy checkpoint manifest: {path}: {exc}"
             ) from exc
+        if not isinstance(actual, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid Parameter Policy checkpoint manifest object: {path}."
+            )
         expected = self.checkpoint_manifest(scheduler)
         if actual.get("policy_hash") != expected.get("policy_hash"):
             raise ParameterPolicyTrainerRuntimeError(
@@ -639,16 +654,10 @@ def make_legacy_scheduler_factory(
         base_args: object = dict(args)
     else:
         base_args = copy.copy(args)
-    identity, signature = _scheduler_identity_from_args(
-        base_args,
-        num_processes=num_processes,
-    )
     return LegacySchedulerFactory(
         base_args=base_args,
         get_scheduler_fix=get_scheduler_fix,
         num_processes=num_processes,
-        scheduler_identity=identity,
-        scheduler_signature=signature,
     )
 
 
