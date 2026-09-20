@@ -68,4 +68,36 @@ Coverage:
 
 ## 5E - final review
 
-Standard stays untouched, Component Start stays blocked, and Step 6 integrates only through the public runtime API.
+Merge review findings:
+
+- Standard request/start remains on the historical launch path; Step 5 adds no
+  trainer integration and no requires_grad mutation.
+- Component Start is still blocked before launch-only staging/materialization.
+- Runtime Spec remains torch-free and deterministic; the torch runtime is only
+  imported by explicit runtime consumers.
+- One physical parameter is owned by one child optimizer, and Composite
+  param_groups are live child-group objects rather than copies.
+- Optimizer/scheduler checkpoint metadata is validated before child mutation;
+  ScheduleFree eval-mode checkpoints resume into the runtime's active lifecycle.
+- Real CPU smoke covers all three supported ScheduleFree implementations,
+  pinned Muon 3.10.0, mixed external/optimizer-managed scheduling, Accelerate
+  accumulation, and Accelerate save/load.
+
+Step 6 handoff constraints that remain intentionally unresolved here:
+
+- Component Start must not be unblocked until each trainer/model family applies
+  higher-level target/freeze semantics, scans at the correct lifecycle point,
+  and constructs this runtime.
+- GPU-only bitsandbytes optimizers still need GPU smoke before release-level
+  confidence; Step 5 only validates their constructor mapping structurally.
+- GPU AMP/GradScaler behavior is supported by the single-Optimizer facade design
+  but is not exercised by the CPU 5D job.
+- FSDP/other optimizer-sharding integrations must be explicitly validated or
+  blocked in Step 6; the Composite facade owns nested child state rather than a
+  conventional flat outer optimizer.state mapping.
+- Scheduler class/state is versioned here, but trainer scheduler arguments
+  (warmup/total steps/cycles/etc.) are an effective-config concern. Step 6 must
+  gate resume on compatible trainer scheduler configuration before
+  accelerator.load_state().
+- DeepSpeed and existing fused/blockwise optimizer modes remain compatibility
+  blockers and are not made supported by Step 5.

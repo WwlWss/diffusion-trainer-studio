@@ -111,6 +111,12 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
         self.assertEqual(result.runtime_blockers, ["component runtime blocked"])
         self.assertEqual(result.sidecars, {"policy.json": "{}"})
 
+    def test_step5_runtime_is_not_wired_into_request_launch_path(self):
+        self.assertNotIn("parameter_policy_torch", REQUEST)
+        self.assertNotIn("compile_parameter_policy_runtime_spec", REQUEST)
+        self.assertNotIn("build_parameter_policy_optimizer", REQUEST)
+        self.assertNotIn("build_parameter_policy_scheduler", REQUEST)
+
     def test_parameter_policy_sidecar_is_host_owned(self):
         self.assertIn(
             "parameter_policy_config 是 DTS 托管字段，不能通过 ui_custom_params 手工注入",

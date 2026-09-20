@@ -164,48 +164,61 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(importlib.metadata.version("schedulefree"), "1.4")
         self.assertEqual(importlib.metadata.version("pytorch-optimizer"), "3.10.0")
 
-    def test_all_schedulefree_runtime_has_no_external_child_scheduler(self):
-        parameter = torch.nn.Parameter(torch.full((4, 4), 0.25))
-        lr = 1e-2
-        spec = _compile(
-            (
-                _assignment(
-                    parameter,
-                    name="model.weight",
-                    component="main",
-                    profile="schedulefree",
-                    lr=lr,
-                ),
-            ),
-            profiles={
-                "schedulefree": {
-                    "type": "SGDScheduleFree",
-                    "args": {"momentum": 0.9, "weight_decay": 0.0},
-                }
-            },
-            components={"main": _train("schedulefree", lr)},
+    def test_all_supported_schedulefree_optimizers_run_without_external_scheduler(self):
+        cases = (
+            ("RAdamScheduleFree", {"weight_decay": 0.0}),
+            ("AdamWScheduleFree", {"weight_decay": 0.0}),
+            ("SGDScheduleFree", {"momentum": 0.9, "weight_decay": 0.0}),
         )
+        for optimizer_type, optimizer_args in cases:
+            with self.subTest(optimizer_type=optimizer_type):
+                parameter = torch.nn.Parameter(torch.full((4, 4), 0.25))
+                lr = 1e-2
+                spec = _compile(
+                    (
+                        _assignment(
+                            parameter,
+                            name="model.weight",
+                            component="main",
+                            profile="schedulefree",
+                            lr=lr,
+                        ),
+                    ),
+                    profiles={
+                        "schedulefree": {
+                            "type": optimizer_type,
+                            "args": optimizer_args,
+                        }
+                    },
+                    components={"main": _train("schedulefree", lr)},
+                )
 
-        optimizer = build_parameter_policy_optimizer(spec)
-        scheduler = build_parameter_policy_scheduler(optimizer, None)
+                optimizer = build_parameter_policy_optimizer(spec)
+                scheduler = build_parameter_policy_scheduler(optimizer, None)
 
-        self.assertIsInstance(optimizer, CompositeOptimizer)
-        self.assertIsInstance(scheduler, CompositeLRScheduler)
-        self.assertEqual(optimizer.lifecycle_mode, "train")
-        self.assertEqual(len(scheduler.entries), 1)
-        self.assertEqual(scheduler.entries[0].mode, "optimizer_managed")
-        self.assertIsNone(scheduler.entries[0].scheduler)
+                self.assertIsInstance(optimizer, CompositeOptimizer)
+                self.assertIsInstance(scheduler, CompositeLRScheduler)
+                self.assertEqual(optimizer.lifecycle_mode, "train")
+                self.assertEqual(len(scheduler.entries), 1)
+                self.assertEqual(scheduler.entries[0].mode, "optimizer_managed")
+                self.assertIsNone(scheduler.entries[0].scheduler)
 
-        before = parameter.detach().clone()
-        parameter.grad = torch.ones_like(parameter)
-        optimizer.step()
-        scheduler.step()
-        optimizer.zero_grad(set_to_none=True)
+                before = parameter.detach().clone()
+                parameter.grad = torch.ones_like(parameter)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
 
-        self.assertFalse(torch.equal(before, parameter.detach()))
-        self.assertEqual(scheduler.get_last_lr(), [optimizer.param_groups[0]["lr"]])
-        state = scheduler.state_dict()
-        self.assertNotIn("state_dict", state["children"]["schedulefree"])
+                self.assertFalse(torch.equal(before, parameter.detach()))
+                self.assertEqual(
+                    scheduler.get_last_lr(),
+                    [optimizer.param_groups[0]["lr"]],
+                )
+                state = scheduler.state_dict()
+                self.assertNotIn(
+                    "state_dict",
+                    state["children"]["schedulefree"],
+                )
 
     def test_mixed_runtime_steps_and_scheduler_groups_share_live_children(self):
         model = _make_split_model()
