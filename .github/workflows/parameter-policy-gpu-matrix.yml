@@ -29,28 +29,18 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install pinned Component runtime dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install \
-            torch==2.7.0 torchvision==0.22.0 \
-            accelerate==1.6.0 \
-            bitsandbytes==0.46.0 \
-            lion-pytorch==0.2.3 \
-            schedulefree==1.4 \
-            pytorch-optimizer==3.10.0
+      - name: Show CUDA runtime
+        run: nvidia-smi
 
-      - name: Run real CUDA matrix
-        run: |
-          python tools/run_parameter_policy_gpu_matrix.py \
-            --output parameter-policy-gpu-matrix.json
+      - name: Install pinned Component runtime dependencies
+        run: python -m pip install --upgrade pip && python -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0
+
+      - name: Run synthetic CUDA optimizer matrix
+        run: python tools/run_parameter_policy_gpu_matrix.py --output parameter-policy-gpu-matrix.json
 
       - name: Run real backend matrix
         if: ${{ inputs.backend_manifest != '' }}
-        run: |
-          python tools/run_parameter_policy_backend_gpu_matrix.py \
-            --manifest "${{ inputs.backend_manifest }}" \
-            --output parameter-policy-backend-gpu-matrix.json
+        run: python tools/run_parameter_policy_backend_gpu_matrix.py --manifest "${{ inputs.backend_manifest }}" --output parameter-policy-backend-gpu-matrix.json
 
       - name: Upload matrix evidence
         if: always()
