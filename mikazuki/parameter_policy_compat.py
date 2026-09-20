@@ -132,6 +132,25 @@ def _nonempty_path(value: object, *, field: str) -> bool:
     return bool(value.strip())
 
 
+def _nonempty_paths(value: object, *, field: str) -> bool:
+    if value in (None, "", []):
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, tuple)):
+        found = False
+        for item in value:
+            if not isinstance(item, str):
+                raise ValueError(
+                    f"Parameter Policy compatibility: {field} 必须是字符串路径或字符串路径列表，收到 {value!r}。"
+                )
+            found = found or bool(item.strip())
+        return found
+    raise ValueError(
+        f"Parameter Policy compatibility: {field} 必须是字符串路径或字符串路径列表，收到 {value!r}。"
+    )
+
+
 def _parse_network_args(raw_args: object) -> dict[str, str]:
     """Parse normalized network_args by exact key, with later duplicates winning."""
 
@@ -304,6 +323,30 @@ def parameter_policy_v1_semantic_blockers(
             "冻结的非零 adapter 不参与实际 conditioning。请关闭 "
             "cache_text_encoder_outputs/cache_text_encoder_outputs_to_disk，"
             "或不要预载 network_weights。",
+        )
+
+    if (
+        train_type == "anima-lora"
+        and _nonempty_paths(effective_config.get("base_weights"), field="base_weights")
+        and (
+            _as_bool(
+                effective_config.get("cache_text_encoder_outputs"),
+                field="cache_text_encoder_outputs",
+            )
+            or _as_bool(
+                effective_config.get("cache_text_encoder_outputs_to_disk"),
+                field="cache_text_encoder_outputs_to_disk",
+            )
+        )
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "Component-wise Anima LoRA 不能同时使用 base_weights 与 Text Encoder "
+            "输出缓存：base_weights 会在缓存生成后 merge 到 Qwen3/DiT，包含 lora_te "
+            "权重时会使实际 conditioning 与最终模型状态不一致。请关闭 "
+            "cache_text_encoder_outputs/cache_text_encoder_outputs_to_disk，"
+            "或不要使用 base_weights。",
         )
 
     if train_type in _LORA_NETWORK_MODULES and _positive_float(
