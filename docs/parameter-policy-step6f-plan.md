@@ -40,10 +40,18 @@ The GPU matrix has three orthogonal axes rather than one Cartesian product.
 3. Execution-feature matrix: compile, distributed/sharded ownership, fused
    optimizer paths, swap and offload are qualified independently.
 
-`tools/run_parameter_policy_gpu_matrix.py` is the reproducible CUDA runtime
-probe. It emits JSON containing repository/runtime versions, GPU identity, case
-name, and pass/fail details. Real model-family smoke can be layered on top of
-the same release matrix without weakening the host gate.
+`tools/run_parameter_policy_gpu_matrix.py` is the shared optimizer/runtime
+CUDA probe. It emits JSON containing repository/runtime versions, GPU identity,
+case name, and pass/fail details.
+
+`tools/run_parameter_policy_backend_gpu_matrix.py` is the real trainer matrix
+runner. Its machine-local JSON manifest must contain exactly the ten release
+backends. Every case supplies a fresh trainer argv, a resume trainer argv, and
+the checkpoint directory. The harness requires the fresh run to create Step 6E
+manifest v2 with the matching train type, requires the resume command to
+succeed, and requires checkpoint identity to remain unchanged across resume.
+This keeps model/dataset paths outside the repository while making physical GPU
+evidence reproducible and machine-readable.
 
 ## Blocker policy
 
