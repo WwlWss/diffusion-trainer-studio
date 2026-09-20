@@ -12,6 +12,9 @@ on:
       - "mikazuki/parameter_policy.py"
       - "mikazuki/parameter_policy_bootstrap.py"
       - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "mikazuki/parameter_policy_torch.py"
+      - "docs/parameter-policy-step5-plan.md"
       - "mikazuki/anima_finetune_config.py"
       - "mikazuki/anima_finetune_advanced.py"
       - "mikazuki/anima_effective_config.py"
@@ -122,6 +125,8 @@ jobs:
             mikazuki/parameter_policy.py \
             mikazuki/parameter_policy_bootstrap.py \
             mikazuki/parameter_policy_compat.py \
+            mikazuki/parameter_policy_runtime.py \
+            mikazuki/parameter_policy_torch.py \
             mikazuki/anima_finetune_config.py \
             mikazuki/anima_finetune_advanced.py \
             mikazuki/anima_effective_config.py \
@@ -181,6 +186,9 @@ jobs:
             tests/test_parameter_policy_adapter_metadata.py \
             tests/test_parameter_policy_anima_metadata.py \
             tests/test_parameter_policy_step4_routing.py \
+            tests/test_parameter_policy_runtime.py \
+            tests/test_parameter_policy_torch_contract.py \
+            tests/test_parameter_policy_torch_runtime_smoke.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -357,3 +365,45 @@ jobs:
             sd-scripts/library/strategy_anima.py
           git -C sd-scripts diff --check
           git -C sd-scripts diff --stat
+
+
+  parameter-policy-runtime-smoke:
+    name: Parameter Policy runtime smoke
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned CPU runtime dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            --index-url https://download.pytorch.org/whl/cpu \
+            torch==2.7.0
+          python -m pip install \
+            accelerate==1.6.0 \
+            schedulefree==1.4 \
+            pytorch-optimizer==3.10.0
+
+      - name: Show pinned runtime versions
+        run: |
+          python - <<'PY'
+          import importlib.metadata
+          import torch
+          print("torch", torch.__version__)
+          for package in ("accelerate", "schedulefree", "pytorch-optimizer"):
+              print(package, importlib.metadata.version(package))
+          PY
+
+      - name: Run Parameter Policy real runtime smoke
+        env:
+          CUDA_VISIBLE_DEVICES: ""
+        run: |
+          python -m unittest tests.test_parameter_policy_torch_runtime_smoke -v
