@@ -34,11 +34,15 @@ The GPU matrix has three orthogonal axes rather than one Cartesian product.
 1. Backend matrix: every integrated backend must preserve the Step 6E lifecycle,
    policy-owned optimizer membership, requires-grad contract, metadata, and
    checkpoint identity.
-2. Optimizer/runtime matrix: CUDA covers ordinary external-scheduler optimizers,
-   ScheduleFree, bitsandbytes, Muon eligibility, FP16 GradScaler, BF16,
-   accumulation, and save/resume.
-3. Execution-feature matrix: compile, distributed/sharded ownership, fused
-   optimizer paths, swap and offload are qualified independently.
+2. Optimizer/runtime matrix: CUDA covers currently-supported optimizer
+   implementations, ScheduleFree, bitsandbytes, Muon construction, FP16
+   autocast + GradScaler, BF16 autocast, mixed optimizer children, and
+   CompositeOptimizer state_dict reload.
+3. Trainer/backend matrix: real trainer commands cover Step 6E lifecycle,
+   Accelerator integration, checkpoint manifest v2, and resume per backend.
+4. Execution-feature matrix: compile, distributed/sharded ownership, fused
+   optimizer paths, swap/offload, full-precision training, and FP8 remain
+   independently qualified.
 
 `tools/run_parameter_policy_gpu_matrix.py` is the shared optimizer/runtime
 CUDA probe. It emits JSON containing repository/runtime versions, GPU identity,
@@ -65,7 +69,9 @@ contract and GPU evidence:
 - DeepSpeed/distributed optimizer ownership;
 - fused backward / fused optimizer groups / blockwise fused optimizers;
 - CPU/Unsloth checkpoint offload;
-- Flux/Anima block swap.
+- Flux/Anima block swap;
+- `full_fp16` / `full_bf16`;
+- `fp8_base` / `fp8_base_unet`.
 
 Semantic blockers remain blocked in v1 even if a one-off training run succeeds,
 because the current Component schema cannot represent their semantics exactly:
@@ -83,7 +89,9 @@ because the current Component schema cannot represent their semantics exactly:
 Explicit multi-GPU selection also remains fail-closed until the DDP matrix is
 qualified. A machine with multiple visible GPUs still uses the existing
 single-process Accelerate config unless the user explicitly selects multiple
-GPU ids.
+GPU ids. Likewise, ordinary `mixed_precision=fp16/bf16` remains baseline,
+while full-precision and FP8 base modes stay blocked until physical GPU
+qualification.
 
 ## Start pipeline
 
