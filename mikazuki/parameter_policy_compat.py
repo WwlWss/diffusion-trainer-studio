@@ -197,6 +197,18 @@ def parameter_policy_v1_semantic_blockers(
     seen: set[str] = set()
 
     if _as_bool(
+        effective_config.get("torch_compile"),
+        field="torch_compile",
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "torch_compile 会通过 Accelerate Dynamo 包装训练模型；Component-wise v1 "
+            "尚未验证 compiled model 下的参数 identity、CompositeOptimizer 与 checkpoint "
+            "save/resume 语义。",
+        )
+
+    if _as_bool(
         effective_config.get("fused_backward_pass"),
         field="fused_backward_pass",
     ):
