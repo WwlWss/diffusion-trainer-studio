@@ -61,7 +61,7 @@ def patch_train_network(text: str) -> str:
     rebuilt = "".join(lines[:3]) + "".join("    " + line if line.strip() else line for line in lines[3:])
     if rebuilt == block:
         raise RuntimeError("NetworkTrainer legacy optimizer indentation did not change")
-    rebuilt += """        else:\n            lr_descriptions = None\n            optimizer_name = \"DTSParameterPolicy\"\n            optimizer_args = \"\"\n            optimizer = parameter_policy_session.optimizer\n            optimizer_train_fn = optimizer.train\n            optimizer_eval_fn = optimizer.eval\n\n"""
+    rebuilt += """        else:\n            # Legacy text_encoder_lr is metadata-only in Component mode.\n            text_encoder_lr = None\n            lr_descriptions = None\n            optimizer_name = \"DTSParameterPolicy\"\n            optimizer_args = \"\"\n            optimizer = parameter_policy_session.optimizer\n            optimizer_train_fn = optimizer.train\n            optimizer_eval_fn = optimizer.eval\n\n"""
     text = text[:start] + rebuilt + text[end:]
 
     text = replace_once(
@@ -233,6 +233,13 @@ def patch_anima_train(text: str) -> str:
         """        for m in training_models:\n            m.train()\n\n        for step, batch in enumerate(train_dataloader):\n""",
         """        for m in training_models:\n            m.train()\n        if parameter_policy_session is not None:\n            parameter_policy_session.assert_requires_grad_contract()\n\n        for step, batch in enumerate(train_dataloader):\n""",
         "Anima Full epoch ownership assertion",
+    )
+
+    text = replace_once(
+        text,
+        """\n    # End training\n""",
+        """\n        if parameter_policy_session is not None:\n            optimizer_train_fn()\n\n    # End training\n""",
+        "Anima Full component epoch optimizer lifecycle restoration",
     )
 
     text = replace_once(
