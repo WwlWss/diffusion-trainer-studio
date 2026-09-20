@@ -100,7 +100,8 @@ def normalize_validate_sdxl_full(config: dict) -> None:
     _validate_compile(config, "SDXL")
 
     te_cache = _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
-    if _as_bool(config.get("train_text_encoder")) and te_cache:
+    component_policy = bool(str(config.get("parameter_policy_config") or "").strip())
+    if not component_policy and _as_bool(config.get("train_text_encoder")) and te_cache:
         raise ValueError("SDXL: 训练文本编码器时不能缓存文本编码器输出。")
 
     block_lr = config.get("block_lr")
