@@ -349,10 +349,13 @@ def train(args):
         param_names = []
 
     # calculate number of trainable parameters
-    n_params = 0
-    for group in params_to_optimize:
-        for p in group["params"]:
-            n_params += p.numel()
+    if parameter_policy_session is not None:
+        n_params = sum(p.numel() for p in parameter_policy_session.trainable_parameters)
+    else:
+        n_params = 0
+        for group in params_to_optimize:
+            for p in group["params"]:
+                n_params += p.numel()
 
     accelerator.print(f"number of trainable parameters: {n_params}")
 
