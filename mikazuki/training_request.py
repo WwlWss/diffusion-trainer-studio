@@ -24,6 +24,11 @@ _HOST_PROMPT_KEYS = {
 }
 _PROMPT_FLAGS = ("--n", "--s", "--l", "--d", "--w", "--h")
 
+# Step 6A installs the backend-aware launch gate but intentionally opens no
+# trainer yet. 6B-6D integrate model families behind this closed allow-list;
+# 6F removes the global gate only after the complete matrix is reviewed.
+PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()
+
 
 def decode_training_request(body: bytes) -> tuple[str | None, dict]:
     payload = json.loads(body.decode("utf-8"))
@@ -182,9 +187,9 @@ def prepare_request_config(
     multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
 
-    # Step 2 is deliberately host-only.  Component-wise requests may be
-    # Previewed/Exported/Rehydrated, but Start must not enter any launch-only
-    # trainer staging until the routing/runtime work is implemented.
+    # Step 6A keeps launch-only staging disabled for Component-wise requests.
+    # The model-family integrations consume the runtime session in later commits;
+    # the global Start gate remains closed until the final backend matrix review.
     effective_launch = launch and policy is None
     prepared = prepare_training_config(
         config,
@@ -210,9 +215,18 @@ def prepare_request_config(
     prepared.sidecars.update(sidecars)
     prepared.warnings.extend(prompt_warnings)
     if policy is not None:
-        blockers = parameter_policy_runtime_blockers(policy)
+        blockers = parameter_policy_runtime_blockers(
+            policy,
+            train_type=prepared.train_type,
+            effective_config=prepared.config,
+            integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+        )
         prepared.runtime_blockers.extend(blockers)
         if launch:
+            if not blockers:
+                raise RuntimeError(
+                    "Parameter Policy launch gate invariant failed: Step 6A must remain closed."
+                )
             raise ValueError(blockers[0])
     if materialize:
         materialize_sidecars(prepared.sidecars)

@@ -144,11 +144,11 @@ def _append_once(blockers: list[str], seen: set[str], message: str) -> None:
     blockers.append(message)
 
 
-def parameter_policy_compatibility_blockers(
+def parameter_policy_v1_semantic_blockers(
     effective_config: Mapping[str, Any],
     train_type: str,
 ) -> list[str]:
-    """Return deterministic blockers for exact Standard -> Component migration."""
+    """Return v1 blockers shared by bootstrap and trainer runtime preflight."""
 
     if not isinstance(effective_config, Mapping):
         raise ValueError(
@@ -202,6 +202,24 @@ def parameter_policy_compatibility_blockers(
             "DeepSpeed 会接管 optimizer/distributed ownership；"
             "Component-wise v1 尚未完成 CompositeOptimizer + DeepSpeed 兼容验证。",
         )
+
+    for field in ("cpu_offload_checkpointing", "unsloth_offload_checkpointing"):
+        if _as_bool(effective_config.get(field), field=field):
+            _append_once(
+                blockers,
+                seen,
+                f"{field} 会改变参数驻留/反向图 ownership；"
+                "Component-wise v1 尚未完成对应 device/offload runtime 验证。",
+            )
+
+    for field in ("blocks_to_swap", "double_blocks_to_swap", "single_blocks_to_swap"):
+        if _positive_count(effective_config.get(field), field=field):
+            _append_once(
+                blockers,
+                seen,
+                f"{field} 会在训练期间动态迁移模型 block；"
+                "Component-wise v1 尚未完成 optimizer parameter device 审计。",
+            )
 
     if train_type == "sdxl-finetune" and effective_config.get("block_lr") not in (
         None,
@@ -293,4 +311,16 @@ def parameter_policy_compatibility_blockers(
     return blockers
 
 
-__all__ = ["parameter_policy_compatibility_blockers"]
+def parameter_policy_compatibility_blockers(
+    effective_config: Mapping[str, Any],
+    train_type: str,
+) -> list[str]:
+    """Backward-compatible Standard -> Component bootstrap entrypoint."""
+
+    return parameter_policy_v1_semantic_blockers(effective_config, train_type)
+
+
+__all__ = [
+    "parameter_policy_compatibility_blockers",
+    "parameter_policy_v1_semantic_blockers",
+]

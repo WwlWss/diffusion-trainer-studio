@@ -333,8 +333,15 @@ def normalize_anima_finetune_config(config: dict, anima_training_mode: str) -> N
             config.pop(key, None)
         return
 
-    _normalize_learning_rate(config)
-    _normalize_optimizer(config)
+    component_policy = config.get("parameter_policy_config") not in (None, "")
+    if component_policy:
+        # Optimizer/profile LR ownership belongs to the managed sidecar. Drop
+        # semantic GUI aliases so they cannot rewrite legacy trainer fields.
+        config.pop("anima_finetune_learning_rate", None)
+        config.pop("anima_custom_optimizer_type", None)
+    else:
+        _normalize_learning_rate(config)
+        _normalize_optimizer(config)
     _normalize_scheduler(config)
 
     _apply_semantic_mapping(
@@ -366,15 +373,15 @@ def validate_anima_finetune_config(config: dict, anima_training_mode: str) -> No
     if anima_training_mode != "finetune":
         return
 
-    try:
-        learning_rate = float(config.get("learning_rate"))
-    except (TypeError, ValueError) as e:
-        raise ValueError("Anima: 全参微调要求有效的 learning_rate。") from e
-    if learning_rate <= 0:
-        raise ValueError(
-            "Anima: 全参微调要求 learning_rate > 0。learning_rate=0 会冻结整个 DiT，"
-            "分组件学习率不能重新启用被冻结的 DiT。"
-        )
+    if config.get("parameter_policy_config") in (None, ""):
+        try:
+            learning_rate = float(config.get("learning_rate"))
+        except (TypeError, ValueError) as e:
+            raise ValueError("Anima: 全参微调要求有效的 learning_rate。") from e
+        if learning_rate <= 0:
+            raise ValueError(
+                "Anima: 全参微调要求 learning_rate > 0。learning_rate=0 会冻结整个 DiT。"
+            )
 
     mixed_precision = str(config.get("mixed_precision") or "no").lower()
     full_fp16 = _as_bool(config.get("full_fp16"))

@@ -46,6 +46,14 @@ def _as_bool(value: object) -> bool:
     return bool(value)
 
 
+def _normalize_legacy_optimizer_learning_rates(config: dict, warnings: list[str]) -> None:
+    """Apply legacy adaptive-LR rewrites only when legacy optimizer owns LR."""
+
+    if config.get("parameter_policy_config") not in (None, ""):
+        return
+    normalize_adaptive_optimizer_learning_rates(config, warnings)
+
+
 def _strip_network_training_keys(config: dict) -> None:
     for key in list(config.keys()):
         if key.startswith("network_") or key in {
@@ -136,7 +144,7 @@ def _post_override_normalize(
     elif effective_train_type in {"anima-lora", "anima-finetune"}:
         validate_post_override_anima_config(config, effective_train_type)
 
-    normalize_adaptive_optimizer_learning_rates(config, warnings)
+    _normalize_legacy_optimizer_learning_rates(config, warnings)
     validate_legacy_common_conflicts(config, effective_train_type)
     _validate_final_effective_config(config, effective_train_type)
 
@@ -160,30 +168,30 @@ def prepare_training_config(
     if effective_train_type in {"sd-lora", "sdxl-lora"}:
         normalize_sd_token_length(config, warnings)
         normalize_sd_lora_target(config)
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
     elif effective_train_type == "sd-dreambooth":
         normalize_sd_token_length(config, warnings)
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
         if str(config.get("save_model_as") or "").lower() == "pt":
             raise ValueError("SD DreamBooth: 当前 trainer 不支持 save_model_as=pt。")
     elif effective_train_type in {"flux-lora", "chroma-lora"}:
         normalize_flux_lora_target(config, chroma=effective_train_type == "chroma-lora")
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
     elif effective_train_type == "sdxl-finetune":
         if config.get("max_train_steps") not in (None, "", 0, "0") and config.get("max_train_epochs") not in (None, "", 0, "0"):
             warnings.append("SDXL: 同时设置 step 与 epoch；按页面语义采用 max_train_steps。")
         _strip_network_training_keys(config)
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
         normalize_validate_sdxl_full(config)
     elif effective_train_type == "flux-finetune":
         if config.get("max_train_steps") not in (None, "", 0, "0") and config.get("max_train_epochs") not in (None, "", 0, "0"):
             warnings.append("Flux: 同时设置 step 与 epoch；按页面语义采用 max_train_steps。")
         _strip_network_training_keys(config)
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
         normalize_validate_flux_full(config)
     elif effective_train_type in {"anima-lora", "anima-finetune"}:
         prepare_anima_config(config, effective_train_type, trainer_file, launch=launch, toml_path=toml_path)
-        normalize_adaptive_optimizer_learning_rates(config, warnings)
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
         config.pop("model_type", None)
 
     # Historical ui_custom_params behavior is intentionally last-write-wins for
