@@ -71,6 +71,7 @@ class NetworkTrainer:
         maximum_norm=None,
         mean_grad_norm=None,
         mean_combined_norm=None,
+        parameter_policy_session=None,
     ):
         logs = {"loss/current": current_loss, "loss/average": avr_loss}
 
@@ -83,6 +84,10 @@ class NetworkTrainer:
             logs["norm/avg_grad_norm"] = mean_grad_norm
         if mean_combined_norm is not None:
             logs["norm/avg_combined_norm"] = mean_combined_norm
+
+        if parameter_policy_session is not None:
+            logs.update(parameter_policy_session.component_lr_logs(lr_scheduler))
+            return logs
 
         lrs = lr_scheduler.get_last_lr()
         for i, lr in enumerate(lrs):
@@ -215,7 +220,23 @@ class NetworkTrainer:
         return [True] * len(text_encoders) if self.is_train_text_encoder(args) else [False] * len(text_encoders)
 
     def is_train_text_encoder(self, args):
+        policy_value = getattr(self, "_parameter_policy_train_text_encoder", None)
+        if policy_value is not None:
+            return policy_value
         return not args.network_train_unet_only
+
+    def get_parameter_policy_train_type(self, args):
+        return None
+
+    def configure_parameter_policy_training(
+        self,
+        args,
+        session,
+        text_encoders,
+    ):
+        raise NotImplementedError(
+            f"{type(self).__name__} has not integrated DTS Parameter Policy runtime."
+        )
 
     def cache_text_encoder_outputs_if_needed(self, args, accelerator, unet, vae, text_encoders, dataset, weight_dtype):
         for t_enc in text_encoders:
@@ -479,7 +500,18 @@ class NetworkTrainer:
     def train(self, args):
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
-        train_util.verify_training_args(args)
+        parameter_policy_requested = bool(
+            str(getattr(args, "parameter_policy_config", "") or "").strip()
+        )
+        parameter_policy_train_type = (
+            self.get_parameter_policy_train_type(args)
+            if parameter_policy_requested
+            else None
+        )
+        train_util.verify_training_args(
+            args,
+            parameter_policy_runtime_enabled=parameter_policy_train_type is not None,
+        )
         train_util.prepare_dataset_args(args, True)
         deepspeed_utils.prepare_deepspeed_args(args)
         setup_logging(args, reset=True)
@@ -704,6 +736,22 @@ class NetworkTrainer:
             info = network.load_weights(args.network_weights)
             accelerator.print(f"load network weights from {args.network_weights}: {info}")
 
+        parameter_policy_session = None
+        parameter_policy_bridge = None
+        if parameter_policy_requested:
+            from library import dts_parameter_policy_bridge as parameter_policy_bridge
+
+            parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(
+                args=args,
+                train_type=parameter_policy_train_type,
+                roots={"network": network},
+            )
+            train_unet, train_text_encoder = self.configure_parameter_policy_training(
+                args,
+                parameter_policy_session,
+                text_encoders,
+            )
+
         if args.gradient_checkpointing:
             if args.cpu_offload_checkpointing:
                 unet.enable_gradient_checkpointing(cpu_offload=True)
@@ -720,43 +768,41 @@ class NetworkTrainer:
         # 学習に必要なクラスを準備する
         accelerator.print("prepare optimizer, data loader etc.")
 
-        # make backward compatibility for text_encoder_lr
-        support_multiple_lrs = hasattr(network, "prepare_optimizer_params_with_multiple_te_lrs")
-        if support_multiple_lrs:
-            text_encoder_lr = args.text_encoder_lr
-        else:
-            # toml backward compatibility
-            if args.text_encoder_lr is None or isinstance(args.text_encoder_lr, float) or isinstance(args.text_encoder_lr, int):
+        if parameter_policy_session is None:
+            # make backward compatibility for text_encoder_lr
+            support_multiple_lrs = hasattr(network, "prepare_optimizer_params_with_multiple_te_lrs")
+            if support_multiple_lrs:
                 text_encoder_lr = args.text_encoder_lr
             else:
-                text_encoder_lr = None if len(args.text_encoder_lr) == 0 else args.text_encoder_lr[0]
-        try:
-            if support_multiple_lrs:
-                results = network.prepare_optimizer_params_with_multiple_te_lrs(text_encoder_lr, args.unet_lr, args.learning_rate)
-            else:
-                results = network.prepare_optimizer_params(text_encoder_lr, args.unet_lr, args.learning_rate)
-            if type(results) is tuple:
-                trainable_params = results[0]
-                lr_descriptions = results[1]
-            else:
-                trainable_params = results
+                # toml backward compatibility
+                if args.text_encoder_lr is None or isinstance(args.text_encoder_lr, float) or isinstance(args.text_encoder_lr, int):
+                    text_encoder_lr = args.text_encoder_lr
+                else:
+                    text_encoder_lr = None if len(args.text_encoder_lr) == 0 else args.text_encoder_lr[0]
+            try:
+                if support_multiple_lrs:
+                    results = network.prepare_optimizer_params_with_multiple_te_lrs(text_encoder_lr, args.unet_lr, args.learning_rate)
+                else:
+                    results = network.prepare_optimizer_params(text_encoder_lr, args.unet_lr, args.learning_rate)
+                if type(results) is tuple:
+                    trainable_params = results[0]
+                    lr_descriptions = results[1]
+                else:
+                    trainable_params = results
+                    lr_descriptions = None
+            except TypeError:
+                trainable_params = network.prepare_optimizer_params(text_encoder_lr, args.unet_lr)
                 lr_descriptions = None
-        except TypeError as e:
-            trainable_params = network.prepare_optimizer_params(text_encoder_lr, args.unet_lr)
+
+            optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
+            optimizer_train_fn, optimizer_eval_fn = train_util.get_optimizer_train_eval_fn(optimizer, args)
+        else:
             lr_descriptions = None
-
-        # if len(trainable_params) == 0:
-        #     accelerator.print("no trainable parameters found / 学習可能なパラメータが見つかりませんでした")
-        # for params in trainable_params:
-        #     for k, v in params.items():
-        #         if type(v) == float:
-        #             pass
-        #         else:
-        #             v = len(v)
-        #         accelerator.print(f"trainable_params: {k} = {v}")
-
-        optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
-        optimizer_train_fn, optimizer_eval_fn = train_util.get_optimizer_train_eval_fn(optimizer, args)
+            optimizer_name = "DTSParameterPolicy"
+            optimizer_args = ""
+            optimizer = parameter_policy_session.optimizer
+            optimizer_train_fn = optimizer.train
+            optimizer_eval_fn = optimizer.eval
 
         # prepare dataloader
         # strategies are set here because they cannot be referenced in another process. Copy them with the dataset
@@ -799,7 +845,15 @@ class NetworkTrainer:
         train_dataset_group.set_max_train_steps(args.max_train_steps)
 
         # lr schedulerを用意する
-        lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+        if parameter_policy_session is None:
+            lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+        else:
+            scheduler_factory = parameter_policy_bridge.make_legacy_scheduler_factory(
+                args=args,
+                get_scheduler_fix=train_util.get_scheduler_fix,
+                num_processes=accelerator.num_processes,
+            )
+            lr_scheduler = parameter_policy_session.build_scheduler(scheduler_factory)
 
         # 実験的機能：勾配も含めたfp16/bf16学習を行う　モデル全体をfp16/bf16にする
         if args.full_fp16:
@@ -904,7 +958,18 @@ class NetworkTrainer:
 
         del t_enc
 
-        accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
+        if parameter_policy_session is None:
+            accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
+        else:
+            parameter_policy_session.audit_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            parameter_policy_session.assert_requires_grad_contract()
+            parameter_policy_session.register_checkpoint_manifest(
+                accelerator,
+                scheduler=lr_scheduler,
+            )
 
         if not cache_latents:  # キャッシュしない場合はVAEを使うのでVAEを準備する
             vae.requires_grad_(False)
@@ -1209,6 +1274,19 @@ class NetworkTrainer:
                 vae_name = os.path.basename(vae_name)
             metadata["ss_vae_name"] = vae_name
 
+        if parameter_policy_session is not None:
+            metadata["ss_dts_parameter_policy_hash"] = parameter_policy_session.policy_hash
+            metadata["ss_dts_parameter_policy_topology"] = (
+                parameter_policy_session.runtime_spec.topology_fingerprint
+            )
+            metadata["ss_dts_parameter_policy_profiles"] = json.dumps(
+                {
+                    spec.profile_name: spec.optimizer_type
+                    for spec in parameter_policy_session.runtime_spec.optimizers
+                },
+                sort_keys=True,
+            )
+
         metadata = {k: str(v) for k, v in metadata.items()}
 
         # make minimum metadata for filtering
@@ -1392,6 +1470,8 @@ class NetworkTrainer:
             metadata["ss_epoch"] = str(epoch + 1)
 
             accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)  # network.train() is called here
+            if parameter_policy_session is not None:
+                parameter_policy_session.assert_requires_grad_contract()
 
             # TRAINING
             skipped_dataloader = None
@@ -1433,7 +1513,11 @@ class NetworkTrainer:
                     if accelerator.sync_gradients:
                         self.all_reduce_network(accelerator, network)  # sync DDP grad manually
                         if args.max_grad_norm != 0.0:
-                            params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+                            params_to_clip = (
+                                parameter_policy_session.trainable_parameters
+                                if parameter_policy_session is not None
+                                else accelerator.unwrap_model(network).get_trainable_params()
+                            )
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                         if hasattr(network, "update_grad_norms"):
@@ -1515,6 +1599,7 @@ class NetworkTrainer:
                         maximum_norm,
                         mean_grad_norm,
                         mean_combined_norm,
+                        parameter_policy_session,
                     )
                     self.step_logging(accelerator, logs, global_step, epoch + 1)
 

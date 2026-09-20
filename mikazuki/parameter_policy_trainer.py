@@ -436,6 +436,54 @@ class ParameterPolicyTrainerSession:
                     f"Parameter Policy requires {desired!r}."
                 )
 
+    def component_lr_logs(self, scheduler: object) -> dict[str, Any]:
+        """Return stable component-oriented LR logs from the composite runtime."""
+
+        composite_scheduler = _unwrap_composite_scheduler(scheduler)
+        if composite_scheduler is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "component_lr_logs requires the DTS CompositeLRScheduler."
+            )
+
+        values_by_profile = composite_scheduler.get_last_lr_by_profile()
+        route_values: dict[tuple[str, str], Any] = {}
+        for optimizer_spec in self.runtime_spec.optimizers:
+            profile_values = values_by_profile.get(optimizer_spec.profile_name)
+            if profile_values is None:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Scheduler has no LR values for Optimizer Profile "
+                    f"{optimizer_spec.profile_name!r}."
+                )
+            if len(profile_values) != len(optimizer_spec.groups):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Scheduler LR group count for Optimizer Profile "
+                    f"{optimizer_spec.profile_name!r} does not match Runtime Spec."
+                )
+            for group, lr_value in zip(optimizer_spec.groups, profile_values):
+                for parameter in group.parameters:
+                    key = (parameter.component_id, parameter.route_kind)
+                    previous = route_values.get(key)
+                    if previous is not None and previous != lr_value:
+                        raise ParameterPolicyTrainerRuntimeError(
+                            f"Component {parameter.component_id!r} has inconsistent "
+                            f"{parameter.route_kind} scheduler LR values."
+                        )
+                    route_values[key] = lr_value
+
+        logs: dict[str, Any] = {}
+        components = sorted({component_id for component_id, _ in route_values})
+        for component_id in components:
+            primary = route_values.get((component_id, "primary"))
+            fallback = route_values.get((component_id, "fallback"))
+            if primary is not None:
+                logs[f"lr/{component_id}"] = primary
+                if fallback is not None:
+                    logs[f"lr/{component_id}/fallback"] = fallback
+            elif fallback is not None:
+                logs[f"lr/{component_id}"] = fallback
+                logs[f"lr/{component_id}/fallback"] = fallback
+        return logs
+
     def build_scheduler(self, scheduler_factory) -> CompositeLRScheduler:
         scheduler = build_parameter_policy_scheduler(self.optimizer, scheduler_factory)
         has_external = any(entry.mode == "external" for entry in scheduler.entries)

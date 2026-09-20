@@ -51,7 +51,21 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
         # prepare CLIP-L/CLIP-G/T5XXL training flags
         self.train_clip = not args.network_train_unet_only
+        self.train_clip_l = self.train_clip
+        self.train_clip_g = self.train_clip
         self.train_t5xxl = False  # default is False even if args.network_train_unet_only is False
+
+        if (
+            str(getattr(args, "parameter_policy_config", "") or "").strip()
+            and args.cache_text_encoder_outputs
+        ):
+            # Cache all CLIP/T5 outputs before the LoRA network/session exists.
+            # Routing later restores exact train flags and rejects caching if
+            # any policy-owned TE adapter is actually trainable.
+            self.train_clip = False
+            self.train_clip_l = False
+            self.train_clip_g = False
+            self.train_t5xxl = False
 
         if args.max_token_length is not None:
             logger.warning("max_token_length is not used in Flux training / max_token_lengthはFluxのトレーニングでは使用されません")
@@ -168,10 +182,32 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         # check t5xxl is trained or not
         self.train_t5xxl = network.train_t5xxl
 
-        if self.train_t5xxl and args.cache_text_encoder_outputs:
+        if (
+            self.train_t5xxl
+            and args.cache_text_encoder_outputs
+            and not str(getattr(args, "parameter_policy_config", "") or "").strip()
+        ):
             raise ValueError(
                 "T5XXL is trained, so cache_text_encoder_outputs cannot be used / T5XXL学習時はcache_text_encoder_outputsは使用できません"
             )
+
+    def get_parameter_policy_train_type(self, args):
+        return "sd3-lora"
+
+    def configure_parameter_policy_training(self, args, session, text_encoders):
+        self.train_clip_l = session.trains_component("clip_l.adapter")
+        self.train_clip_g = session.trains_component("clip_g.adapter")
+        self.train_clip = self.train_clip_l or self.train_clip_g
+        self.train_t5xxl = session.trains_component("t5xxl.adapter")
+        train_unet = session.trains_prefix("mmdit.")
+        train_text_encoder = self.train_clip or self.train_t5xxl
+        self._parameter_policy_train_text_encoder = train_text_encoder
+        if self.train_t5xxl and args.cache_text_encoder_outputs:
+            raise ValueError(
+                "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
+                "outputs cannot be used."
+            )
+        return train_unet, train_text_encoder
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
         if args.cache_text_encoder_outputs:
@@ -183,7 +219,7 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
             return text_encoders  # CLIP-L, CLIP-G and T5XXL are needed for encoding
 
     def get_text_encoders_train_flags(self, args, text_encoders):
-        return [self.train_clip, self.train_clip, self.train_t5xxl]
+        return [self.train_clip_l, self.train_clip_g, self.train_t5xxl]
 
     def get_text_encoder_outputs_caching_strategy(self, args):
         if args.cache_text_encoder_outputs:
