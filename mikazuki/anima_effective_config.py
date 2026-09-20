@@ -210,3 +210,17 @@ def prepare_anima_config(
         _pop_many(config, ANIMA_FULL_ONLY_KEYS)
         _normalize_lora_target(config)
         config.setdefault("network_module", "networks.lora_anima")
+
+
+def materialize_anima_launch_side_effects(config: dict, train_type: str) -> None:
+    """Apply Anima launch-only filesystem side effects after Start acceptance.
+
+    Component-wise Step 6F compiles Anima with launch=False so blocker
+    evaluation and read-only asset validation cannot create user directories.
+    Standard mode keeps its historical eager launch path.
+    """
+
+    if train_type != "anima-finetune":
+        return
+    if _as_bool(config.get("train_qwen3_text_encoder")) and config.get("qwen3_output_dir"):
+        os.makedirs(str(config["qwen3_output_dir"]), exist_ok=True)
