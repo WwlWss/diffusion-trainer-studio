@@ -326,6 +326,9 @@ def train(args):
             optimizer=optimizer,
             scheduler=lr_scheduler,
         )
+        args._dts_parameter_policy_model_metadata = (
+            parameter_policy_session.model_metadata()
+        )
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
     if args.full_fp16:
