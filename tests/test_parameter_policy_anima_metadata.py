@@ -238,6 +238,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
                 [
                     "multi_caption",
                     "parameter_policy_metadata",
+                    "parameter_policy_runtime",
                     "qwen3_joint",
                 ],
             )
