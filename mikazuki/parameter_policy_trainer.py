@@ -436,15 +436,16 @@ class ParameterPolicyTrainerSession:
                     f"Parameter Policy requires {desired!r}."
                 )
 
-    def component_lr_logs(self, scheduler: CompositeLRScheduler) -> dict[str, Any]:
+    def component_lr_logs(self, scheduler: object) -> dict[str, Any]:
         """Return stable component-oriented LR logs from the composite runtime."""
 
-        if not isinstance(scheduler, CompositeLRScheduler):
+        composite_scheduler = _unwrap_composite_scheduler(scheduler)
+        if composite_scheduler is None:
             raise ParameterPolicyTrainerRuntimeError(
                 "component_lr_logs requires the DTS CompositeLRScheduler."
             )
 
-        values_by_profile = scheduler.get_last_lr_by_profile()
+        values_by_profile = composite_scheduler.get_last_lr_by_profile()
         route_values: dict[tuple[str, str], Any] = {}
         for optimizer_spec in self.runtime_spec.optimizers:
             profile_values = values_by_profile.get(optimizer_spec.profile_name)
