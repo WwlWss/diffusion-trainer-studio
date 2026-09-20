@@ -25,7 +25,8 @@ def _load_prepare_request_config(**overrides):
         "prepare_prompt_fields": lambda config, page_type: ({}, []),
         "prepare_training_config": None,
         "legacy_api": SimpleNamespace(resolve_training_backend=object()),
-        "parameter_policy_runtime_blockers": lambda policy: [],
+        "parameter_policy_runtime_blockers": lambda policy, **kwargs: [],
+        "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset(),
         "materialize_sidecars": lambda sidecars: None,
     }
     namespace.update(overrides)
@@ -33,8 +34,9 @@ def _load_prepare_request_config(**overrides):
     return namespace["prepare_request_config"]
 
 
-def _prepared(config=None):
+def _prepared(config=None, train_type="sd-lora"):
     return SimpleNamespace(
+        train_type=train_type,
         config={} if config is None else dict(config),
         sidecars={},
         warnings=[],
@@ -60,7 +62,7 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
                 {"version": 1},
             ),
             prepare_training_config=prepare_training_config,
-            parameter_policy_runtime_blockers=lambda policy: ["component runtime blocked"],
+            parameter_policy_runtime_blockers=lambda policy, **kwargs: ["component runtime blocked"],
             materialize_sidecars=materialize_sidecars,
         )
 
@@ -102,7 +104,7 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
                 {"version": 1},
             ),
             prepare_training_config=prepare_training_config,
-            parameter_policy_runtime_blockers=lambda policy: ["component runtime blocked"],
+            parameter_policy_runtime_blockers=lambda policy, **kwargs: ["component runtime blocked"],
             materialize_sidecars=lambda sidecars: calls.append(("materialize", dict(sidecars))),
         )
         result = prepare({}, "lora-master", launch=False, materialize=False)
@@ -116,6 +118,33 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
         self.assertNotIn("compile_parameter_policy_runtime_spec", REQUEST)
         self.assertNotIn("build_parameter_policy_optimizer", REQUEST)
         self.assertNotIn("build_parameter_policy_scheduler", REQUEST)
+
+    def test_step6a_gate_passes_effective_backend_and_config_but_remains_closed(self):
+        calls = []
+
+        def blockers(policy, **kwargs):
+            calls.append(kwargs)
+            return ["component runtime blocked"]
+
+        prepare = _load_prepare_request_config(
+            build_parameter_policy_sidecar=lambda config, page_type: (
+                "policy.json",
+                {"policy.json": "{}"},
+                {"version": 1},
+            ),
+            prepare_training_config=lambda config, **kwargs: _prepared(
+                {"parameter_policy_config": "policy.json", "marker": 1},
+                train_type="flux-lora",
+            ),
+            parameter_policy_runtime_blockers=blockers,
+        )
+        result = prepare({}, "flux-lora", launch=False)
+
+        self.assertEqual(result.runtime_blockers, ["component runtime blocked"])
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["train_type"], "flux-lora")
+        self.assertEqual(calls[0]["effective_config"]["marker"], 1)
+        self.assertEqual(calls[0]["integrated_train_types"], frozenset())
 
     def test_parameter_policy_sidecar_is_host_owned(self):
         self.assertIn(

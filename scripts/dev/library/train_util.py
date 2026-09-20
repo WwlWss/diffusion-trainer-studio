@@ -3685,6 +3685,12 @@ def add_optimizer_arguments(parser: argparse.ArgumentParser):
         "AdaFactor. "
         "Also, you can use any optimizer by specifying the full path to the class, like 'bitsandbytes.optim.AdEMAMix8bit' or 'bitsandbytes.optim.PagedAdEMAMix8bit'.",
     )
+    parser.add_argument(
+        "--parameter_policy_config",
+        type=str,
+        default=None,
+        help="DTS-managed Parameter Training Policy sidecar. Standard mode leaves this unset.",
+    )
 
     # backward compatibility
     parser.add_argument(

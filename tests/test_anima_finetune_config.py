@@ -117,6 +117,10 @@ class AnimaFinetuneConfigTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "learning_rate > 0"):
                     validate_anima_finetune_config(config, "finetune")
 
+    def test_component_policy_owns_lr_and_does_not_require_legacy_global_lr(self):
+        config = {"parameter_policy_config": "policy.json"}
+        validate_anima_finetune_config(config, "finetune")
+
     def test_precision_conflicts_are_rejected(self):
         bad_configs = [
             {"learning_rate": 1e-5, "mixed_precision": "bf16", "full_fp16": True},

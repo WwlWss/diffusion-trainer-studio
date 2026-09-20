@@ -15,12 +15,13 @@ import hashlib
 import json
 import math
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 
 from mikazuki.optimizer_profiles import (
     get_optimizer_capability,
     normalize_optimizer_profile,
 )
+from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
 from mikazuki.training_gui_args import parse_ui_custom_params
 
 
@@ -406,19 +407,43 @@ def serialize_parameter_policy(policy: Mapping[str, Any]) -> tuple[str, str]:
     return (PARAMETER_POLICY_DIR / f"{digest}.json").as_posix(), content
 
 
-def parameter_policy_runtime_blockers(policy: Mapping[str, Any]) -> list[str]:
-    """Describe why a structurally valid policy is not runnable yet.
+def parameter_policy_runtime_blockers(
+    policy: Mapping[str, Any],
+    *,
+    train_type: str | None = None,
+    effective_config: Mapping[str, Any] | None = None,
+    integrated_train_types: Iterable[str] = (),
+) -> list[str]:
+    """Return deterministic blockers for request-level Component-wise Start.
 
-    Step 2 intentionally has no trainer runtime.  Optimizer-specific blockers
-    are also reported now so Preview/Export are honest about restricted/planned
-    capabilities without making the sidecar format itself unable to represent
-    them.
+    Step 6A makes the gate backend-aware while intentionally keeping the
+    integration allow-list empty. Preview/Export therefore remain honest about
+    both model-family integration status and unsupported ownership semantics.
     """
 
     canonical = validate_parameter_policy(policy)
-    blockers = [
-        "Parameter Training Policy trainer runtime 尚未实现；当前 Component-wise 仅支持 Preview / Export / Rehydrate。"
-    ]
+    integrated = {str(item).strip().lower() for item in integrated_train_types}
+    blockers: list[str] = []
+
+    normalized_train_type = str(train_type or "").strip().lower()
+    if not normalized_train_type:
+        blockers.append(
+            "Parameter Training Policy trainer runtime 尚未实现；当前 Component-wise 仅支持 Preview / Export / Rehydrate。"
+        )
+    elif normalized_train_type not in integrated:
+        blockers.append(
+            "Parameter Training Policy trainer runtime 尚未接入 "
+            f"backend={normalized_train_type!r}；当前 Component-wise 仅支持 Preview / Export / Rehydrate。"
+        )
+
+    if effective_config is not None and normalized_train_type:
+        blockers.extend(
+            parameter_policy_v1_semantic_blockers(
+                effective_config,
+                normalized_train_type,
+            )
+        )
+
     referenced_profiles: set[str] = set()
     for route in canonical["components"].values():
         if not route["train"]:
@@ -428,7 +453,7 @@ def parameter_policy_runtime_blockers(policy: Mapping[str, Any]) -> list[str]:
         if fallback:
             referenced_profiles.add(fallback)
 
-    seen: set[str] = set()
+    seen = set(blockers)
     for profile_name in sorted(referenced_profiles, key=str.casefold):
         profile = canonical["optimizer_profiles"][profile_name]
         capability = get_optimizer_capability(profile["type"])
