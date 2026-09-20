@@ -25,13 +25,20 @@ The session owns:
 7. CompositeLRScheduler construction through a child-aware legacy scheduler
    adapter;
 8. post-`Accelerator.prepare()` parameter/device ownership audit;
-9. checkpoint policy/topology manifest validation.
+9. checkpoint policy/topology manifest validation;
+10. scheduler effective-configuration identity for safe resume.
 
 ## Standard-mode boundary
 
 `scripts/*/library/dts_parameter_policy_bridge.py` is deliberately lazy.
 Standard trainers must not import the bridge, so the new torch runtime remains
 outside the historical optimizer path when `parameter_policy_config=None`.
+
+Trainer-side parsing is also fail-closed. A non-empty
+`parameter_policy_config` is rejected by `verify_training_args()` unless that
+trainer explicitly opts into the Parameter Policy runtime. The legacy
+`get_optimizer()` path always rejects a managed policy, providing a second
+sentinel against accidental fallback during later model-family integration.
 
 ## Compatibility gate
 
@@ -53,3 +60,26 @@ Step 6A does not patch training loops, model-family root maps, clipping sources,
 or Anima staged trainers. Those integrations consume this boundary in 6B–6D.
 The global Start gate is removed only after the full matrix and runtime smoke
 suite are complete.
+
+## Resume identity
+
+Component-wise state resume is bound to three independent identities:
+
+- canonical Parameter Policy hash;
+- optimizer/runtime topology fingerprint;
+- scheduler effective-configuration signature.
+
+The scheduler signature is derived from the same frozen argument snapshot used
+to construct sd-scripts external child schedulers, including effective training,
+warmup, decay, cycle, power, timescale, minimum-LR and custom scheduler
+arguments. This prevents a checkpoint created under one scheduler configuration
+from silently loading under another scheduler of the same Python class.
+
+When every child optimizer manages its own schedule (for example a pure
+ScheduleFree policy), unused global scheduler controls do not participate in the
+identity and cannot cause false resume mismatches.
+
+The Accelerate load pre-hook validates the manifest before optimizer/scheduler
+state is restored. Runtime smoke coverage exercises a real save/load round trip
+and verifies that scheduler mismatch rejection leaves fresh optimizer and
+scheduler state unchanged.
