@@ -71,6 +71,16 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         self.train_clip_l = not args.network_train_unet_only and self.use_clip_l
         self.train_t5xxl = False  # default is False even if args.network_train_unet_only is False
 
+        if (
+            str(getattr(args, "parameter_policy_config", "") or "").strip()
+            and args.cache_text_encoder_outputs
+        ):
+            # The cache is created before the LoRA network/session exists. Cache
+            # every TE output up front; final policy train flags are applied
+            # later, and any actually-trained TE adapter rejects the cache.
+            self.train_clip_l = False
+            self.train_t5xxl = False
+
         if args.max_token_length is not None:
             logger.warning("max_token_length is not used in Flux training / max_token_lengthはFluxのトレーニングでは使用されません")
 
