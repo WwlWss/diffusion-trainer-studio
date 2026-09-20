@@ -89,6 +89,29 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
                 trainer.index("register_load_state_pre_hook(load_qwen3_mode_hook)"),
             )
 
+    def test_component_network_metadata_and_full_lifecycle_contracts_are_materialized(self):
+        source = Path("sd-scripts").resolve()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            tree = materialize_anima_runtime_tree(
+                ("parameter_policy_runtime",),
+                source_dir=source,
+                cache_root=temp_dir,
+            )
+            network_trainer = (tree / "train_network.py").read_text(encoding="utf-8")
+            component_marker = 'optimizer_name = "DTSParameterPolicy"'
+            component_start = network_trainer.rfind("else:", 0, network_trainer.index(component_marker))
+            component_end = network_trainer.index("# prepare dataloader", component_start)
+            component_branch = network_trainer[component_start:component_end]
+            self.assertIn("text_encoder_lr = None", component_branch)
+
+            full_trainer = (tree / "anima_train.py").read_text(encoding="utf-8")
+            epoch_restore = (
+                "if parameter_policy_session is not None:\n"
+                "            optimizer_train_fn()\n\n"
+                "    # End training"
+            )
+            self.assertIn(epoch_restore, full_trainer)
+
     def test_all_features_compose(self):
         source = Path("sd-scripts").resolve()
         with tempfile.TemporaryDirectory() as temp_dir:
