@@ -13,6 +13,7 @@ parameter_policy.py.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import math
 from typing import Any
 
 from mikazuki.model_component_profiles import get_model_component_profile
@@ -111,9 +112,9 @@ def _positive_float(value: object, *, field: str) -> bool:
         raise ValueError(
             f"Parameter Policy compatibility: {field} 必须是非负数值，收到 {value!r}。"
         ) from exc
-    if parsed < 0:
+    if not math.isfinite(parsed) or parsed < 0:
         raise ValueError(
-            f"Parameter Policy compatibility: {field} 必须是非负数值，收到 {value!r}。"
+            f"Parameter Policy compatibility: {field} 必须是有限的非负数值，收到 {value!r}。"
         )
     return parsed > 0
 
