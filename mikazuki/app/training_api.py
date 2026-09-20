@@ -12,6 +12,7 @@ import toml
 from fastapi import Request
 
 import mikazuki.app.api as legacy_api
+from mikazuki.anima_effective_config import materialize_anima_launch_side_effects
 from mikazuki.anima_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
@@ -26,6 +27,7 @@ from mikazuki.training_request import (
     validate_prepared_config,
 )
 from mikazuki.training_schema_overrides import fixed_flux_family_schema, fixed_sd_schema, override_raw_schema
+from mikazuki.training_validation import validate_prepared_trainer
 from mikazuki.utils import train_utils
 
 install_frontend_training_patch()
@@ -173,12 +175,19 @@ async def create_toml_file(request: Request):
     try:
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=True, toml_path=toml_path)
-        # Qwen3 joint training deliberately leaves the pinned sd-scripts
-        # submodule pristine. At Start only, materialize the reviewed trainer
-        # patch into an isolated cache tree, then validate that concrete trainer
-        # exactly like any other launch asset.
-        prepare_runtime_trainer(prepared)
-        validate_prepared_config(prepared, True)
+        component_start = bool(prepared.config.get("parameter_policy_config"))
+        if component_start:
+            # Step 6F keeps blocked/invalid Component Start requests free of
+            # launch side effects. Validate model/assets/dataset first, then
+            # materialize any staged Anima trainer and launch-only directories.
+            validate_prepared_config(prepared, True, check_trainer=False)
+            prepare_runtime_trainer(prepared)
+            validate_prepared_trainer(prepared)
+            materialize_anima_launch_side_effects(prepared.config, prepared.train_type)
+        else:
+            # Preserve the Standard-mode launch ordering.
+            prepare_runtime_trainer(prepared)
+            validate_prepared_config(prepared, True)
         materialize_sidecars(prepared.sidecars)
         _write_text_atomic(toml_path, toml.dumps(prepared.config))
     except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
