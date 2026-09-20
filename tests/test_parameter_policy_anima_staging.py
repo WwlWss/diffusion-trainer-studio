@@ -41,7 +41,7 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
                 (tree / "anima_train.py").read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "register_checkpoint_manifest",
+                "finalize_after_prepare",
                 (tree / "train_network.py").read_text(encoding="utf-8"),
             )
             second = materialize_anima_runtime_tree(
@@ -87,7 +87,7 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
             self.assertIn('phase="post_resume"', trainer)
             self.assertIn('phase="epoch_start"', trainer)
             self.assertLess(
-                trainer.index("register_checkpoint_manifest"),
+                trainer.index("finalize_after_prepare"),
                 trainer.index("register_load_state_pre_hook(load_qwen3_mode_hook)"),
             )
 
