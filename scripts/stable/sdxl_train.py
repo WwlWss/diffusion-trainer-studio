@@ -587,6 +587,9 @@ def train(args):
             optimizer=optimizer,
             scheduler=lr_scheduler,
         )
+        args._dts_parameter_policy_model_metadata = (
+            parameter_policy_session.model_metadata()
+        )
 
     # TextEncoderの出力をキャッシュするときにはCPUへ移動する
     if args.cache_text_encoder_outputs:
