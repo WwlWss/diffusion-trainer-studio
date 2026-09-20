@@ -416,9 +416,10 @@ def parameter_policy_runtime_blockers(
 ) -> list[str]:
     """Return deterministic blockers for request-level Component-wise Start.
 
-    Step 6A makes the gate backend-aware while intentionally keeping the
-    integration allow-list empty. Preview/Export therefore remain honest about
-    both model-family integration status and unsupported ownership semantics.
+    The caller supplies the Step 6 release allow-list. Backends outside that
+    matrix remain fail-closed, while integrated backends still accumulate
+    semantic/runtime/optimizer blockers. Preview and Export expose the same
+    blocker set without mutating launch state.
     """
 
     canonical = validate_parameter_policy(policy)

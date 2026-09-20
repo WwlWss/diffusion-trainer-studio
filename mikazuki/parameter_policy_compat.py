@@ -239,6 +239,31 @@ def parameter_policy_v1_semantic_blockers(
             "save/resume 语义。",
         )
 
+    for field, label in (
+        ("full_fp16", "full FP16"),
+        ("full_bf16", "full BF16"),
+    ):
+        if _as_bool(effective_config.get(field), field=field):
+            _append_once(
+                blockers,
+                seen,
+                f"{field} 会把训练模型/梯度切换为 {label} runtime；"
+                "Component-wise v1 尚未完成真实 CUDA 下的 CompositeOptimizer、"
+                "GradScaler/Accelerate prepare 与 checkpoint save/resume 验证。"
+                "当前请使用普通 mixed_precision 模式。",
+            )
+
+    for field in ("fp8_base", "fp8_base_unet"):
+        if _as_bool(effective_config.get(field), field=field):
+            _append_once(
+                blockers,
+                seen,
+                f"{field} 会改变基础模型/训练模块的 FP8 dtype 与设备路径；"
+                "Component-wise v1 尚未完成真实 CUDA 下的 parameter identity、"
+                "optimizer ownership 与 checkpoint save/resume 验证。"
+                "当前请关闭 FP8 base 模式。",
+            )
+
     if _as_bool(
         effective_config.get("fused_backward_pass"),
         field="fused_backward_pass",

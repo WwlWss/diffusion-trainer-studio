@@ -90,7 +90,7 @@ class ParameterPolicyStep6EContractTests(unittest.TestCase):
         self.assertIn('phase=\\\"epoch_start\\\"', source)
         self.assertIn("model_metadata()", source)
 
-    def test_manifest_v2_and_start_gate_remain_explicit(self):
+    def test_manifest_v2_and_step6f_release_matrix_remain_explicit(self):
         trainer = (
             ROOT / "mikazuki" / "parameter_policy_trainer.py"
         ).read_text(encoding="utf-8")
@@ -102,8 +102,15 @@ class ParameterPolicyStep6EContractTests(unittest.TestCase):
             ROOT / "mikazuki" / "training_request.py"
         ).read_text(encoding="utf-8")
         self.assertIn(
-            "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()",
+            "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES",
             request,
+        )
+        matrix = (
+            ROOT / "mikazuki" / "parameter_policy_matrix.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "PARAMETER_POLICY_BACKEND_MATRIX_VERSION",
+            matrix,
         )
 
 

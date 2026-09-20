@@ -134,11 +134,11 @@ class ParameterPolicyStep6DContractTests(unittest.TestCase):
             )
         )
 
-    def test_global_start_gate_remains_closed(self):
-        source = Path("mikazuki/training_request.py").read_text(encoding="utf-8")
-        self.assertIn(
-            "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()",
-            source,
+    def test_anima_integrations_are_present_in_step6f_matrix(self):
+        from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+
+        self.assertTrue(
+            {"anima-lora", "anima-finetune"} <= PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
         )
 
 

@@ -11,6 +11,10 @@ from pathlib import Path
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
+from mikazuki.parameter_policy_matrix import (
+    PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+    parameter_policy_gpu_selection_blockers,
+)
 from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
 from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
@@ -24,10 +28,9 @@ _HOST_PROMPT_KEYS = {
 }
 _PROMPT_FLAGS = ("--n", "--s", "--l", "--d", "--w", "--h")
 
-# Step 6A installs the backend-aware launch gate but intentionally opens no
-# trainer yet. 6B-6D integrate model families behind this closed allow-list;
-# 6F removes the global gate only after the complete matrix is reviewed.
-PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()
+# Step 6F owns the opened backend allow-list in parameter_policy_matrix.py.
+# Feature-specific compatibility checks remain fail-closed after this global
+# backend gate opens.
 
 
 def decode_training_request(body: bytes) -> tuple[str | None, dict]:
@@ -187,9 +190,10 @@ def prepare_request_config(
     multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
 
-    # Step 6A keeps launch-only staging disabled for Component-wise requests.
-    # The model-family integrations consume the runtime session in later commits;
-    # the global Start gate remains closed until the final backend matrix review.
+    # Component requests intentionally stay side-effect free here even for
+    # Start. Step 6F evaluates all runtime blockers first; launch-only Anima
+    # materialization/finalization happens later in the API after read-only
+    # asset validation succeeds.
     effective_launch = launch and policy is None
     prepared = prepare_training_config(
         config,
@@ -221,12 +225,9 @@ def prepare_request_config(
             effective_config=prepared.config,
             integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
         )
+        blockers.extend(parameter_policy_gpu_selection_blockers(prepared.gpu_ids))
         prepared.runtime_blockers.extend(blockers)
-        if launch:
-            if not blockers:
-                raise RuntimeError(
-                    "Parameter Policy launch gate invariant failed: Step 6A must remain closed."
-                )
+        if launch and blockers:
             raise ValueError(blockers[0])
     if materialize:
         materialize_sidecars(prepared.sidecars)

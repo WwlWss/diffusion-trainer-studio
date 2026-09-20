@@ -141,9 +141,9 @@ class ParameterPolicyStep6AContractTests(unittest.TestCase):
         self.assertIn("def _normalize_legacy_optimizer_learning_rates", source)
         self.assertIn('config.get("parameter_policy_config")', source)
 
-    def test_step6a_does_not_open_request_launch_gate(self):
+    def test_step6a_side_effect_barrier_survives_step6f_gate_open(self):
         source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
-        self.assertIn("PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()", source)
+        self.assertIn("from mikazuki.parameter_policy_matrix import", source)
         self.assertIn("effective_launch = launch and policy is None", source)
 
 

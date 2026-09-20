@@ -244,6 +244,39 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                     [],
                 )
 
+    def test_unqualified_full_precision_and_fp8_modes_are_blocked(self):
+        cases = (
+            ("full_fp16", True, "full_fp16"),
+            ("full_bf16", True, "full_bf16"),
+            ("fp8_base", True, "fp8_base"),
+            ("fp8_base_unet", True, "fp8_base_unet"),
+        )
+        for field, value, marker in cases:
+            with self.subTest(field=field):
+                blockers = parameter_policy_compatibility_blockers(
+                    {field: value},
+                    "flux-finetune",
+                )
+                self.assertEqual(len(blockers), 1)
+                self.assertIn(marker, blockers[0])
+
+    def test_ordinary_mixed_precision_remains_allowed(self):
+        for precision in ("no", "fp16", "bf16"):
+            with self.subTest(precision=precision):
+                self.assertEqual(
+                    parameter_policy_compatibility_blockers(
+                        {
+                            "mixed_precision": precision,
+                            "full_fp16": False,
+                            "full_bf16": False,
+                            "fp8_base": False,
+                            "fp8_base_unet": False,
+                        },
+                        "flux-finetune",
+                    ),
+                    [],
+                )
+
     def test_global_optimizer_runtime_semantics_are_blocked(self):
         cases = (
             ("fused_backward_pass", True, "fused_backward_pass"),
@@ -266,6 +299,10 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
             "fused_optimizer_groups": 0,
             "blockwise_fused_optimizers": "false",
             "deepspeed": 0,
+            "full_fp16": False,
+            "full_bf16": "false",
+            "fp8_base": 0,
+            "fp8_base_unet": False,
         }
         self.assertEqual(
             parameter_policy_compatibility_blockers(config, "flux-finetune"),
@@ -280,6 +317,10 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
             ("fused_optimizer_groups", float("inf")),
             ("blockwise_fused_optimizers", 2),
             ("deepspeed", []),
+            ("full_fp16", "maybe"),
+            ("full_bf16", 2),
+            ("fp8_base", []),
+            ("fp8_base_unet", "maybe"),
         )
         for field, value in cases:
             with self.subTest(field=field), self.assertRaisesRegex(

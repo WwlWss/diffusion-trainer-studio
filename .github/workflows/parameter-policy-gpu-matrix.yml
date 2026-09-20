@@ -1,0 +1,122 @@
+name: Parameter Policy GPU matrix
+
+on:
+  workflow_dispatch:
+    inputs:
+      runner:
+        description: "Self-hosted runner label with a CUDA GPU"
+        required: true
+        default: "gpu"
+      backend_manifest:
+        description: "Optional machine-local JSON manifest for all 10 real backend cases"
+        required: false
+        default: ""
+
+jobs:
+  gpu-matrix:
+    runs-on:
+      - self-hosted
+      - ${{ github.event_name == 'workflow_dispatch' && inputs.runner || 'gpu' }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Python on non-Windows runners
+        if: runner.os != 'Windows'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Show CUDA runtime
+        run: nvidia-smi
+
+      - name: Select usable host Python on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Remove-Item Env:PYTHONHOME -ErrorAction SilentlyContinue
+          Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+
+          $candidates = New-Object System.Collections.Generic.List[string]
+
+          try {
+            py -0p 2>$null | ForEach-Object {
+              if ($_ -match '([A-Za-z]:\\.*python\.exe)\s*$') {
+                $candidates.Add($Matches[1].Trim())
+              }
+            }
+          } catch {}
+
+          try {
+            $pathPython = (Get-Command python.exe -ErrorAction Stop).Source
+            if ($pathPython) {
+              $candidates.Add($pathPython)
+            }
+          } catch {}
+
+          $selected = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            Write-Host "Probing Python: $candidate"
+            & $candidate -c "import sys, ssl, pip; print(sys.version); print(ssl.OPENSSL_VERSION); print(pip.__version__)" 2>&1
+            if ($LASTEXITCODE -eq 0) {
+              $selected = $candidate
+              break
+            }
+          }
+
+          if (-not $selected) {
+            throw "No Windows Python with working ssl + pip was found. Install or repair Python 3.11+ with OpenSSL support."
+          }
+
+          Write-Host "Selected Python: $selected"
+          "DTS_PYTHON=$selected" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Upgrade pip on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& $env:DTS_PYTHON -m pip install --upgrade pip'
+
+      - name: Install pinned Component runtime dependencies on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& $env:DTS_PYTHON -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0'
+
+      - name: Run synthetic CUDA optimizer matrix on Windows
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: '& $env:DTS_PYTHON tools/run_parameter_policy_gpu_matrix.py --output parameter-policy-gpu-matrix.json'
+
+      - name: Run real backend matrix on Windows
+        if: runner.os == 'Windows' && inputs.backend_manifest != ''
+        shell: powershell
+        run: '& $env:DTS_PYTHON tools/run_parameter_policy_backend_gpu_matrix.py --manifest "${{ inputs.backend_manifest }}" --output parameter-policy-backend-gpu-matrix.json'
+
+      - name: Upgrade pip on non-Windows runners
+        if: runner.os != 'Windows'
+        run: python -m pip install --upgrade pip
+
+      - name: Install pinned Component runtime dependencies on non-Windows runners
+        if: runner.os != 'Windows'
+        run: python -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0
+
+      - name: Run synthetic CUDA optimizer matrix on non-Windows runners
+        if: runner.os != 'Windows'
+        run: python tools/run_parameter_policy_gpu_matrix.py --output parameter-policy-gpu-matrix.json
+
+      - name: Run real backend matrix on non-Windows runners
+        if: runner.os != 'Windows' && inputs.backend_manifest != ''
+        run: python tools/run_parameter_policy_backend_gpu_matrix.py --manifest "${{ inputs.backend_manifest }}" --output parameter-policy-backend-gpu-matrix.json
+
+      - name: Upload matrix evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: parameter-policy-gpu-matrix
+          path: |
+            parameter-policy-gpu-matrix.json
+            parameter-policy-backend-gpu-matrix.json
+          if-no-files-found: warn
