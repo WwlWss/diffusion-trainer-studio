@@ -55,6 +55,18 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         self.train_clip_g = self.train_clip
         self.train_t5xxl = False  # default is False even if args.network_train_unet_only is False
 
+        if (
+            str(getattr(args, "parameter_policy_config", "") or "").strip()
+            and args.cache_text_encoder_outputs
+        ):
+            # Cache all CLIP/T5 outputs before the LoRA network/session exists.
+            # Routing later restores exact train flags and rejects caching if
+            # any policy-owned TE adapter is actually trainable.
+            self.train_clip = False
+            self.train_clip_l = False
+            self.train_clip_g = False
+            self.train_t5xxl = False
+
         if args.max_token_length is not None:
             logger.warning("max_token_length is not used in Flux training / max_token_lengthはFluxのトレーニングでは使用されません")
 
