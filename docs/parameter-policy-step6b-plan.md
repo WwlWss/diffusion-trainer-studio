@@ -68,5 +68,12 @@ sd-scripts max-norm implementation directly mutates every LoRA state tensor,
 including policy-frozen adapters. Supporting max-norm later requires a
 policy-owned subset-aware implementation.
 
+A preloaded LoRA (`network_weights`) cannot be combined with Text Encoder
+output caching for SDXL, Flux, Chroma, or SD3 Component mode in v1. Those
+caches are created before the preloaded adapter weights are applied; a frozen,
+nonzero Text Encoder adapter would therefore be omitted from conditioning.
+Both in-memory cache and `cache_text_encoder_outputs_to_disk` fail closed for
+this combination.
+
 The global host Start allow-list remains empty in Step 6B. GUI Start is opened
 only after the wider Step 6 matrix is validated.
