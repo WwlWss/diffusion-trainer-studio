@@ -26,7 +26,8 @@ def _load_prepare_request_config(**overrides):
         "prepare_training_config": None,
         "legacy_api": SimpleNamespace(resolve_training_backend=object()),
         "parameter_policy_runtime_blockers": lambda policy, **kwargs: [],
-        "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset(),
+        "parameter_policy_gpu_selection_blockers": lambda gpu_ids: [],
+        "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset({"sd-lora"}),
         "materialize_sidecars": lambda sidecars: None,
     }
     namespace.update(overrides)
@@ -119,7 +120,7 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
         self.assertNotIn("build_parameter_policy_optimizer", REQUEST)
         self.assertNotIn("build_parameter_policy_scheduler", REQUEST)
 
-    def test_step6a_gate_passes_effective_backend_and_config_but_remains_closed(self):
+    def test_step6f_gate_passes_effective_backend_config_and_release_matrix(self):
         calls = []
 
         def blockers(policy, **kwargs):
@@ -137,6 +138,7 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
                 train_type="flux-lora",
             ),
             parameter_policy_runtime_blockers=blockers,
+            PARAMETER_POLICY_RUNTIME_TRAIN_TYPES=frozenset({"sd-lora"}),
         )
         result = prepare({}, "flux-lora", launch=False)
 
@@ -144,7 +146,74 @@ class ParameterPolicyRequestContractTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0]["train_type"], "flux-lora")
         self.assertEqual(calls[0]["effective_config"]["marker"], 1)
-        self.assertEqual(calls[0]["integrated_train_types"], frozenset())
+        self.assertEqual(calls[0]["integrated_train_types"], frozenset({"sd-lora"}))
+
+
+    def test_component_start_opens_when_backend_and_gpu_have_no_blockers(self):
+        calls = []
+
+        def prepare_training_config(config, **kwargs):
+            calls.append(("prepare", kwargs["launch"]))
+            prepared = _prepared(
+                {"parameter_policy_config": "policy.json"},
+                train_type="sd-lora",
+            )
+            prepared.gpu_ids = ["0"]
+            return prepared
+
+        prepare = _load_prepare_request_config(
+            build_parameter_policy_sidecar=lambda config, page_type: (
+                "policy.json",
+                {"policy.json": "{}"},
+                {"version": 1},
+            ),
+            prepare_training_config=prepare_training_config,
+            parameter_policy_runtime_blockers=lambda policy, **kwargs: [],
+            parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
+            materialize_sidecars=lambda sidecars: calls.append(
+                ("materialize", dict(sidecars))
+            ),
+        )
+        result = prepare({}, "lora-master", launch=True, materialize=True)
+
+        self.assertEqual(
+            calls,
+            [("prepare", False), ("materialize", {"policy.json": "{}"})],
+        )
+        self.assertEqual(result.runtime_blockers, [])
+
+    def test_component_start_rejects_explicit_multi_gpu_before_materialization(self):
+        calls = []
+
+        def prepare_training_config(config, **kwargs):
+            calls.append(("prepare", kwargs["launch"]))
+            prepared = _prepared(
+                {"parameter_policy_config": "policy.json"},
+                train_type="sd-lora",
+            )
+            prepared.gpu_ids = ["0", "1"]
+            return prepared
+
+        prepare = _load_prepare_request_config(
+            build_parameter_policy_sidecar=lambda config, page_type: (
+                "policy.json",
+                {"policy.json": "{}"},
+                {"version": 1},
+            ),
+            prepare_training_config=prepare_training_config,
+            parameter_policy_runtime_blockers=lambda policy, **kwargs: [],
+            parameter_policy_gpu_selection_blockers=lambda gpu_ids: [
+                "multi GPU blocked"
+            ],
+            materialize_sidecars=lambda sidecars: calls.append(
+                ("materialize", dict(sidecars))
+            ),
+        )
+
+        with self.assertRaisesRegex(ValueError, "multi GPU blocked"):
+            prepare({}, "lora-master", launch=True, materialize=True)
+
+        self.assertEqual(calls, [("prepare", False)])
 
     def test_parameter_policy_sidecar_is_host_owned(self):
         self.assertIn(
