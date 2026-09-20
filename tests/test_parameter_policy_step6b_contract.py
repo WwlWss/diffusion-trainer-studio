@@ -70,6 +70,19 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
             sd3,
         )
 
+    def test_component_te_cache_is_staged_as_full_cache_before_routing(self):
+        flux = (ROOT / "scripts" / "dev" / "flux_train_network.py").read_text(encoding="utf-8")
+        sd3 = (ROOT / "scripts" / "dev" / "sd3_train_network.py").read_text(encoding="utf-8")
+
+        self.assertIn("and args.cache_text_encoder_outputs", flux)
+        self.assertIn("self.train_clip_l = False", flux)
+        self.assertIn("self.train_t5xxl = False", flux)
+
+        self.assertIn("and args.cache_text_encoder_outputs", sd3)
+        self.assertIn("self.train_clip_l = False", sd3)
+        self.assertIn("self.train_clip_g = False", sd3)
+        self.assertIn("self.train_t5xxl = False", sd3)
+
     def test_component_logging_and_metadata_do_not_use_legacy_optimizer_identity(self):
         for path in (
             ROOT / "scripts" / "stable" / "train_network.py",
