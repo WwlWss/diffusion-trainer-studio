@@ -62,6 +62,7 @@ class NetworkTrainer:
         keys_scaled=None,
         mean_norm=None,
         maximum_norm=None,
+        parameter_policy_session=None,
     ):
         logs = {"loss/current": current_loss, "loss/average": avr_loss}
 
@@ -69,6 +70,10 @@ class NetworkTrainer:
             logs["max_norm/keys_scaled"] = keys_scaled
             logs["max_norm/average_key_norm"] = mean_norm
             logs["max_norm/max_key_norm"] = maximum_norm
+
+        if parameter_policy_session is not None:
+            logs.update(parameter_policy_session.component_lr_logs(lr_scheduler))
+            return logs
 
         lrs = lr_scheduler.get_last_lr()
         for i, lr in enumerate(lrs):
@@ -108,6 +113,9 @@ class NetworkTrainer:
     def is_text_encoder_outputs_cached(self, args):
         return False
 
+    def get_parameter_policy_train_type(self, args):
+        return "sdxl-lora" if self.is_sdxl else "sd-lora"
+
     def is_train_text_encoder(self, args):
         return not args.network_train_unet_only and not self.is_text_encoder_outputs_cached(args)
 
@@ -137,7 +145,18 @@ class NetworkTrainer:
     def train(self, args):
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
-        train_util.verify_training_args(args)
+        parameter_policy_requested = bool(
+            str(getattr(args, "parameter_policy_config", "") or "").strip()
+        )
+        parameter_policy_train_type = (
+            self.get_parameter_policy_train_type(args)
+            if parameter_policy_requested
+            else None
+        )
+        train_util.verify_training_args(
+            args,
+            parameter_policy_runtime_enabled=parameter_policy_train_type is not None,
+        )
         train_util.prepare_dataset_args(args, True)
         deepspeed_utils.prepare_deepspeed_args(args)
         setup_logging(args, reset=True)
@@ -333,6 +352,24 @@ class NetworkTrainer:
             info = network.load_weights(args.network_weights)
             accelerator.print(f"load network weights from {args.network_weights}: {info}")
 
+        parameter_policy_session = None
+        parameter_policy_bridge = None
+        if parameter_policy_requested:
+            from library import dts_parameter_policy_bridge as parameter_policy_bridge
+
+            parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(
+                args=args,
+                train_type=parameter_policy_train_type,
+                roots={"network": network},
+            )
+            train_unet = parameter_policy_session.trains_prefix("unet.")
+            train_text_encoder = parameter_policy_session.trains_prefix("text_encoder")
+            if train_text_encoder and self.is_text_encoder_outputs_cached(args):
+                raise ValueError(
+                    "Parameter Policy trains Text Encoder adapters, so cached Text Encoder "
+                    "outputs cannot be used."
+                )
+
         if args.gradient_checkpointing:
             unet.enable_gradient_checkpointing()
             for t_enc in text_encoders:
@@ -343,34 +380,30 @@ class NetworkTrainer:
         # 学習に必要なクラスを準備する
         accelerator.print("prepare optimizer, data loader etc.")
 
-        # 後方互換性を確保するよ
-        try:
-            results = network.prepare_optimizer_params(args.text_encoder_lr, args.unet_lr, args.learning_rate)
-            if type(results) is tuple:
-                trainable_params = results[0]
-                lr_descriptions = results[1]
-            else:
-                trainable_params = results
+        if parameter_policy_session is None:
+            # 後方互換性を確保するよ
+            try:
+                results = network.prepare_optimizer_params(args.text_encoder_lr, args.unet_lr, args.learning_rate)
+                if type(results) is tuple:
+                    trainable_params = results[0]
+                    lr_descriptions = results[1]
+                else:
+                    trainable_params = results
+                    lr_descriptions = None
+            except TypeError:
+                trainable_params = network.prepare_optimizer_params(args.text_encoder_lr, args.unet_lr)
                 lr_descriptions = None
-        except TypeError as e:
-            # logger.warning(f"{e}")
-            # accelerator.print(
-            #     "Deprecated: use prepare_optimizer_params(text_encoder_lr, unet_lr, learning_rate) instead of prepare_optimizer_params(text_encoder_lr, unet_lr)"
-            # )
-            trainable_params = network.prepare_optimizer_params(args.text_encoder_lr, args.unet_lr)
+
+            optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
+            optimizer_train_fn = lambda: None
+            optimizer_eval_fn = lambda: None
+        else:
             lr_descriptions = None
-
-        # if len(trainable_params) == 0:
-        #     accelerator.print("no trainable parameters found / 学習可能なパラメータが見つかりませんでした")
-        # for params in trainable_params:
-        #     for k, v in params.items():
-        #         if type(v) == float:
-        #             pass
-        #         else:
-        #             v = len(v)
-        #         accelerator.print(f"trainable_params: {k} = {v}")
-
-        optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
+            optimizer_name = "DTSParameterPolicy"
+            optimizer_args = ""
+            optimizer = parameter_policy_session.optimizer
+            optimizer_train_fn = optimizer.train
+            optimizer_eval_fn = optimizer.eval
 
         # dataloaderを準備する
         # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
@@ -398,7 +431,15 @@ class NetworkTrainer:
         train_dataset_group.set_max_train_steps(args.max_train_steps)
 
         # lr schedulerを用意する
-        lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+        if parameter_policy_session is None:
+            lr_scheduler = train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes)
+        else:
+            scheduler_factory = parameter_policy_bridge.make_legacy_scheduler_factory(
+                args=args,
+                get_scheduler_fix=train_util.get_scheduler_fix,
+                num_processes=accelerator.num_processes,
+            )
+            lr_scheduler = parameter_policy_session.build_scheduler(scheduler_factory)
 
         # 実験的機能：勾配も含めたfp16/bf16学習を行う　モデル全体をfp16/bf16にする
         if args.full_fp16:
@@ -485,7 +526,18 @@ class NetworkTrainer:
 
         del t_enc
 
-        accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
+        if parameter_policy_session is None:
+            accelerator.unwrap_model(network).prepare_grad_etc(text_encoder, unet)
+        else:
+            parameter_policy_session.audit_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            parameter_policy_session.assert_requires_grad_contract()
+            parameter_policy_session.register_checkpoint_manifest(
+                accelerator,
+                scheduler=lr_scheduler,
+            )
 
         if not cache_latents:  # キャッシュしない場合はVAEを使うのでVAEを準備する
             vae.requires_grad_(False)
@@ -773,6 +825,19 @@ class NetworkTrainer:
                 vae_name = os.path.basename(vae_name)
             metadata["ss_vae_name"] = vae_name
 
+        if parameter_policy_session is not None:
+            metadata["ss_dts_parameter_policy_hash"] = parameter_policy_session.policy_hash
+            metadata["ss_dts_parameter_policy_topology"] = (
+                parameter_policy_session.runtime_spec.topology_fingerprint
+            )
+            metadata["ss_dts_parameter_policy_profiles"] = json.dumps(
+                {
+                    spec.profile_name: spec.optimizer_type
+                    for spec in parameter_policy_session.runtime_spec.optimizers
+                },
+                sort_keys=True,
+            )
+
         metadata = {k: str(v) for k, v in metadata.items()}
 
         # make minimum metadata for filtering
@@ -884,7 +949,9 @@ class NetworkTrainer:
                 os.remove(old_ckpt_file)
 
         # For --sample_at_first
+        optimizer_eval_fn()
         self.sample_images(accelerator, args, 0, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+        optimizer_train_fn()
 
         # training loop
         if initial_step > 0:  # only if skip_until_initial_step is specified
@@ -900,6 +967,8 @@ class NetworkTrainer:
             metadata["ss_epoch"] = str(epoch + 1)
 
             accelerator.unwrap_model(network).on_epoch_start(text_encoder, unet)
+            if parameter_policy_session is not None:
+                parameter_policy_session.assert_requires_grad_contract()
 
             skipped_dataloader = None
             if initial_step > 0:
@@ -1012,7 +1081,11 @@ class NetworkTrainer:
                     if accelerator.sync_gradients:
                         self.all_reduce_network(accelerator, network)  # sync DDP grad manually
                         if args.max_grad_norm != 0.0:
-                            params_to_clip = accelerator.unwrap_model(network).get_trainable_params()
+                            params_to_clip = (
+                                parameter_policy_session.trainable_parameters
+                                if parameter_policy_session is not None
+                                else accelerator.unwrap_model(network).get_trainable_params()
+                            )
                             accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                     optimizer.step()
@@ -1032,6 +1105,7 @@ class NetworkTrainer:
                     progress_bar.update(1)
                     global_step += 1
 
+                    optimizer_eval_fn()
                     self.sample_images(accelerator, args, None, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
 
                     # 指定ステップごとにモデルを保存
@@ -1048,6 +1122,7 @@ class NetworkTrainer:
                             if remove_step_no is not None:
                                 remove_ckpt_name = train_util.get_step_ckpt_name(args, "." + args.save_model_as, remove_step_no)
                                 remove_model(remove_ckpt_name)
+                    optimizer_train_fn()
 
                 current_loss = loss.detach().item()
                 loss_recorder.add(epoch=epoch, step=step, loss=current_loss)
@@ -1060,7 +1135,15 @@ class NetworkTrainer:
 
                 if args.logging_dir is not None:
                     logs = self.generate_step_logs(
-                        args, current_loss, avr_loss, lr_scheduler, lr_descriptions, keys_scaled, mean_norm, maximum_norm
+                        args,
+                        current_loss,
+                        avr_loss,
+                        lr_scheduler,
+                        lr_descriptions,
+                        keys_scaled,
+                        mean_norm,
+                        maximum_norm,
+                        parameter_policy_session,
                     )
                     accelerator.log(logs, step=global_step)
 
@@ -1074,6 +1157,7 @@ class NetworkTrainer:
             accelerator.wait_for_everyone()
 
             # 指定エポックごとにモデルを保存
+            optimizer_eval_fn()
             if args.save_every_n_epochs is not None:
                 saving = (epoch + 1) % args.save_every_n_epochs == 0 and (epoch + 1) < num_train_epochs
                 if is_main_process and saving:
@@ -1089,6 +1173,7 @@ class NetworkTrainer:
                         train_util.save_and_remove_state_on_epoch_end(args, accelerator, epoch + 1)
 
             self.sample_images(accelerator, args, epoch + 1, global_step, accelerator.device, vae, tokenizer, text_encoder, unet)
+            optimizer_train_fn()
 
             # end of epoch
 
@@ -1098,6 +1183,7 @@ class NetworkTrainer:
         if is_main_process:
             network = accelerator.unwrap_model(network)
 
+        optimizer_eval_fn()
         accelerator.end_training()
 
         if is_main_process and (args.save_state or args.save_state_on_train_end):
