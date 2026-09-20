@@ -33,12 +33,17 @@ def create_parameter_policy_session(*args, **kwargs):
     return load_parameter_policy_trainer().create_parameter_policy_session(*args, **kwargs)
 
 
+def load_parameter_policy_file(*args, **kwargs):
+    return load_parameter_policy_trainer().load_parameter_policy_file(*args, **kwargs)
+
+
 def make_legacy_scheduler_factory(*args, **kwargs):
     return load_parameter_policy_trainer().make_legacy_scheduler_factory(*args, **kwargs)
 
 
 __all__ = [
     "create_parameter_policy_session",
+    "load_parameter_policy_file",
     "load_parameter_policy_trainer",
     "make_legacy_scheduler_factory",
 ]
