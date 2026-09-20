@@ -193,10 +193,30 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         # check t5xxl is trained or not
         self.train_t5xxl = network.train_t5xxl
 
-        if self.train_t5xxl and args.cache_text_encoder_outputs:
+        if (
+            self.train_t5xxl
+            and args.cache_text_encoder_outputs
+            and not str(getattr(args, "parameter_policy_config", "") or "").strip()
+        ):
             raise ValueError(
                 "T5XXL is trained, so cache_text_encoder_outputs cannot be used / T5XXL学習時はcache_text_encoder_outputsは使用できません"
             )
+
+    def get_parameter_policy_train_type(self, args):
+        return "chroma-lora" if args.model_type == "chroma" else "flux-lora"
+
+    def configure_parameter_policy_training(self, args, session, text_encoders):
+        self.train_clip_l = session.trains_component("clip_l.adapter")
+        self.train_t5xxl = session.trains_component("t5xxl.adapter")
+        train_unet = session.trains_prefix("transformer.")
+        train_text_encoder = self.train_clip_l or self.train_t5xxl
+        self._parameter_policy_train_text_encoder = train_text_encoder
+        if self.train_t5xxl and args.cache_text_encoder_outputs:
+            raise ValueError(
+                "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
+                "outputs cannot be used."
+            )
+        return train_unet, train_text_encoder
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
         if args.cache_text_encoder_outputs:
