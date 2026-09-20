@@ -427,9 +427,28 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
             )
         )
 
-        self.assertEqual(raw_scheduler._step_count, initial_step_count + 2)
+        # Accelerate 1.6.0's GradientAccumulationPlugin.to_kwargs() omits
+        # default-valued adjust_scheduler=True, while GradientState falls back
+        # to False when that key is absent. Lock the actual pinned behavior:
+        # only the synchronized optimizer update advances the scheduler.
+        self.assertFalse(prepared_scheduler.gradient_state.adjust_scheduler)
+        self.assertEqual(raw_scheduler._step_count, initial_step_count + 1)
         self.assertEqual(external_scheduler._step_count, raw_scheduler._step_count)
         self.assertEqual(raw_scheduler.last_epoch, initial_last_epoch + 1)
+
+        # The Composite property still supports Accelerate's direct counter
+        # adjustment path if a caller/runtime explicitly uses it.
+        before_direct_adjust = external_scheduler._step_count
+        raw_scheduler._step_count += 2
+        self.assertEqual(
+            external_scheduler._step_count,
+            before_direct_adjust + 2,
+        )
+        raw_scheduler._step_count -= 2
+        self.assertEqual(
+            external_scheduler._step_count,
+            raw_scheduler._step_count,
+        )
         self.assertEqual(
             optimizer.entries[1].optimizer.param_groups[0]["k"],
             1,
