@@ -50,6 +50,37 @@ class ParameterPolicyStep6EContractTests(unittest.TestCase):
                     source,
                 )
 
+    def test_full_trainers_expose_unified_model_metadata_to_savers(self):
+        trainer_paths = (
+            "scripts/stable/train_db.py",
+            "scripts/stable/sdxl_train.py",
+            "scripts/dev/flux_train.py",
+        )
+        for relpath in trainer_paths:
+            with self.subTest(path=relpath):
+                source = (ROOT / relpath).read_text(encoding="utf-8")
+                self.assertIn(
+                    "args._dts_parameter_policy_model_metadata =",
+                    source,
+                )
+                self.assertIn(
+                    "parameter_policy_session.model_metadata()",
+                    source,
+                )
+
+        saver_paths = (
+            "scripts/stable/library/train_util.py",
+            "scripts/stable/library/sdxl_train_util.py",
+            "scripts/dev/library/flux_train_utils.py",
+        )
+        for relpath in saver_paths:
+            with self.subTest(path=relpath):
+                source = (ROOT / relpath).read_text(encoding="utf-8")
+                self.assertIn(
+                    '_dts_parameter_policy_model_metadata',
+                    source,
+                )
+
     def test_staged_anima_patch_uses_same_hardening_api(self):
         source = (
             ROOT / "tools" / "apply_anima_parameter_policy_runtime_patch.py"
