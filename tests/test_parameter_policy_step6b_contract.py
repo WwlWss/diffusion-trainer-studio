@@ -92,10 +92,10 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
         self.assertIn('roots={"network": network}', source)
         self.assertIn("optimizer = parameter_policy_session.optimizer", source)
         self.assertIn("parameter_policy_session.build_scheduler", source)
-        self.assertIn("parameter_policy_session.audit_after_prepare", source)
-        self.assertIn("parameter_policy_session.register_checkpoint_manifest", source)
+        self.assertIn("parameter_policy_session.finalize_after_prepare", source)
+        self.assertIn('phase="post_resume"', source)
+        self.assertIn('phase="epoch_start"', source)
         self.assertIn("parameter_policy_session.trainable_parameters", source)
-        self.assertIn("parameter_policy_session.assert_requires_grad_contract()", source)
 
         component_branch = source[source.index("if parameter_policy_session is None:") :]
         self.assertIn("network.prepare_optimizer_params", component_branch)
@@ -162,9 +162,10 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
                 source = path.read_text(encoding="utf-8")
                 self.assertIn("parameter_policy_session.component_lr_logs", source)
                 self.assertIn('optimizer_name = "DTSParameterPolicy"', source)
-                self.assertIn('"ss_dts_parameter_policy_hash"', source)
-                self.assertIn('"ss_dts_parameter_policy_topology"', source)
-                self.assertIn('"ss_dts_parameter_policy_profiles"', source)
+                self.assertIn(
+                    "metadata.update(parameter_policy_session.model_metadata())",
+                    source,
+                )
 
     def test_request_gate_remains_closed_in_step6b(self):
         source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
