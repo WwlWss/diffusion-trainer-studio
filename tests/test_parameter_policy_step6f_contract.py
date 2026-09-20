@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
@@ -32,12 +33,24 @@ class ParameterPolicyStep6FContractTests(unittest.TestCase):
         self.assertEqual(set(PARAMETER_POLICY_BACKEND_MATRIX), EXPECTED_BACKENDS)
         self.assertEqual(set(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES), EXPECTED_BACKENDS)
 
-    def test_matrix_trainer_paths_match_host_mapping_literals(self):
+    def test_matrix_trainer_paths_match_host_mapping_exactly(self):
         source = (ROOT / "mikazuki" / "app" / "api.py").read_text(encoding="utf-8")
-        for train_type, row in PARAMETER_POLICY_BACKEND_MATRIX.items():
-            with self.subTest(train_type=train_type):
-                self.assertIn(f'"{train_type}"', source)
-                self.assertIn(row["trainer"], source)
+        tree = ast.parse(source, filename="mikazuki/app/api.py")
+        assignment = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Name) and target.id == "trainer_mapping"
+                for target in node.targets
+            )
+        )
+        host_mapping = ast.literal_eval(assignment.value)
+        release_mapping = {
+            train_type: row["trainer"]
+            for train_type, row in PARAMETER_POLICY_BACKEND_MATRIX.items()
+        }
+        self.assertEqual(release_mapping, host_mapping)
 
     def test_explicit_multi_gpu_component_start_remains_fail_closed(self):
         self.assertEqual(parameter_policy_gpu_selection_blockers(None), [])
