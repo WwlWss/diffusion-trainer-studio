@@ -273,17 +273,35 @@ def train(args):
         text_encoder.to(weight_dtype)
 
     # acceleratorがなんかよろしくやってくれるらしい
-    if args.deepspeed:
-        if train_text_encoder:
-            ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet, text_encoder=text_encoder)
+    if parameter_policy_session is None:
+        # Preserve the historical Standard-mode prepare topology verbatim.
+        if args.deepspeed:
+            if args.train_text_encoder:
+                ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet, text_encoder=text_encoder)
+            else:
+                ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet)
+            ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                ds_model, optimizer, train_dataloader, lr_scheduler
+            )
+            training_models = [ds_model]
+
         else:
-            ds_model = deepspeed_utils.prepare_deepspeed_model(args, unet=unet)
-        ds_model, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
-            ds_model, optimizer, train_dataloader, lr_scheduler
-        )
-        training_models = [ds_model]
+            if train_text_encoder:
+                unet, text_encoder, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                    unet, text_encoder, optimizer, train_dataloader, lr_scheduler
+                )
+                training_models = [unet, text_encoder]
+            else:
+                unet, optimizer, train_dataloader, lr_scheduler = accelerator.prepare(
+                    unet, optimizer, train_dataloader, lr_scheduler
+                )
+                training_models = [unet]
+
+        if not train_text_encoder:
+            text_encoder.to(accelerator.device, dtype=weight_dtype)  # to avoid 'cpu' vs 'cuda' error
 
     else:
+        # DeepSpeed is fail-closed by the Parameter Policy semantic gate.
         training_models = []
         if train_unet:
             unet = accelerator.prepare(unet)
