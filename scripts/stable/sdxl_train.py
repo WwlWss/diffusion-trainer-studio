@@ -97,7 +97,13 @@ def append_block_lr_to_logs(block_lrs, logs, lr_scheduler, optimizer_type):
 
 
 def train(args):
-    train_util.verify_training_args(args)
+    parameter_policy_requested = bool(
+        str(getattr(args, "parameter_policy_config", "") or "").strip()
+    )
+    train_util.verify_training_args(
+        args,
+        parameter_policy_runtime_enabled=parameter_policy_requested,
+    )
     train_util.prepare_dataset_args(args, True)
     sdxl_train_util.verify_sdxl_training_args(args)
     deepspeed_utils.prepare_deepspeed_args(args)
@@ -106,9 +112,10 @@ def train(args):
     assert (
         not args.weighted_captions
     ), "weighted_captions is not supported currently / weighted_captionsは現在サポートされていません"
-    assert (
-        not args.train_text_encoder or not args.cache_text_encoder_outputs
-    ), "cache_text_encoder_outputs is not supported when training text encoder / text encoderを学習するときはcache_text_encoder_outputsはサポートされていません"
+    if not parameter_policy_requested:
+        assert (
+            not args.train_text_encoder or not args.cache_text_encoder_outputs
+        ), "cache_text_encoder_outputs is not supported when training text encoder / text encoderを学習するときはcache_text_encoder_outputsはサポートされていません"
 
     if args.block_lr:
         block_lrs = [float(lr) for lr in args.block_lr.split(",")]
@@ -278,11 +285,61 @@ def train(args):
     # 学習を準備する：モデルを適切な状態にする
     if args.gradient_checkpointing:
         unet.enable_gradient_checkpointing()
-    train_unet = args.learning_rate != 0
-    train_text_encoder1 = False
-    train_text_encoder2 = False
 
-    if args.train_text_encoder:
+    parameter_policy_session = None
+    parameter_policy_bridge = None
+    if parameter_policy_requested:
+        from library import dts_parameter_policy_bridge as parameter_policy_bridge
+
+        structural_frozen_parameters = tuple(
+            itertools.chain(
+                text_encoder1.text_model.encoder.layers[-1].parameters(),
+                text_encoder1.text_model.final_layer_norm.parameters(),
+            )
+        )
+        parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(
+            args=args,
+            train_type="sdxl-finetune",
+            roots={
+                "unet": unet,
+                "text_encoder_1": text_encoder1,
+                "text_encoder_2": text_encoder2,
+            },
+            structural_frozen_parameters=structural_frozen_parameters,
+        )
+        train_unet = parameter_policy_session.trains_prefix("unet.")
+        train_text_encoder1 = parameter_policy_session.trains_component("text_encoder_1")
+        train_text_encoder2 = parameter_policy_session.trains_component("text_encoder_2")
+        if args.cache_text_encoder_outputs and (train_text_encoder1 or train_text_encoder2):
+            raise ValueError(
+                "Parameter Policy trains SDXL Text Encoder parameters, so cached Text Encoder "
+                "outputs cannot be used."
+            )
+    else:
+        train_unet = args.learning_rate != 0
+        train_text_encoder1 = False
+        train_text_encoder2 = False
+
+    if parameter_policy_session is not None:
+        # Parameter Policy owns requires_grad. The trainer still owns module
+        # mode, dtype placement, and gradient-checkpointing behavior.
+        if train_text_encoder1:
+            if args.gradient_checkpointing:
+                text_encoder1.gradient_checkpointing_enable()
+            text_encoder1.train()
+        else:
+            text_encoder1.to(weight_dtype)
+            text_encoder1.eval()
+
+        if train_text_encoder2:
+            if args.gradient_checkpointing:
+                text_encoder2.gradient_checkpointing_enable()
+            text_encoder2.train()
+        else:
+            text_encoder2.to(weight_dtype)
+            text_encoder2.eval()
+
+    if parameter_policy_session is None and args.train_text_encoder:
         # TODO each option for two text encoders?
         accelerator.print("enable text encoder training")
         if args.gradient_checkpointing:
@@ -302,7 +359,7 @@ def train(args):
         text_encoder2.requires_grad_(train_text_encoder2)
         text_encoder1.train(train_text_encoder1)
         text_encoder2.train(train_text_encoder2)
-    else:
+    elif parameter_policy_session is None:
         text_encoder1.to(weight_dtype)
         text_encoder2.to(weight_dtype)
         text_encoder1.requires_grad_(False)
@@ -323,13 +380,29 @@ def train(args):
                     accelerator.is_main_process,
                 )
             accelerator.wait_for_everyone()
+    elif args.cache_text_encoder_outputs:
+        text_encoder1.to(weight_dtype)
+        text_encoder2.to(weight_dtype)
+        text_encoder1.eval()
+        text_encoder2.eval()
+        with torch.no_grad(), accelerator.autocast():
+            train_dataset_group.cache_text_encoder_outputs(
+                (tokenizer1, tokenizer2),
+                (text_encoder1, text_encoder2),
+                accelerator.device,
+                None,
+                args.cache_text_encoder_outputs_to_disk,
+                accelerator.is_main_process,
+            )
+        accelerator.wait_for_everyone()
 
     if not cache_latents:
         vae.requires_grad_(False)
         vae.eval()
         vae.to(accelerator.device, dtype=vae_dtype)
 
-    unet.requires_grad_(train_unet)
+    if parameter_policy_session is None:
+        unet.requires_grad_(train_unet)
     if not train_unet:
         unet.to(accelerator.device, dtype=weight_dtype)  # because of unet is not prepared
 
@@ -337,23 +410,29 @@ def train(args):
     params_to_optimize = []
     if train_unet:
         training_models.append(unet)
-        if block_lrs is None:
-            params_to_optimize.append({"params": list(unet.parameters()), "lr": args.learning_rate})
-        else:
-            params_to_optimize.extend(get_block_params_to_optimize(unet, block_lrs))
+        if parameter_policy_session is None:
+            if block_lrs is None:
+                params_to_optimize.append({"params": list(unet.parameters()), "lr": args.learning_rate})
+            else:
+                params_to_optimize.extend(get_block_params_to_optimize(unet, block_lrs))
 
     if train_text_encoder1:
         training_models.append(text_encoder1)
-        params_to_optimize.append({"params": list(text_encoder1.parameters()), "lr": args.learning_rate_te1 or args.learning_rate})
+        if parameter_policy_session is None:
+            params_to_optimize.append({"params": list(text_encoder1.parameters()), "lr": args.learning_rate_te1 or args.learning_rate})
     if train_text_encoder2:
         training_models.append(text_encoder2)
-        params_to_optimize.append({"params": list(text_encoder2.parameters()), "lr": args.learning_rate_te2 or args.learning_rate})
+        if parameter_policy_session is None:
+            params_to_optimize.append({"params": list(text_encoder2.parameters()), "lr": args.learning_rate_te2 or args.learning_rate})
 
     # calculate number of trainable parameters
-    n_params = 0
-    for group in params_to_optimize:
-        for p in group["params"]:
-            n_params += p.numel()
+    if parameter_policy_session is not None:
+        n_params = sum(p.numel() for p in parameter_policy_session.trainable_parameters)
+    else:
+        n_params = 0
+        for group in params_to_optimize:
+            for p in group["params"]:
+                n_params += p.numel()
 
     accelerator.print(f"train unet: {train_unet}, text_encoder1: {train_text_encoder1}, text_encoder2: {train_text_encoder2}")
     accelerator.print(f"number of models: {len(training_models)}")
@@ -362,7 +441,13 @@ def train(args):
     # 学習に必要なクラスを準備する
     accelerator.print("prepare optimizer, data loader etc.")
 
-    if args.fused_optimizer_groups:
+    optimizer_train_fn = lambda: None
+    optimizer_eval_fn = lambda: None
+    if parameter_policy_session is not None:
+        optimizer = parameter_policy_session.optimizer
+        optimizer_train_fn = optimizer.train
+        optimizer_eval_fn = optimizer.eval
+    elif args.fused_optimizer_groups:
         # fused backward pass: https://pytorch.org/tutorials/intermediate/optimizer_step_in_backward_tutorial.html
         # Instead of creating an optimizer for all parameters as in the tutorial, we create an optimizer for each group of parameters.
         # This balances memory usage and management complexity.
@@ -408,6 +493,8 @@ def train(args):
 
     else:
         _, _, optimizer = train_util.get_optimizer(args, trainable_params=params_to_optimize)
+        optimizer_train_fn = lambda: None
+        optimizer_eval_fn = lambda: None
 
     # dataloaderを準備する
     # DataLoaderのプロセス数：0 は persistent_workers が使えないので注意
@@ -434,7 +521,14 @@ def train(args):
     train_dataset_group.set_max_train_steps(args.max_train_steps)
 
     # lr schedulerを用意する
-    if args.fused_optimizer_groups:
+    if parameter_policy_session is not None:
+        scheduler_factory = parameter_policy_bridge.make_legacy_scheduler_factory(
+            args=args,
+            get_scheduler_fix=train_util.get_scheduler_fix,
+            num_processes=accelerator.num_processes,
+        )
+        lr_scheduler = parameter_policy_session.build_scheduler(scheduler_factory)
+    elif args.fused_optimizer_groups:
         # prepare lr schedulers for each optimizer
         lr_schedulers = [train_util.get_scheduler_fix(args, optimizer, accelerator.num_processes) for optimizer in optimizers]
         lr_scheduler = lr_schedulers[0]  # avoid error in the following code
@@ -460,7 +554,7 @@ def train(args):
         text_encoder2.to(weight_dtype)
 
     # freeze last layer and final_layer_norm in te1 since we use the output of the penultimate layer
-    if train_text_encoder1:
+    if parameter_policy_session is None and train_text_encoder1:
         text_encoder1.text_model.encoder.layers[-1].requires_grad_(False)
         text_encoder1.text_model.final_layer_norm.requires_grad_(False)
 
@@ -486,6 +580,16 @@ def train(args):
         if train_text_encoder2:
             text_encoder2 = accelerator.prepare(text_encoder2)
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
+
+    if parameter_policy_session is not None:
+        parameter_policy_session.audit_after_prepare(
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
+        parameter_policy_session.register_checkpoint_manifest(
+            accelerator,
+            scheduler=lr_scheduler,
+        )
 
     # TextEncoderの出力をキャッシュするときにはCPUへ移動する
     if args.cache_text_encoder_outputs:
@@ -602,9 +706,11 @@ def train(args):
         )
 
     # For --sample_at_first
+    optimizer_eval_fn()
     sdxl_train_util.sample_images(
         accelerator, args, 0, global_step, accelerator.device, vae, [tokenizer1, tokenizer2], [text_encoder1, text_encoder2], unet
     )
+    optimizer_train_fn()
 
     loss_recorder = train_util.LossRecorder()
     for epoch in range(num_train_epochs):
@@ -613,6 +719,8 @@ def train(args):
 
         for m in training_models:
             m.train()
+        if parameter_policy_session is not None:
+            parameter_policy_session.assert_requires_grad_contract()
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step
@@ -637,7 +745,11 @@ def train(args):
                 if "text_encoder_outputs1_list" not in batch or batch["text_encoder_outputs1_list"] is None:
                     input_ids1 = batch["input_ids"]
                     input_ids2 = batch["input_ids2"]
-                    with torch.set_grad_enabled(args.train_text_encoder):
+                    with torch.set_grad_enabled(
+                        (train_text_encoder1 or train_text_encoder2)
+                        if parameter_policy_session is not None
+                        else args.train_text_encoder
+                    ):
                         # Get the text embedding for conditioning
                         # TODO support weighted captions
                         # if args.weighted_captions:
@@ -748,9 +860,12 @@ def train(args):
 
                 if not (args.fused_backward_pass or args.fused_optimizer_groups):
                     if accelerator.sync_gradients and args.max_grad_norm != 0.0:
-                        params_to_clip = []
-                        for m in training_models:
-                            params_to_clip.extend(m.parameters())
+                        if parameter_policy_session is not None:
+                            params_to_clip = parameter_policy_session.trainable_parameters
+                        else:
+                            params_to_clip = []
+                            for m in training_models:
+                                params_to_clip.extend(m.parameters())
                         accelerator.clip_grad_norm_(params_to_clip, args.max_grad_norm)
 
                     optimizer.step()
@@ -768,6 +883,7 @@ def train(args):
                 progress_bar.update(1)
                 global_step += 1
 
+                optimizer_eval_fn()
                 sdxl_train_util.sample_images(
                     accelerator,
                     args,
@@ -803,11 +919,14 @@ def train(args):
                             logit_scale,
                             ckpt_info,
                         )
+                optimizer_train_fn()
 
             current_loss = loss.detach().item()  # 平均なのでbatch sizeは関係ないはず
             if args.logging_dir is not None:
                 logs = {"loss": current_loss}
-                if block_lrs is None:
+                if parameter_policy_session is not None:
+                    logs.update(parameter_policy_session.component_lr_logs(lr_scheduler))
+                elif block_lrs is None:
                     train_util.append_lr_to_logs(logs, lr_scheduler, args.optimizer_type, including_unet=train_unet)
                 else:
                     append_block_lr_to_logs(block_lrs, logs, lr_scheduler, args.optimizer_type)  # U-Net is included in block_lrs
@@ -828,6 +947,7 @@ def train(args):
 
         accelerator.wait_for_everyone()
 
+        optimizer_eval_fn()
         if args.save_every_n_epochs is not None:
             if accelerator.is_main_process:
                 src_path = src_stable_diffusion_ckpt if save_stable_diffusion_format else src_diffusers_model_path
@@ -861,6 +981,7 @@ def train(args):
             [text_encoder1, text_encoder2],
             unet,
         )
+        optimizer_train_fn()
 
     is_main_process = accelerator.is_main_process
     # if is_main_process:
@@ -868,6 +989,7 @@ def train(args):
     text_encoder1 = accelerator.unwrap_model(text_encoder1)
     text_encoder2 = accelerator.unwrap_model(text_encoder2)
 
+    optimizer_eval_fn()
     accelerator.end_training()
 
     if args.save_state or args.save_state_on_train_end:
