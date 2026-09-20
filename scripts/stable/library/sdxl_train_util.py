@@ -234,6 +234,9 @@ def save_sd_model_on_train_end(
 ):
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
+        sai_metadata.update(
+            getattr(args, "_dts_parameter_policy_model_metadata", {}) or {}
+        )
         sdxl_model_util.save_stable_diffusion_checkpoint(
             ckpt_file,
             text_encoder1,
@@ -287,6 +290,9 @@ def save_sd_model_on_epoch_end_or_stepwise(
 ):
     def sd_saver(ckpt_file, epoch_no, global_step):
         sai_metadata = train_util.get_sai_model_spec(None, args, True, False, False, is_stable_diffusion_ckpt=True)
+        sai_metadata.update(
+            getattr(args, "_dts_parameter_policy_model_metadata", {}) or {}
+        )
         sdxl_model_util.save_stable_diffusion_checkpoint(
             ckpt_file,
             text_encoder1,
