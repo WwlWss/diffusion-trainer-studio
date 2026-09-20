@@ -160,6 +160,7 @@ jobs:
             tools/apply_anima_qwen3_sd_scripts_patch.py \
             tools/apply_anima_multi_caption_patch.py \
             tools/apply_anima_parameter_policy_metadata_patch.py \
+            tools/apply_anima_parameter_policy_runtime_patch.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
             scripts/stable/library/dts_parameter_policy_bridge.py \
@@ -202,9 +203,12 @@ jobs:
             tests/test_parameter_policy_step6a_contract.py \
             tests/test_parameter_policy_step6b_contract.py \
             tests/test_parameter_policy_step6c_contract.py \
+            tests/test_parameter_policy_step6d_contract.py \
+            tests/test_parameter_policy_anima_staging.py \
             tests/test_parameter_policy_trainer_runtime_smoke.py \
             tests/test_parameter_policy_network_runtime_smoke.py \
             tests/test_parameter_policy_full_runtime_smoke.py \
+            tests/test_parameter_policy_anima_runtime_smoke.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -427,4 +431,5 @@ jobs:
             tests.test_parameter_policy_trainer_runtime_smoke \
             tests.test_parameter_policy_network_runtime_smoke \
             tests.test_parameter_policy_full_runtime_smoke \
+            tests.test_parameter_policy_anima_runtime_smoke \
             -v
