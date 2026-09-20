@@ -17,6 +17,7 @@ def validate_prepared_config(
     exists: Callable[[str], bool] | None = None,
     inspect_data_dir: Callable[[str], tuple[bool, str]] | None = None,
     validate_model: Callable[[str, str], tuple[bool, str]] | None = None,
+    check_trainer: bool = True,
 ) -> None:
     """Validate semantic preview or launch-time runtime assets.
 
@@ -55,7 +56,7 @@ def validate_prepared_config(
         inspect_data_dir = inspect_data_dir or train_utils.inspect_data_dir
         validate_model = validate_model or train_utils.validate_model
 
-    if not exists(str(prepared.trainer_file)):
+    if check_trainer and not exists(str(prepared.trainer_file)):
         raise ValueError(f"训练脚本不存在: {prepared.trainer_file}。请初始化/更新对应子模块。")
 
     # sd-scripts handles show_timesteps before loading model/text encoder/VAE
@@ -107,3 +108,15 @@ def validate_prepared_config(
         is_dir=is_dir,
         inspect_data_dir=inspect_data_dir,
     )
+
+
+def validate_prepared_trainer(
+    prepared,
+    *,
+    exists: Callable[[str], bool] | None = None,
+) -> None:
+    """Validate only the concrete trainer selected/materialized for launch."""
+
+    exists = exists or os.path.exists
+    if not exists(str(prepared.trainer_file)):
+        raise ValueError(f"训练脚本不存在: {prepared.trainer_file}。请初始化/更新对应子模块。")
