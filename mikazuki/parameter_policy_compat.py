@@ -37,6 +37,9 @@ _LORAPLUS_KEYS = frozenset(
 )
 _SD_BLOCK_LR_KEYS = frozenset({"down_lr_weight", "mid_lr_weight", "up_lr_weight"})
 _REGEX_LR_BACKENDS = frozenset({"flux-lora", "chroma-lora", "anima-lora"})
+_CACHED_TE_PRELOAD_UNSAFE_LORA_BACKENDS = frozenset(
+    {"sdxl-lora", "flux-lora", "chroma-lora", "sd3-lora"}
+)
 
 
 def _as_bool(value: object, *, field: str) -> bool:
@@ -117,6 +120,16 @@ def _positive_float(value: object, *, field: str) -> bool:
             f"Parameter Policy compatibility: {field} 必须是有限的非负数值，收到 {value!r}。"
         )
     return parsed > 0
+
+
+def _nonempty_path(value: object, *, field: str) -> bool:
+    if value in (None, ""):
+        return False
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Parameter Policy compatibility: {field} 必须是字符串路径，收到 {value!r}。"
+        )
+    return bool(value.strip())
 
 
 def _parse_network_args(raw_args: object) -> dict[str, str]:
@@ -241,6 +254,33 @@ def parameter_policy_v1_semantic_blockers(
                 f"{field} 会在训练期间动态迁移模型 block；"
                 "Component-wise v1 尚未完成 optimizer parameter device 审计。",
             )
+
+    if (
+        train_type in _CACHED_TE_PRELOAD_UNSAFE_LORA_BACKENDS
+        and _nonempty_path(
+            effective_config.get("network_weights"),
+            field="network_weights",
+        )
+        and (
+            _as_bool(
+                effective_config.get("cache_text_encoder_outputs"),
+                field="cache_text_encoder_outputs",
+            )
+            or _as_bool(
+                effective_config.get("cache_text_encoder_outputs_to_disk"),
+                field="cache_text_encoder_outputs_to_disk",
+            )
+        )
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "Component-wise v1 不能同时使用预载 network_weights 与 Text Encoder "
+            "输出缓存：缓存会在已有 Text Encoder adapter 权重应用前生成，导致 policy "
+            "冻结的非零 adapter 不参与实际 conditioning。请关闭 "
+            "cache_text_encoder_outputs/cache_text_encoder_outputs_to_disk，"
+            "或不要预载 network_weights。",
+        )
 
     if train_type in _LORA_NETWORK_MODULES and _positive_float(
         effective_config.get("scale_weight_norms"),
