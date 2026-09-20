@@ -394,8 +394,9 @@ def train(args):
             # train==True is required to enable gradient_checkpointing
             if args.gradient_checkpointing or global_step < args.stop_text_encoder_training:
                 text_encoder.train()
-        elif train_text_encoder:
-            text_encoder.train()
+        else:
+            if train_text_encoder:
+                text_encoder.train()
             parameter_policy_session.assert_runtime_contract(
                 phase="epoch_start",
                 accelerator=accelerator,
