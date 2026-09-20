@@ -42,6 +42,7 @@ def _prepared(config=None, train_type="sd-lora"):
         sidecars={},
         warnings=[],
         runtime_blockers=[],
+        gpu_ids=None,
     )
 
 
