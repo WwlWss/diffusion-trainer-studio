@@ -7,6 +7,10 @@ on:
         description: "Self-hosted runner label with a CUDA GPU"
         required: true
         default: "gpu"
+      backend_manifest:
+        description: "Optional machine-local JSON manifest for all 10 real backend cases"
+        required: false
+        default: ""
 
 jobs:
   gpu-matrix:
@@ -39,10 +43,19 @@ jobs:
           python tools/run_parameter_policy_gpu_matrix.py \
             --output parameter-policy-gpu-matrix.json
 
+      - name: Run real backend matrix
+        if: ${{ inputs.backend_manifest != '' }}
+        run: |
+          python tools/run_parameter_policy_backend_gpu_matrix.py \
+            --manifest "${{ inputs.backend_manifest }}" \
+            --output parameter-policy-backend-gpu-matrix.json
+
       - name: Upload matrix evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: parameter-policy-gpu-matrix
-          path: parameter-policy-gpu-matrix.json
+          path: |
+            parameter-policy-gpu-matrix.json
+            parameter-policy-backend-gpu-matrix.json
           if-no-files-found: error
