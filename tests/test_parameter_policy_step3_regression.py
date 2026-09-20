@@ -128,7 +128,12 @@ class ParameterPolicyStep3RegressionTests(unittest.TestCase):
     def test_component_start_guard_remains_in_request_layer(self):
         request = _source("mikazuki/training_request.py")
         self.assertIn("effective_launch = launch and policy is None", request)
-        self.assertIn("parameter_policy_runtime_blockers(policy)", request)
+        self.assertIn("parameter_policy_runtime_blockers(", request)
+        self.assertIn("train_type=prepared.train_type", request)
+        self.assertIn(
+            "integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES",
+            request,
+        )
         self.assertIn("if launch:", request)
 
     def test_standard_request_launch_contract_is_still_covered_behaviorally(self):
