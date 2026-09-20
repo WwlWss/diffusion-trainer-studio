@@ -325,9 +325,9 @@ class LegacySchedulerFactory:
     def __call__(self, spec, child_optimizer):
         self._ensure_identity()
         if isinstance(self.base_args, Mapping):
-            child_args = SimpleNamespace(**dict(self.base_args))
+            child_args = SimpleNamespace(**copy.deepcopy(dict(self.base_args)))
         else:
-            child_args = copy.copy(self.base_args)
+            child_args = copy.deepcopy(self.base_args)
         setattr(child_args, "optimizer_type", spec.optimizer_type)
         return self.get_scheduler_fix(
             child_args,
@@ -651,9 +651,9 @@ def make_legacy_scheduler_factory(
     if not callable(get_scheduler_fix):
         raise ParameterPolicyTrainerRuntimeError("get_scheduler_fix must be callable.")
     if isinstance(args, Mapping):
-        base_args: object = dict(args)
+        base_args: object = copy.deepcopy(dict(args))
     else:
-        base_args = copy.copy(args)
+        base_args = copy.deepcopy(args)
     return LegacySchedulerFactory(
         base_args=base_args,
         get_scheduler_fix=get_scheduler_fix,
