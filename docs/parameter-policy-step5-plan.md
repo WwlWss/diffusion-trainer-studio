@@ -44,7 +44,27 @@ restricted to supported only with this lifecycle/no-external-scheduler contract.
 
 ## 5D - Accelerate and resume smoke
 
-Add narrow CPU PyTorch/Accelerate coverage for wrapping, step, state round-trip, topology mismatch, real Muon 3.10.0, and ScheduleFree.
+Implemented as a dedicated CPU job so the fast host-contract job stays torch-free.
+
+Pinned smoke environment:
+
+- torch 2.7.0 CPU
+- accelerate 1.6.0
+- schedulefree 1.4
+- pytorch-optimizer 3.10.0
+
+Coverage:
+
+- real AdamW + ScheduleFree mixed runtime and an all-ScheduleFree runtime;
+- CompositeOptimizer / CompositeLRScheduler child-group identity and stepping;
+- two-microbatch Accelerate gradient accumulation with exactly one prepared
+  optimizer and one prepared scheduler;
+- Accelerate save_state/load_state over nested optimizer/scheduler state;
+- manual fresh-runtime resume from a ScheduleFree eval-mode checkpoint;
+- fail-closed optimizer topology, child optimizer type, and scheduler class
+  mismatches;
+- real pinned Muon CPU construction and step with every group forced to
+  use_muon=True and Muon momentum state (no Adam fallback state).
 
 ## 5E - final review
 
