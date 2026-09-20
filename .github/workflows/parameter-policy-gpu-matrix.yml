@@ -1,9 +1,6 @@
 name: Parameter Policy GPU matrix
 
 on:
-  push:
-    branches:
-      - feat/parameter-policy-step6f
   workflow_dispatch:
     inputs:
       runner:
