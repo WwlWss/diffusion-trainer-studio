@@ -444,6 +444,30 @@ def parameter_policy_runtime_blockers(
             )
         )
 
+    if normalized_train_type == "anima-finetune" and effective_config is not None:
+        qwen_route = canonical["components"].get("qwen3", {"train": False})
+        qwen_train = bool(qwen_route.get("train"))
+        if qwen_train:
+            if not _as_bool(effective_config.get("train_qwen3_text_encoder")):
+                blockers.append(
+                    "Anima qwen3=Train 要求先启用 train_qwen3_text_encoder target permission。"
+                )
+            if _as_bool(effective_config.get("cache_text_encoder_outputs")) or _as_bool(
+                effective_config.get("cache_text_encoder_outputs_to_disk")
+            ):
+                blockers.append(
+                    "Anima Component-wise 训练 qwen3 时不能缓存 Text Encoder 输出。"
+                )
+            dit_train = any(
+                bool(route.get("train"))
+                for component_id, route in canonical["components"].items()
+                if component_id.startswith("dit.")
+            )
+            if not dit_train:
+                blockers.append(
+                    "Anima Component-wise v1 暂不支持 Qwen3-only；qwen3=Train 时至少一个 dit.* Component 必须 Train。"
+                )
+
     referenced_profiles: set[str] = set()
     for route in canonical["components"].values():
         if not route["train"]:

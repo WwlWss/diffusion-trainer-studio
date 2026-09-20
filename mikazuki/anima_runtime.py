@@ -21,14 +21,16 @@ from mikazuki.anima_qwen_config import trainer_supports_qwen_training
 from mikazuki.anima_qwen_runtime import _extend_joint_block_swap_support
 from tools import apply_anima_multi_caption_patch as multi_patch
 from tools import apply_anima_parameter_policy_metadata_patch as metadata_patch
+from tools import apply_anima_parameter_policy_runtime_patch as parameter_policy_runtime_patch
 from tools import apply_anima_qwen3_sd_scripts_patch as qwen_patch
 
 
 _CACHE_ROOT = Path("config") / "autosave" / "trainer-cache"
-_RUNTIME_REVISION = "anima-runtime-features-v2"
+_RUNTIME_REVISION = "anima-runtime-features-v3"
 _FEATURE_QWEN = "qwen3_joint"
 _FEATURE_MULTI = "multi_caption"
 _FEATURE_PARAMETER_POLICY_METADATA = "parameter_policy_metadata"
+_FEATURE_PARAMETER_POLICY_RUNTIME = "parameter_policy_runtime"
 
 
 def requested_runtime_features(prepared) -> tuple[str, ...]:
@@ -45,6 +47,10 @@ def requested_runtime_features(prepared) -> tuple[str, ...]:
         prepared.config.get("parameter_policy_config")
     ):
         features.append(_FEATURE_PARAMETER_POLICY_METADATA)
+    if prepared.train_type in {"anima-lora", "anima-finetune"} and bool(
+        prepared.config.get("parameter_policy_config")
+    ):
+        features.append(_FEATURE_PARAMETER_POLICY_RUNTIME)
     return tuple(sorted(features))
 
 
@@ -65,6 +71,10 @@ def _cache_key(features: tuple[str, ...]) -> str:
         digest.update(source.read_bytes())
     if _FEATURE_PARAMETER_POLICY_METADATA in features:
         digest.update(Path(metadata_patch.__file__).read_bytes())
+    if _FEATURE_PARAMETER_POLICY_RUNTIME in features:
+        digest.update(Path(parameter_policy_runtime_patch.__file__).read_bytes())
+        bridge = Path(__file__).resolve().parents[1] / "scripts" / "dev" / "library" / "dts_parameter_policy_bridge.py"
+        digest.update(bridge.read_bytes())
     return digest.hexdigest()[:16]
 
 
@@ -105,6 +115,21 @@ def _has_parameter_policy_metadata_capability(target: Path) -> bool:
     return all(marker in text for marker in required)
 
 
+def _has_parameter_policy_runtime_capability(target: Path) -> bool:
+    required = {
+        target / "library/dts_parameter_policy_bridge.py": "create_parameter_policy_session",
+        target / "train_network.py": "register_checkpoint_manifest",
+        target / "anima_train_network.py": 'return "anima-lora"',
+        target / "anima_train.py": '"anima-finetune"',
+    }
+    for path, marker in required.items():
+        if not path.is_file():
+            return False
+        if marker not in path.read_text(encoding="utf-8", errors="ignore"):
+            return False
+    return True
+
+
 def _is_valid_materialized_tree(target: Path, features: tuple[str, ...]) -> bool:
     marker = target / ".mikazuki-anima-runtime"
     if not marker.is_file():
@@ -129,6 +154,11 @@ def _is_valid_materialized_tree(target: Path, features: tuple[str, ...]) -> bool
         and not _has_parameter_policy_metadata_capability(target)
     ):
         return False
+    if (
+        _FEATURE_PARAMETER_POLICY_RUNTIME in features
+        and not _has_parameter_policy_runtime_capability(target)
+    ):
+        return False
     return True
 
 
@@ -149,6 +179,7 @@ def materialize_anima_runtime_tree(
         _FEATURE_QWEN,
         _FEATURE_MULTI,
         _FEATURE_PARAMETER_POLICY_METADATA,
+        _FEATURE_PARAMETER_POLICY_RUNTIME,
     }
     if unknown:
         raise RuntimeError(f"Unknown Anima runtime features: {sorted(unknown)}")
@@ -201,9 +232,10 @@ def materialize_anima_runtime_tree(
             tf.extractall(temp)
         archive.unlink(missing_ok=True)
 
-        # Fixed order is part of the contract. Qwen owns optimizer/model/save
-        # blocks; Multi-Caption owns Dataset/arg/dataset-construction blocks;
-        # Parameter Policy metadata owns only networks/lora_anima.py.
+        # Fixed order is part of the contract. Qwen owns its model/save blocks;
+        # Multi-Caption owns Dataset/arg/dataset-construction blocks; metadata
+        # annotates LoRA targets; Parameter Policy runtime is applied last so it
+        # sees the final staged trainer shape and owns optimizer/runtime seams.
         if _FEATURE_QWEN in features:
             patched = qwen_patch.patch_files(temp)
             for path, source_text in list(patched.items()):
@@ -216,6 +248,9 @@ def materialize_anima_runtime_tree(
 
         if _FEATURE_PARAMETER_POLICY_METADATA in features:
             _apply_patch_map(metadata_patch.patch_files(temp))
+
+        if _FEATURE_PARAMETER_POLICY_RUNTIME in features:
+            _apply_patch_map(parameter_policy_runtime_patch.patch_files(temp))
 
         (temp / ".mikazuki-anima-runtime").write_text(
             _marker_payload(features),

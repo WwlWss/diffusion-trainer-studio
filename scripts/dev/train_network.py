@@ -797,6 +797,10 @@ class NetworkTrainer:
             optimizer_name, optimizer_args, optimizer = train_util.get_optimizer(args, trainable_params)
             optimizer_train_fn, optimizer_eval_fn = train_util.get_optimizer_train_eval_fn(optimizer, args)
         else:
+            # Legacy text_encoder_lr is metadata-only in Component mode.
+            # Initialize it explicitly so metadata construction never observes
+            # an unbound legacy optimizer variable.
+            text_encoder_lr = None
             lr_descriptions = None
             optimizer_name = "DTSParameterPolicy"
             optimizer_args = ""

@@ -34,7 +34,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
                     {"parameter_policy_config": "parameter-policy.json"},
                 )
             ),
-            ("parameter_policy_metadata",),
+            ("parameter_policy_metadata", "parameter_policy_runtime"),
         )
         self.assertEqual(
             requested_runtime_features(
@@ -46,7 +46,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
                     },
                 )
             ),
-            ("multi_caption", "parameter_policy_metadata"),
+            ("multi_caption", "parameter_policy_metadata", "parameter_policy_runtime"),
         )
         self.assertEqual(
             requested_runtime_features(
@@ -55,7 +55,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
                     {"parameter_policy_config": "parameter-policy.json"},
                 )
             ),
-            (),
+            ("parameter_policy_runtime",),
         )
         self.assertEqual(
             requested_runtime_features(
@@ -207,6 +207,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
             tree = materialize_anima_runtime_tree(
                 (
                     "parameter_policy_metadata",
+                    "parameter_policy_runtime",
                     "qwen3_joint",
                     "multi_caption",
                 ),
@@ -237,6 +238,7 @@ class AnimaParameterPolicyMetadataRuntimeTests(unittest.TestCase):
                 [
                     "multi_caption",
                     "parameter_policy_metadata",
+                    "parameter_policy_runtime",
                     "qwen3_joint",
                 ],
             )
