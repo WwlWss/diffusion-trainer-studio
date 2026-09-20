@@ -117,15 +117,33 @@ def _has_parameter_policy_metadata_capability(target: Path) -> bool:
 
 def _has_parameter_policy_runtime_capability(target: Path) -> bool:
     required = {
-        target / "library/dts_parameter_policy_bridge.py": "create_parameter_policy_session",
-        target / "train_network.py": "register_checkpoint_manifest",
-        target / "anima_train_network.py": 'return "anima-lora"',
-        target / "anima_train.py": '"anima-finetune"',
+        target / "library/dts_parameter_policy_bridge.py": (
+            "create_parameter_policy_session",
+            "load_parameter_policy_file",
+        ),
+        target / "train_network.py": (
+            "finalize_after_prepare",
+            'phase="post_resume"',
+            'phase="epoch_start"',
+            "model_metadata()",
+        ),
+        target / "anima_train_network.py": ('return "anima-lora"',),
+        target / "anima_train.py": (
+            '"anima-finetune"',
+            "finalize_after_prepare",
+            'phase="post_resume"',
+            'phase="epoch_start"',
+            "_dts_parameter_policy_model_metadata",
+        ),
+        target / "library/anima_train_utils.py": (
+            "_dts_parameter_policy_model_metadata",
+        ),
     }
-    for path, marker in required.items():
+    for path, markers in required.items():
         if not path.is_file():
             return False
-        if marker not in path.read_text(encoding="utf-8", errors="ignore"):
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        if any(marker not in text for marker in markers):
             return False
     return True
 

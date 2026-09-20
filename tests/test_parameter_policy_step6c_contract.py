@@ -56,8 +56,9 @@ class ParameterPolicyStep6CContractTests(unittest.TestCase):
                 self.assertIn(train_type, source)
                 self.assertIn("parameter_policy_session.optimizer", source)
                 self.assertIn("parameter_policy_session.build_scheduler", source)
-                self.assertIn("parameter_policy_session.audit_after_prepare", source)
-                self.assertIn("parameter_policy_session.register_checkpoint_manifest", source)
+                self.assertIn("parameter_policy_session.finalize_after_prepare", source)
+                self.assertIn('phase="post_resume"', source)
+                self.assertIn('phase="epoch_start"', source)
                 self.assertIn("parameter_policy_session.trainable_parameters", source)
                 self.assertIn("parameter_policy_session.component_lr_logs", source)
 

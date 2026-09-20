@@ -508,13 +508,13 @@ def train(args):
         optimizer, train_dataloader, lr_scheduler = accelerator.prepare(optimizer, train_dataloader, lr_scheduler)
 
     if parameter_policy_session is not None:
-        parameter_policy_session.audit_after_prepare(
+        parameter_policy_session.finalize_after_prepare(
             accelerator=accelerator,
             optimizer=optimizer,
-        )
-        parameter_policy_session.register_checkpoint_manifest(
-            accelerator,
             scheduler=lr_scheduler,
+        )
+        args._dts_parameter_policy_model_metadata = (
+            parameter_policy_session.model_metadata()
         )
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
@@ -525,6 +525,12 @@ def train(args):
 
     # resumeする
     train_util.resume_from_local_or_hf_if_specified(accelerator, args)
+    if parameter_policy_session is not None:
+        parameter_policy_session.assert_runtime_contract(
+            phase="post_resume",
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
 
     if args.fused_backward_pass:
         # use fused optimizer for backward pass: other optimizers will be supported in the future
@@ -640,7 +646,11 @@ def train(args):
         for m in training_models:
             m.train()
         if parameter_policy_session is not None:
-            parameter_policy_session.assert_requires_grad_contract()
+            parameter_policy_session.assert_runtime_contract(
+                phase="epoch_start",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step

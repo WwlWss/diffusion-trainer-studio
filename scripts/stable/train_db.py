@@ -321,13 +321,13 @@ def train(args):
         )
 
     if parameter_policy_session is not None:
-        parameter_policy_session.audit_after_prepare(
+        parameter_policy_session.finalize_after_prepare(
             accelerator=accelerator,
             optimizer=optimizer,
-        )
-        parameter_policy_session.register_checkpoint_manifest(
-            accelerator,
             scheduler=lr_scheduler,
+        )
+        args._dts_parameter_policy_model_metadata = (
+            parameter_policy_session.model_metadata()
         )
 
     # 実験的機能：勾配も含めたfp16学習を行う　PyTorchにパッチを当ててfp16でのgrad scaleを有効にする
@@ -336,6 +336,12 @@ def train(args):
 
     # resumeする
     train_util.resume_from_local_or_hf_if_specified(accelerator, args)
+    if parameter_policy_session is not None:
+        parameter_policy_session.assert_runtime_contract(
+            phase="post_resume",
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
 
     # epoch数を計算する
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
@@ -391,9 +397,14 @@ def train(args):
             # train==True is required to enable gradient_checkpointing
             if args.gradient_checkpointing or global_step < args.stop_text_encoder_training:
                 text_encoder.train()
-        elif train_text_encoder:
-            text_encoder.train()
-            parameter_policy_session.assert_requires_grad_contract()
+        else:
+            if train_text_encoder:
+                text_encoder.train()
+            parameter_policy_session.assert_runtime_contract(
+                phase="epoch_start",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
 
         for step, batch in enumerate(train_dataloader):
             current_step.value = global_step

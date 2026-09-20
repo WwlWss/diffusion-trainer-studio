@@ -39,7 +39,7 @@ from mikazuki.parameter_routing import (
 
 
 PARAMETER_POLICY_CHECKPOINT_MANIFEST = "dts_parameter_policy_manifest.json"
-PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 1
+PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 2
 PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
 
 
@@ -377,6 +377,29 @@ class ParameterPolicyTrainerSession:
         )
 
     @property
+    def trainable_parameter_tensor_count(self) -> int:
+        return len(self.trainable_parameters)
+
+    @property
+    def trainable_parameter_element_count(self) -> int:
+        total = 0
+        for parameter in self.trainable_parameters:
+            numel = getattr(parameter, "numel", None)
+            if not callable(numel):
+                raise ParameterPolicyTrainerRuntimeError(
+                    "Parameter Policy diagnostics require trainable parameters to expose numel()."
+                )
+            total += int(numel())
+        return total
+
+    @property
+    def optimizer_profiles(self) -> dict[str, str]:
+        return {
+            spec.profile_name: spec.optimizer_type
+            for spec in self.runtime_spec.optimizers
+        }
+
+    @property
     def frozen_parameters(self) -> tuple[Any, ...]:
         routed = tuple(
             assignment.parameter
@@ -423,6 +446,7 @@ class ParameterPolicyTrainerSession:
 
     def assert_requires_grad_contract(self) -> None:
         expected = self._expected_requires_grad()
+        mismatches: list[str] = []
         for descriptor in self.descriptors:
             desired = expected.get(descriptor.parameter_id)
             if desired is None:
@@ -431,10 +455,93 @@ class ParameterPolicyTrainerSession:
                 )
             actual = getattr(descriptor.parameter, "requires_grad", None)
             if actual is not desired:
-                raise ParameterPolicyTrainerRuntimeError(
-                    f"Parameter {descriptor.canonical_name!r} requires_grad={actual!r}; "
-                    f"Parameter Policy requires {desired!r}."
+                mismatches.append(
+                    f"{descriptor.canonical_name}: actual={actual!r}, expected={desired!r}"
                 )
+        if mismatches:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy requires-grad contract was mutated: "
+                + "; ".join(mismatches[:8])
+            )
+
+    def model_metadata(self) -> dict[str, str]:
+        metadata = {
+            "ss_dts_parameter_policy_hash": self.policy_hash,
+            "ss_dts_parameter_policy_topology": self.runtime_spec.topology_fingerprint,
+            "ss_dts_parameter_policy_profiles": json.dumps(
+                self.optimizer_profiles,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+            "ss_dts_parameter_policy_train_type": self.train_type,
+            "ss_dts_parameter_policy_trainable_components": json.dumps(
+                sorted(self.trainable_components),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ),
+            "ss_dts_parameter_policy_trainable_parameter_tensors": str(
+                self.trainable_parameter_tensor_count
+            ),
+            "ss_dts_parameter_policy_trainable_parameter_elements": str(
+                self.trainable_parameter_element_count
+            ),
+            "ss_dts_parameter_policy_manifest_version": str(
+                PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION
+            ),
+        }
+        if self.scheduler_signature:
+            metadata["ss_dts_parameter_policy_scheduler_signature"] = (
+                self.scheduler_signature
+            )
+        return metadata
+
+    def startup_diagnostics(self) -> dict[str, Any]:
+        return {
+            "train_type": self.train_type,
+            "policy_hash": self.policy_hash,
+            "topology_fingerprint": self.runtime_spec.topology_fingerprint,
+            "trainable_components": sorted(self.trainable_components),
+            "frozen_components": sorted(self.frozen_components),
+            "optimizer_profiles": self.optimizer_profiles,
+            "trainable_parameter_tensors": self.trainable_parameter_tensor_count,
+            "trainable_parameter_elements": self.trainable_parameter_element_count,
+            "scheduler_signature": self.scheduler_signature,
+        }
+
+    def log_startup_diagnostics(self, accelerator: object) -> None:
+        printer = getattr(accelerator, "print", None)
+        if not callable(printer):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Accelerator does not expose print() for Parameter Policy diagnostics."
+            )
+        diagnostics = self.startup_diagnostics()
+        profiles = ", ".join(
+            f"{name}={optimizer_type}"
+            for name, optimizer_type in sorted(
+                diagnostics["optimizer_profiles"].items()
+            )
+        )
+        trainable = ", ".join(diagnostics["trainable_components"]) or "<none>"
+        frozen = ", ".join(diagnostics["frozen_components"]) or "<none>"
+        printer(
+            "\n".join(
+                (
+                    "[DTS Parameter Policy]",
+                    f"  train_type: {diagnostics['train_type']}",
+                    f"  policy_hash: {diagnostics['policy_hash']}",
+                    f"  topology: {diagnostics['topology_fingerprint']}",
+                    f"  trainable_components: {trainable}",
+                    f"  frozen_components: {frozen}",
+                    f"  optimizer_profiles: {profiles or '<none>'}",
+                    "  trainable_parameters: "
+                    f"{diagnostics['trainable_parameter_tensors']} tensors / "
+                    f"{diagnostics['trainable_parameter_elements']} elements",
+                    "  scheduler_signature: "
+                    f"{diagnostics['scheduler_signature'] or '<optimizer-managed/unset>'}",
+                )
+            )
+        )
 
     def component_lr_logs(self, scheduler: object) -> dict[str, Any]:
         """Return stable component-oriented LR logs from the composite runtime."""
@@ -515,7 +622,12 @@ class ParameterPolicyTrainerSession:
             ).hexdigest()
         return scheduler
 
-    def audit_after_prepare(self, *, accelerator: object, optimizer: object) -> None:
+    def _audit_prepared_optimizer_and_device(
+        self,
+        *,
+        accelerator: object,
+        optimizer: object,
+    ) -> None:
         composite = _unwrap_composite_optimizer(optimizer)
         if composite.runtime_spec.topology_fingerprint != self.runtime_spec.topology_fingerprint:
             raise ParameterPolicyTrainerRuntimeError(
@@ -532,16 +644,37 @@ class ParameterPolicyTrainerSession:
             raise ParameterPolicyTrainerRuntimeError(
                 "Prepared CompositeOptimizer contains duplicate physical parameters."
             )
-        if set(actual_ids) != set(self.trainable_parameter_ids):
+
+        actual_id_set = set(actual_ids)
+        expected_id_set = set(self.trainable_parameter_ids)
+        frozen_ids = {id(parameter) for parameter in self.frozen_parameters}
+        leaked = frozen_ids.intersection(actual_id_set)
+        name_by_id = {
+            descriptor.parameter_id: descriptor.canonical_name
+            for descriptor in self.descriptors
+        }
+        if leaked:
+            leaked_names = sorted(
+                name_by_id.get(parameter_id, "<parameter>")
+                for parameter_id in leaked
+            )
             raise ParameterPolicyTrainerRuntimeError(
-                "Prepared CompositeOptimizer parameter ownership differs from Runtime Spec."
+                "Frozen Parameter Policy parameters leaked into the prepared optimizer: "
+                + ", ".join(leaked_names[:8])
             )
 
-        frozen_ids = {id(parameter) for parameter in self.frozen_parameters}
-        leaked = frozen_ids.intersection(actual_ids)
-        if leaked:
+        if actual_id_set != expected_id_set:
+            missing = sorted(
+                name_by_id.get(parameter_id, "<parameter>")
+                for parameter_id in expected_id_set.difference(actual_id_set)
+            )
+            unexpected = sorted(
+                name_by_id.get(parameter_id, "<unknown parameter>")
+                for parameter_id in actual_id_set.difference(expected_id_set)
+            )
             raise ParameterPolicyTrainerRuntimeError(
-                "Frozen Parameter Policy parameters leaked into the prepared optimizer."
+                "Prepared CompositeOptimizer parameter ownership differs from Runtime Spec; "
+                f"missing={missing[:8]!r}, unexpected={unexpected[:8]!r}."
             )
 
         expected_device = getattr(accelerator, "device", None)
@@ -550,10 +683,6 @@ class ParameterPolicyTrainerSession:
                 "Accelerator does not expose a device for Parameter Policy device audit."
             )
         mismatches: list[str] = []
-        name_by_id = {
-            descriptor.parameter_id: descriptor.canonical_name
-            for descriptor in self.descriptors
-        }
         for parameter in self.trainable_parameters:
             device = getattr(parameter, "device", None)
             if device != expected_device:
@@ -566,7 +695,41 @@ class ParameterPolicyTrainerSession:
                 f"must be on {expected_device}: " + ", ".join(mismatches[:8])
             )
 
-        self.assert_requires_grad_contract()
+    def assert_runtime_contract(
+        self,
+        *,
+        phase: str,
+        accelerator: object | None = None,
+        optimizer: object | None = None,
+    ) -> None:
+        phase_name = str(phase or "").strip()
+        if not phase_name:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy runtime contract phase cannot be empty."
+            )
+        try:
+            self.assert_requires_grad_contract()
+            if accelerator is None and optimizer is None:
+                return
+            if accelerator is None or optimizer is None:
+                raise ParameterPolicyTrainerRuntimeError(
+                    "Runtime ownership/device audit requires both accelerator and optimizer."
+                )
+            self._audit_prepared_optimizer_and_device(
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+        except ParameterPolicyTrainerRuntimeError as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Parameter Policy runtime contract failed at {phase_name}: {exc}"
+            ) from exc
+
+    def audit_after_prepare(self, *, accelerator: object, optimizer: object) -> None:
+        self.assert_runtime_contract(
+            phase="post_prepare",
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
 
     def checkpoint_manifest(self, scheduler: object | None = None) -> dict[str, Any]:
         composite_scheduler = _unwrap_composite_scheduler(scheduler)
@@ -584,6 +747,11 @@ class ParameterPolicyTrainerSession:
             "train_type": self.train_type,
             "policy_hash": self.policy_hash,
             "runtime_topology_fingerprint": self.runtime_spec.topology_fingerprint,
+            "trainable_components": sorted(self.trainable_components),
+            "frozen_components": sorted(self.frozen_components),
+            "trainable_parameter_tensors": self.trainable_parameter_tensor_count,
+            "trainable_parameter_elements": self.trainable_parameter_element_count,
+            "optimizer_profiles": self.optimizer_profiles,
             "optimizers": [
                 {
                     "profile_name": spec.profile_name,
@@ -659,11 +827,17 @@ class ParameterPolicyTrainerSession:
         accelerator: object,
         *,
         scheduler: object | None = None,
+        optimizer: object | None = None,
     ) -> None:
         expected = self.checkpoint_manifest(scheduler)
 
         def save_hook(models, weights, output_dir):
             del models, weights
+            self.assert_runtime_contract(
+                phase="checkpoint_save",
+                accelerator=accelerator if optimizer is not None else None,
+                optimizer=optimizer,
+            )
             if not getattr(accelerator, "is_main_process", True):
                 return
             path = Path(output_dir) / PARAMETER_POLICY_CHECKPOINT_MANIFEST
@@ -677,6 +851,11 @@ class ParameterPolicyTrainerSession:
         def load_hook(models, input_dir):
             del models
             self.validate_checkpoint_manifest(input_dir, scheduler=scheduler)
+            self.assert_runtime_contract(
+                phase="checkpoint_load",
+                accelerator=accelerator if optimizer is not None else None,
+                optimizer=optimizer,
+            )
 
         register_save = getattr(accelerator, "register_save_state_pre_hook", None)
         register_load = getattr(accelerator, "register_load_state_pre_hook", None)
@@ -686,6 +865,25 @@ class ParameterPolicyTrainerSession:
             )
         register_save(save_hook)
         register_load(load_hook)
+
+    def finalize_after_prepare(
+        self,
+        *,
+        accelerator: object,
+        optimizer: object,
+        scheduler: object | None = None,
+    ) -> None:
+        self.assert_runtime_contract(
+            phase="post_prepare",
+            accelerator=accelerator,
+            optimizer=optimizer,
+        )
+        self.register_checkpoint_manifest(
+            accelerator,
+            scheduler=scheduler,
+            optimizer=optimizer,
+        )
+        self.log_startup_diagnostics(accelerator)
 
 
 def make_legacy_scheduler_factory(
