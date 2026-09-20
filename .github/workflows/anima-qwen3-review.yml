@@ -201,8 +201,10 @@ jobs:
             tests/test_parameter_policy_torch_runtime_smoke.py \
             tests/test_parameter_policy_step6a_contract.py \
             tests/test_parameter_policy_step6b_contract.py \
+            tests/test_parameter_policy_step6c_contract.py \
             tests/test_parameter_policy_trainer_runtime_smoke.py \
             tests/test_parameter_policy_network_runtime_smoke.py \
+            tests/test_parameter_policy_full_runtime_smoke.py \
             tests/test_anima_qwen_config.py \
             tests/test_anima_qwen_off_compat.py \
             tests/test_anima_finetune_config.py \
@@ -424,4 +426,5 @@ jobs:
             tests.test_parameter_policy_torch_runtime_smoke \
             tests.test_parameter_policy_trainer_runtime_smoke \
             tests.test_parameter_policy_network_runtime_smoke \
+            tests.test_parameter_policy_full_runtime_smoke \
             -v
