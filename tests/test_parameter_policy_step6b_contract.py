@@ -167,11 +167,12 @@ class ParameterPolicyStep6BContractTests(unittest.TestCase):
                     source,
                 )
 
-    def test_request_gate_remains_closed_in_step6b(self):
-        source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
-        self.assertIn(
-            "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES: frozenset[str] = frozenset()",
-            source,
+    def test_step6b_lora_integrations_are_present_in_step6f_matrix(self):
+        from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+
+        self.assertTrue(
+            {"sd-lora", "sdxl-lora", "flux-lora", "chroma-lora", "sd3-lora"}
+            <= PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
         )
 
 
