@@ -24,11 +24,25 @@ def _component_row(component: dict) -> str:
     component_id = str(component["id"])
     label = str(component.get("label") or component_id)
     description = str(component.get("description") or "")
-    row_description = label if not description else f"{label}: {description}"
+    translated = {
+        "dit.self_attention": ("DiT 自注意力", "Anima DiT 自注意力参数。"),
+        "dit.cross_attention": ("DiT 交叉注意力", "Anima DiT 交叉注意力参数。"),
+        "dit.mlp": ("DiT MLP", "Anima DiT MLP 参数。"),
+        "dit.modulation": ("DiT 调制层", "Anima AdaLN 调制参数。"),
+        "dit.llm_adapter": ("LLM Adapter", "可选的 Anima LLM Adapter 桥接参数。"),
+        "dit.base_other": ("DiT 其他参数", "其余 Anima DiT embedding、输出层和外围参数。"),
+        "qwen3": ("Qwen3", "启用联合训练时的 Qwen3 文本编码器参数。"),
+    }.get(component_id)
+    if translated:
+        label, description = translated
+    row_description = label if not description else f"{label}：{description}"
 
+    # Keep conditional visibility without attaching the same description to the
+    # outer intersect.  In the pinned renderer that avoids duplicate headings,
+    # while Train=false still hides stale LR/profile controls.
     return f"""Schema.intersect([
         Schema.object({{
-            train: Schema.boolean().default(false).description("Train this component; disabled components ignore stale LR/profile fields.")
+            train: Schema.boolean().default(false).description({_js_string(row_description + " 是否训练该组件；关闭后后端会忽略残留的学习率和 Profile。")})
         }}),
         Schema.union([
             Schema.intersect([
@@ -36,16 +50,15 @@ def _component_row(component: dict) -> str:
                     train: Schema.const(true).required()
                 }}),
                 Schema.object({{
-                    learning_rate: Schema.string().description("Component learning rate, for example 1e-4."),
-                    optimizer_profile: Schema.string().description("Optimizer Profile name defined above."),
-                    fallback_optimizer_profile: Schema.string().description("Optional fallback Profile for eligibility-gated optimizers such as Muon."),
-                    fallback_learning_rate: Schema.string().description("Optional fallback learning rate; requires a fallback Profile.")
+                    learning_rate: Schema.string().description("该组件的学习率，例如 1e-4。"),
+                    optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback", Schema.string().description("自定义 Profile 名称")]).description("主 Optimizer Profile；常用名称可直接选择，也可切换到自定义名称。"),
+                    fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main", Schema.string().description("自定义回退 Profile 名称")]).description("可选回退 Profile；常用名称可直接选择，也可使用自定义名称。"),
+                    fallback_learning_rate: Schema.string().description("可选回退学习率；设置回退 Profile 时使用。")
                 }})
             ]),
             Schema.object({{}})
         ])
-    ]).description({_js_string(row_description)})"""
-
+    ])"""
 
 def parameter_policy_schema_fragment(train_type: str) -> str:
     """Return the Parameter Policy editor as one Schemastery expression."""
@@ -81,7 +94,7 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
 
     return f"""Schema.intersect([
     Schema.object({{
-        optimization_mode: Schema.union(["standard", "component"]).default("standard").description("Optimization ownership: Standard keeps historical DTS optimizer/LR controls; Component enables Parameter Policy.")
+        optimization_mode: Schema.union(["standard", "component"]).default("standard").description("优化模式：Standard 保持原有 DTS 优化器/学习率逻辑；Component 启用按组件 Parameter Policy。")
     }}).description("Parameter Policy"),
     Schema.union([
         Schema.intersect([
@@ -89,14 +102,36 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
                 optimization_mode: Schema.const("component").required()
             }}),
             Schema.object({{
-                parameter_policy_profiles: Schema.dict(Schema.object({{
-                    type: Schema.union({optimizer_choice_expr}).default("AdamW").description("Supported optimizers are selectable; restricted/planned entries remain readable for imported policies but cannot be newly selected."),
-                    args: Schema.dict(Schema.string()).description("Optimizer constructor args. Values accept literals such as 0.95, false, [1, 2], or (0.9, 0.95).")
-                }})).description("Optimizer Profiles; dictionary key is the user-defined Profile name."),
+                parameter_policy_profiles: Schema.dict(Schema.intersect([
+                    Schema.object({{
+                        type: Schema.union({optimizer_choice_expr}).default("AdamW").description("优化器类型；仅 Component 已支持的优化器可新建使用，受限/计划项仅用于读取旧配置。")
+                    }}),
+                    Schema.union([
+                        Schema.intersect([
+                            Schema.object({{
+                                type: Schema.const("Muon").required()
+                            }}),
+                            Schema.object({{
+                                args: Schema.object({{
+                                    momentum: Schema.number().min(0).description("Muon 动量，例如 0.95；必须小于 1，最终范围由后端严格校验。"),
+                                    weight_decay: Schema.number().min(0).description("Muon 权重衰减，例如 0.01。"),
+                                    weight_decouple: Schema.boolean().description("使用 decoupled weight decay。"),
+                                    nesterov: Schema.boolean().description("启用 Nesterov momentum。"),
+                                    ns_steps: Schema.number().min(1).step(1).description("Newton-Schulz 迭代次数，例如 5。"),
+                                    ns_coeffs: Schema.union(["original", "quintic", "polar_express", "polar_express_safer"]).description("Newton-Schulz 系数预设。"),
+                                    use_adjusted_lr: Schema.boolean().description("按 Muon 实现启用 adjusted LR。")
+                                }}).description("Muon 参数；这些是 DTS 当前明确支持的 Muon 参数，直接填写即可，无需手工添加 key/value。")
+                            }})
+                        ]),
+                        Schema.object({{
+                            args: Schema.dict(Schema.string()).description("优化器构造参数。左侧填写参数名，右侧只填写参数值；支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")
+                        }})
+                    ])
+                ])).description("Optimizer Profiles；字典 key 是自定义 Profile 名称，例如 main、muon、fallback。"),
                 parameter_policy_components: Schema.object({{
 {components}
-                }}).description("Backend components. Train=false is authoritative; stale hidden LR/profile fields are ignored by the backend canonicalizer.")
-            }}).description("Component-wise Parameter Policy")
+                }}).description("后端组件；Train=false 为最终语义，关闭的组件会忽略残留的学习率/Profile。")
+            }}).description("按组件 Parameter Policy")
         ]),
         Schema.object({{}})
     ])

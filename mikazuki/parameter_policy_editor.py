@@ -191,13 +191,20 @@ def encode_parameter_policy_editor_state(gui_state: Mapping[str, Any]) -> dict[s
                     raise ValueError(
                         f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
                     )
-                profile["args"] = {
-                    key: _format_editor_literal(
-                        value,
-                        field=f"parameter_policy_profiles.{raw_name}.args.{key}",
-                    )
-                    for key, value in args.items()
-                }
+                # Muon has a dedicated typed Schemastery form.  Keep its
+                # canonical number/bool/string values native across bootstrap
+                # and rehydrate; only legacy generic dict editors need string
+                # literals for lossless round-trips.
+                if str(profile.get("type") or "").strip().casefold() == "muon":
+                    profile["args"] = deepcopy(dict(args))
+                else:
+                    profile["args"] = {
+                        key: _format_editor_literal(
+                            value,
+                            field=f"parameter_policy_profiles.{raw_name}.args.{key}",
+                        )
+                        for key, value in args.items()
+                    }
             encoded_profiles[raw_name] = profile
         encoded["parameter_policy_profiles"] = encoded_profiles
 
@@ -226,6 +233,46 @@ def rehydrate_parameter_policy_editor(policy: object) -> dict[str, Any]:
 
     return encode_parameter_policy_editor_state(rehydrate_parameter_policy(policy))
 
+
+def _normalize_editor_args(raw_args: Mapping[Any, Any], *, profile_name: object) -> dict[str, Any]:
+    """Normalize legacy Schemastery dict rows without leaking blank placeholder keys.
+
+    The pinned editor creates an empty key/value row before the user fills it.
+    Empty placeholder rows are ignored. For compatibility with existing browser
+    state, a blank key whose value is written as ``name = value`` is recovered
+    into the intended key/value pair instead of surfacing an empty
+    "Unsupported ... argument(s):" diagnostic.
+    """
+
+    normalized: dict[str, Any] = {}
+    for raw_key, raw_value in raw_args.items():
+        key = str(raw_key or "").strip()
+        value = raw_value
+
+        if not key:
+            if raw_value in (None, ""):
+                continue
+            if isinstance(raw_value, str) and "=" in raw_value:
+                candidate_key, candidate_value = raw_value.split("=", 1)
+                key = candidate_key.strip()
+                value = candidate_value.strip()
+            if not key:
+                raise ValueError(
+                    f"Parameter Policy editor: Optimizer Profile {profile_name!r}.args "
+                    "参数名不能为空；请在左侧填写参数名，右侧只填写参数值。"
+                )
+
+        if key in normalized:
+            raise ValueError(
+                f"Parameter Policy editor: Optimizer Profile {profile_name!r}.args "
+                f"包含重复参数 {key!r}。"
+            )
+
+        normalized[key] = _parse_editor_literal(
+            value,
+            field=f"parameter_policy_profiles.{profile_name}.args.{key}",
+        )
+    return normalized
 
 def normalize_parameter_policy_editor_state(config: dict) -> None:
     """Normalize active Component editor values in-place before canonicalization.
@@ -256,13 +303,10 @@ def normalize_parameter_policy_editor_state(config: dict) -> None:
                 raise ValueError(
                     f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
                 )
-            profile["args"] = {
-                key: _parse_editor_literal(
-                    value,
-                    field=f"parameter_policy_profiles.{raw_name}.args.{key}",
-                )
-                for key, value in raw_args.items()
-            }
+            profile["args"] = _normalize_editor_args(
+                raw_args,
+                profile_name=raw_name,
+            )
         normalized_profiles[raw_name] = profile
 
     config["parameter_policy_profiles"] = normalized_profiles

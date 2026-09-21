@@ -38,7 +38,7 @@
                     weight: Schema.number().min(0).default(1),
                     extension: Schema.string().default(".txt").description("该 Group 的 caption 文件扩展名"),
                     processing: processingFactory(),
-                })).description("Separate Files Caption Groups；字典 key 就是 Group Name；Group 顺序不参与权重语义"),
+                })).default({ caption: { enabled: true, weight: 1, extension: ".txt", processing: {} } }).description("独立文件 Caption Groups；字典 key 就是 Group 名称；切换到 Multi 时默认创建 caption 组。"),
             }),
             Schema.object({
                 multi_caption_storage: Schema.const("multiline").required(),
@@ -48,7 +48,7 @@
                     weight: Schema.number().min(0).default(1),
                     line: Schema.number().min(1).step(1).default(1).description("1-based 物理行号；空行也占行号"),
                     processing: processingFactory(),
-                })).description("Simple Multi-Line Caption Groups；Group 顺序不参与权重语义"),
+                })).default({ caption: { enabled: true, weight: 1, line: 1, processing: {} } }).description("多行 Caption Groups；字典 key 就是 Group 名称；默认创建 caption 组。"),
             }),
             Schema.object({
                 multi_caption_storage: Schema.const("json").required(),
@@ -60,7 +60,7 @@
                     weight: Schema.number().min(0).default(1),
                     key: Schema.string().description("JSON key；以 / 开头时按 RFC6901 JSON Pointer 读取嵌套路径"),
                     processing: processingFactory(),
-                })).description("JSON Caption Groups；Group 顺序不参与权重语义"),
+                })).default({ caption: { enabled: true, weight: 1, key: "caption", processing: {} } }).description("JSON Caption Groups；字典 key 就是 Group 名称；默认创建 caption 组。"),
             }),
             Schema.object({
                 multi_caption_storage: Schema.const("jsonl").required(),
@@ -73,15 +73,15 @@
                     weight: Schema.number().min(0).default(1),
                     key: Schema.string().description("JSON key；以 / 开头时按 RFC6901 JSON Pointer 读取嵌套路径"),
                     processing: processingFactory(),
-                })).description("JSONL Caption Groups；Group 顺序不参与权重语义"),
+                })).default({ caption: { enabled: true, weight: 1, key: "caption", processing: {} } }).description("JSONL Caption Groups；字典 key 就是 Group 名称；默认创建 caption 组。"),
             }),
         ]),
     ]);
 
     const captionModeSchema = (standardSchema, processingFactory) => Schema.intersect([
         Schema.object({
-            caption_mode: Schema.union(["standard", "multi"]).default("standard").description("Standard 使用原 sd-scripts caption；Multi-Caption 按 Group 在每次训练 exposure 选择 caption。"),
-        }),
+            caption_mode: Schema.union(["standard", "multi"]).default("standard").description("Caption 模式：Standard 使用原 sd-scripts caption；Multi 按 Group 在每次训练 exposure 选择 caption。"),
+        }).description("Caption 模式"),
         // Put the guarded Multi branch first and make Standard the unconstrained
         // fallback. This remains stable in the pinned legacy frontend even
         // before caption_mode's default has been materialized into form state.
@@ -92,7 +92,7 @@
             ]),
             standardSchema,
         ]),
-    ]).description("Caption Mode");
+    ]);
 
 
 
