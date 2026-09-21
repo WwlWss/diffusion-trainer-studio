@@ -8,9 +8,8 @@ adds a user guide.
 This stage does **not** add trainer/runtime semantics, change Component IDs,
 relax Step 6F blockers, or change Parameter Policy sidecar v1.
 
-> Branching note: this planning branch is based on `feat/parameter-policy-step7c`
-> because PR #34 is still open. Implementation should continue only after #34
-> is merged or after confirming the merge commit contains the same 7C head.
+> Step 7D was planned on the Step 7C head. PR #35 targets `main`, which
+> contains the merged Step 7C implementation.
 
 ## Goals
 
@@ -369,8 +368,7 @@ Explicit target state:
 ~~~toml
 [data]
 optimization_mode = "component"
-network_train_unet_only = false
-network_train_text_encoder_only = false
+lora_target = "unet"
 mixed_precision = "bf16"
 ~~~
 
@@ -445,36 +443,46 @@ Muon routing rules.
 
 ## Runtime blocker contract
 
-The strongest test should prepare each preset through the normal host pipeline:
+The dependency-light host contract should still run the same semantic layers
+that matter before trainer launch:
 
 ~~~python
-prepared = prepare_request_config(
-    deepcopy(preset["data"]),
-    preset["metadata"]["train_type"],
+normalize_parameter_policy_editor_state(data)
+policy_path, sidecars, policy = build_parameter_policy_sidecar(data, page_type)
+prepared = prepare_training_config(
+    data,
+    page_train_type=page_type,
+    resolve_backend=fake_resolve_backend,
     launch=False,
+)
+blockers = parameter_policy_runtime_blockers(
+    policy,
+    train_type=prepared.train_type,
+    effective_config=prepared.config,
+    integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+)
+target = resolve_training_target_profile(
+    prepared.train_type,
+    prepared.config,
 )
 ~~~
 
-Require:
+Require zero request-level blockers and require every `Train=true` policy
+component to be available in the resolved target profile.
 
-~~~python
-self.assertEqual(prepared.runtime_blockers, [])
-~~~
-
-If a preset cannot pass the normal Preview preparation path on a clean/default
-configuration, it must not ship.
-
-This test intentionally validates:
+This intentionally validates:
 
 - visible page alias -> backend resolution;
 - Component sidecar compilation;
+- effective-config semantic normalization;
+- public target controls such as `lora_target`;
 - target-profile availability;
 - Step 6F compatibility;
 - optimizer capability;
 - Qwen3/TE target consistency.
 
-If one page requires an explicit schema-default field for the host pipeline,
-put that value in the preset instead of weakening the test.
+The test must remain dependency-light; it should not import the FastAPI request
+layer merely to validate presets.
 
 ## Curated-only contract
 
