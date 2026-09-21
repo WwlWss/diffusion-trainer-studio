@@ -182,9 +182,10 @@ async def preview_training_config(request: Request):
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=False)
         validate_prepared_config(prepared, False)
+        payload = _prepared_payload(prepared)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "prepare"})
-    return APIResponseSuccess(message="preview ready", data=_prepared_payload(prepared))
+    return APIResponseSuccess(message="preview ready", data=payload)
 
 
 @router.post("/training/export")
@@ -193,10 +194,11 @@ async def export_training_config(request: Request):
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=False)
         validate_prepared_config(prepared, False)
+        payload = _prepared_payload(prepared)
         materialize_sidecars(prepared.sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "export"})
-    return APIResponseSuccess(message="export ready", data=_prepared_payload(prepared))
+    return APIResponseSuccess(message="export ready", data=payload)
 
 
 @router.post("/training/rehydrate")
