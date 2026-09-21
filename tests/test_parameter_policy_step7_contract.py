@@ -226,6 +226,18 @@ def _prepare_policy_request(raw: Mapping[str, object], page_type: str):
     return prepared, policy
 
 
+def _round_trip_effective(config: Mapping[str, object]) -> dict:
+    normalized = deepcopy(dict(config))
+    # rehydrate_trainer_config() intentionally emits memory_mode="auto" when
+    # lowram/highvram are absent. Re-preparing that semantic default materializes
+    # explicit False booleans. Treat only this documented absent-vs-False pair
+    # as equivalent; all other effective trainer fields remain exact.
+    for key in ("lowram", "highvram"):
+        if normalized.get(key) is False:
+            normalized.pop(key, None)
+    return normalized
+
+
 def _stale_standard_state(base: Mapping[str, object]) -> dict:
     return {
         **deepcopy(dict(base)),
@@ -376,7 +388,10 @@ class ParameterPolicyStep7ReleaseMatrixTests(unittest.TestCase):
                     prepared_a.sidecars[policy_path_a],
                     prepared_b.sidecars[policy_path_b],
                 )
-                self.assertEqual(prepared_a.config, prepared_b.config)
+                self.assertEqual(
+                    _round_trip_effective(prepared_a.config),
+                    _round_trip_effective(prepared_b.config),
+                )
                 self.assertEqual(prepared_a.warnings, prepared_b.warnings)
                 self.assertEqual(prepared_a.runtime_blockers, prepared_b.runtime_blockers)
 
