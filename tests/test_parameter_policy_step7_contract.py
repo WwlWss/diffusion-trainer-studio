@@ -56,6 +56,7 @@ RELEASE_CASES = (
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-4",
                 "lora_target": "unet_text_encoder",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -67,6 +68,7 @@ RELEASE_CASES = (
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-4",
                 "lora_target": "unet_text_encoder",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -77,6 +79,7 @@ RELEASE_CASES = (
             {
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-6",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -89,6 +92,7 @@ RELEASE_CASES = (
                 "learning_rate": "1e-6",
                 "train_text_encoder": True,
                 "mixed_precision": "bf16",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -99,6 +103,7 @@ RELEASE_CASES = (
             {
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-4",
+                "lowram": False,
             }
         ),
     ),
@@ -110,6 +115,7 @@ RELEASE_CASES = (
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-4",
                 "flux_lora_target": "dit",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -121,6 +127,7 @@ RELEASE_CASES = (
                 "optimizer_type": "AdamW",
                 "learning_rate": "1e-4",
                 "flux_lora_target": "dit",
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -133,6 +140,7 @@ RELEASE_CASES = (
                 "learning_rate": "1e-6",
                 "mixed_precision": "bf16",
                 "blocks_to_swap": 0,
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -154,6 +162,7 @@ RELEASE_CASES = (
                 "anima_lora_checkpoint_mode": "standard",
                 "anima_lora_compile_mode": "off",
                 "blocks_to_swap": 0,
+                "memory_mode": "auto",
             }
         ),
     ),
@@ -171,12 +180,12 @@ RELEASE_CASES = (
                 "anima_text_encoder_cache_mode": "disk",
                 "anima_checkpoint_mode": "standard",
                 "blocks_to_swap": 0,
+                "memory_mode": "auto",
                 "train_qwen3_text_encoder": False,
             }
         ),
     ),
 )
-
 
 def _resolve_backend(config: dict, requested: str):
     del config
@@ -234,16 +243,21 @@ def _prepare_policy_request(raw: Mapping[str, object], page_type: str):
     return prepared, policy
 
 
-def _round_trip_effective(config: Mapping[str, object]) -> dict:
-    normalized = deepcopy(dict(config))
-    # rehydrate_trainer_config() intentionally emits memory_mode="auto" when
-    # lowram/highvram are absent. Re-preparing that semantic default materializes
-    # explicit False booleans. Treat only this documented absent-vs-False pair
-    # as equivalent; all other effective trainer fields remain exact.
-    for key in ("lowram", "highvram"):
-        if normalized.get(key) is False:
-            normalized.pop(key, None)
-    return normalized
+def _project_rehydrated_gui_for_page(
+    gui: Mapping[str, object],
+    page_type: str,
+) -> dict:
+    """Mirror the one legacy browser schema projection not modeled in Python."""
+
+    projected = deepcopy(dict(gui))
+    if page_type == "sd3-lora":
+        mode = projected.pop("memory_mode", "auto")
+        if mode != "auto":
+            raise AssertionError(
+                f"SD3 rehydrate unexpectedly produced memory_mode={mode!r}."
+            )
+        projected["lowram"] = False
+    return projected
 
 
 def _stale_standard_state(base: Mapping[str, object]) -> dict:
@@ -378,6 +392,10 @@ class ParameterPolicyStep7ReleaseMatrixTests(unittest.TestCase):
                     case.page_type,
                     sidecars=deepcopy(prepared_a.sidecars),
                 )
+                rehydrated = _project_rehydrated_gui_for_page(
+                    rehydrated,
+                    case.page_type,
+                )
                 self.assertEqual(rehydrated["optimization_mode"], "component")
                 self.assertTrue(rehydrated["parameter_policy_profiles"])
                 self.assertTrue(rehydrated["parameter_policy_components"])
@@ -396,10 +414,7 @@ class ParameterPolicyStep7ReleaseMatrixTests(unittest.TestCase):
                     prepared_a.sidecars[policy_path_a],
                     prepared_b.sidecars[policy_path_b],
                 )
-                self.assertEqual(
-                    _round_trip_effective(prepared_a.config),
-                    _round_trip_effective(prepared_b.config),
-                )
+                self.assertEqual(prepared_a.config, prepared_b.config)
                 self.assertEqual(prepared_a.warnings, prepared_b.warnings)
                 self.assertEqual(prepared_a.runtime_blockers, prepared_b.runtime_blockers)
 
