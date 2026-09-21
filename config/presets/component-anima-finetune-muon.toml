@@ -1,0 +1,67 @@
+[metadata]
+name = "Component：Anima Full — DiT Muon + AdamW fallback"
+version = "1.0"
+author = "Diffusion Trainer Studio"
+train_type = "anima-finetune"
+description = "示例：Anima DiT 组件使用 Muon + AdamW fallback；Qwen3 与 LLM Adapter 保持冻结。学习率仅用于演示。"
+
+[data]
+optimization_mode = "component"
+anima_precision_mode = "mixed_bf16"
+anima_checkpoint_mode = "standard"
+train_qwen3_text_encoder = false
+fused_backward_pass = false
+blocks_to_swap = 0
+deepspeed = false
+torch_compile = false
+
+[data.parameter_policy_profiles.muon]
+type = "Muon"
+
+[data.parameter_policy_profiles.muon.args]
+
+[data.parameter_policy_profiles.fallback]
+type = "AdamW"
+
+[data.parameter_policy_profiles.fallback.args]
+
+[data.parameter_policy_components."dit.self_attention"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "1e-4"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "1e-4"
+
+[data.parameter_policy_components."dit.cross_attention"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "1e-4"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "1e-4"
+
+[data.parameter_policy_components."dit.mlp"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "1e-4"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "1e-4"
+
+[data.parameter_policy_components."dit.modulation"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
+
+[data.parameter_policy_components."dit.llm_adapter"]
+train = false
+
+[data.parameter_policy_components."dit.base_other"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
+
+[data.parameter_policy_components.qwen3]
+train = false
