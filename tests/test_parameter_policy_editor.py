@@ -145,6 +145,40 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         self.assertEqual(args["label"], "quintic")
         self.assertEqual(args["quoted"], "hello")
 
+    def test_blank_dict_rows_are_ignored_and_key_value_text_is_recovered(self):
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "": "",
+                        " ": "momentum = 0.95",
+                        "weight_decay": "0.01",
+                        "weight_decouple": "true",
+                        "nesterov": "true",
+                        "ns_steps": "5",
+                        "ns_coeffs": "original",
+                        "use_adjusted_lr": "false",
+                    },
+                }
+            },
+        }
+        normalize_parameter_policy_editor_state(config)
+        args = config["parameter_policy_profiles"]["muon"]["args"]
+        self.assertEqual(
+            args,
+            {
+                "momentum": 0.95,
+                "weight_decay": 0.01,
+                "weight_decouple": True,
+                "nesterov": True,
+                "ns_steps": 5,
+                "ns_coeffs": "original",
+                "use_adjusted_lr": False,
+            },
+        )
+
     def test_canonical_editor_round_trip_is_lossless(self):
         component_ids = sorted(get_model_component_profile("sd-lora").components)
         canonical = canonicalize_parameter_policy(
