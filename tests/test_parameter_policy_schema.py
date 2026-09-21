@@ -26,7 +26,7 @@ class ParameterPolicySchemaTests(unittest.TestCase):
 
     def test_optimizer_choices_match_editor_metadata_exactly(self):
         pattern = re.compile(
-            r"type: Schema\\.union\\((\\[[^\\n]+\\])\\)\\.default\\(\\"AdamW\\"\\)"
+            r'type: Schema\.union\((\[[^\n]+\])\)\.default\("AdamW"\)'
         )
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
             with self.subTest(train_type=train_type):
