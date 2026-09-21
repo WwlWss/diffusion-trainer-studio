@@ -7,8 +7,7 @@ description = "示例：只训练 SDXL LoRA 的 U-Net Attention/FFN 组件，并
 
 [data]
 optimization_mode = "component"
-network_train_unet_only = false
-network_train_text_encoder_only = false
+lora_target = "unet"
 mixed_precision = "bf16"
 
 [data.parameter_policy_profiles.main]
