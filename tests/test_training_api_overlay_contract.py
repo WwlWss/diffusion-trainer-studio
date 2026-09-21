@@ -49,6 +49,7 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
     def test_parameter_policy_editor_api_is_host_only(self):
         self.assertIn("parameter_policy_editor_metadata", TRAINING_API)
         self.assertIn("bootstrap_parameter_policy_editor", TRAINING_API)
+        self.assertIn("parameter_policy_editor_preview", TRAINING_API)
         self.assertIn('data={"stage": "parameter-policy-metadata"}', TRAINING_API)
         self.assertIn('data={"stage": "parameter-policy-bootstrap"}', TRAINING_API)
         metadata = TRAINING_API.index('@router.get("/training/parameter-policy/metadata")')
@@ -77,11 +78,40 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn("hashlib.sha256(raw_content.encode", TRAINING_API)
         self.assertIn("materialize_sidecars(sidecars)", TRAINING_API)
 
+    def test_preview_and_export_build_payload_inside_error_boundary(self):
+        preview = TRAINING_API.index('@router.post("/training/preview")')
+        export = TRAINING_API.index('@router.post("/training/export")')
+        rehydrate = TRAINING_API.index('@router.post("/training/rehydrate")')
+
+        preview_block = TRAINING_API[preview:export]
+        export_block = TRAINING_API[export:rehydrate]
+
+        self.assertIn("payload = _prepared_payload(prepared)", preview_block)
+        self.assertLess(
+            preview_block.index("payload = _prepared_payload(prepared)"),
+            preview_block.index("except (KeyError, TypeError, ValueError, RuntimeError) as exc:"),
+        )
+        self.assertIn("payload = _prepared_payload(prepared)", export_block)
+        self.assertIn("materialize_sidecars(prepared.sidecars)", export_block)
+        self.assertLess(
+            export_block.index("payload = _prepared_payload(prepared)"),
+            export_block.index("materialize_sidecars(prepared.sidecars)"),
+        )
+        self.assertLess(
+            export_block.index("materialize_sidecars(prepared.sidecars)"),
+            export_block.index("except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:"),
+        )
+
     def test_parameter_policy_bundle_and_runtime_readiness_are_exposed(self):
         self.assertIn('autosave" / "parameter-policy"', TRAINING_API)
-        self.assertIn('if prepared.config.get("parameter_policy_config"):', TRAINING_API)
-        self.assertIn('payload["runtime_ready"] = not bool(prepared.runtime_blockers)', TRAINING_API)
-        self.assertIn('payload["runtime_blockers"] = list(prepared.runtime_blockers)', TRAINING_API)
+        self.assertIn("def _prepared_parameter_policy_preview(prepared)", TRAINING_API)
+        self.assertIn('content = prepared.sidecars.get(str(path))', TRAINING_API)
+        self.assertNotIn("Path(str(path)).read_text", TRAINING_API)
+        self.assertIn('payload["runtime_ready"] = policy_preview["runtime_ready"]', TRAINING_API)
+        self.assertIn('payload["runtime_blockers"] = list(policy_preview["runtime_blockers"])', TRAINING_API)
+        self.assertIn('payload["parameter_policy_preview"] = {', TRAINING_API)
+        self.assertIn('"profiles": policy_preview["profiles"]', TRAINING_API)
+        self.assertIn('"components": policy_preview["components"]', TRAINING_API)
         self.assertIn("RuntimeError, OSError", TRAINING_API)
 
 

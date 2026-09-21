@@ -20,6 +20,7 @@ from mikazuki.log import log
 from mikazuki.parameter_policy_editor import (
     bootstrap_parameter_policy_editor,
     parameter_policy_editor_metadata,
+    parameter_policy_editor_preview,
 )
 from mikazuki.training_config import PAGE_BACKEND_MAP
 from mikazuki.training_launcher import run_prepared_train
@@ -56,6 +57,30 @@ router.routes[:] = [
 ]
 
 
+def _prepared_parameter_policy_preview(prepared) -> dict | None:
+    path = prepared.config.get("parameter_policy_config")
+    if not path:
+        return None
+
+    content = prepared.sidecars.get(str(path))
+    if content is None:
+        raise RuntimeError(
+            "Prepared Component request is missing its host-owned Parameter Policy sidecar."
+        )
+    try:
+        policy = json.loads(content)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            "Prepared Component request contains an invalid Parameter Policy sidecar."
+        ) from exc
+
+    return parameter_policy_editor_preview(
+        policy,
+        prepared.train_type,
+        prepared.runtime_blockers,
+    )
+
+
 def _prepared_payload(prepared) -> dict:
     toml_text = toml.dumps(prepared.config)
     sidecars = [{"path": path, "content": content} for path, content in prepared.sidecars.items()]
@@ -74,9 +99,16 @@ def _prepared_payload(prepared) -> dict:
         "sidecars": sidecars,
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
-    if prepared.config.get("parameter_policy_config"):
-        payload["runtime_ready"] = not bool(prepared.runtime_blockers)
-        payload["runtime_blockers"] = list(prepared.runtime_blockers)
+    policy_preview = _prepared_parameter_policy_preview(prepared)
+    if policy_preview is not None:
+        payload["runtime_ready"] = policy_preview["runtime_ready"]
+        payload["runtime_blockers"] = list(policy_preview["runtime_blockers"])
+        payload["parameter_policy_preview"] = {
+            "version": policy_preview["version"],
+            "train_type": policy_preview["train_type"],
+            "profiles": policy_preview["profiles"],
+            "components": policy_preview["components"],
+        }
     return payload
 
 
@@ -150,9 +182,10 @@ async def preview_training_config(request: Request):
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=False)
         validate_prepared_config(prepared, False)
+        payload = _prepared_payload(prepared)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "prepare"})
-    return APIResponseSuccess(message="preview ready", data=_prepared_payload(prepared))
+    return APIResponseSuccess(message="preview ready", data=payload)
 
 
 @router.post("/training/export")
@@ -161,10 +194,11 @@ async def export_training_config(request: Request):
         page_type, config = decode_training_request(await request.body())
         prepared = prepare_request_config(config, page_type, launch=False)
         validate_prepared_config(prepared, False)
+        payload = _prepared_payload(prepared)
         materialize_sidecars(prepared.sidecars)
     except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:
         return APIResponseFail(message=str(exc), data={"stage": "export"})
-    return APIResponseSuccess(message="export ready", data=_prepared_payload(prepared))
+    return APIResponseSuccess(message="export ready", data=payload)
 
 
 @router.post("/training/rehydrate")

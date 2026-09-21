@@ -23,7 +23,8 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertNotIn('stringify(parseParams(n.value(clone(m.value)),t))', self.patched)
 
     def test_raw_gui_normalization_does_not_mutate_watched_form_state(self):
-        self.assertIn('T=()=>{let _=clone(a.value);', self.patched)
+        self.assertIn('__resolveGuiState=_=>{let R=clone(_);', self.patched)
+        self.assertIn('T=()=>__resolveGuiState(a.value)', self.patched)
         self.assertNotIn('T=()=>{let _=a.value;', self.patched)
 
     def test_preview_mutable_state_uses_refs_not_const_reassignment(self):
@@ -62,6 +63,137 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertIn('disabled:__startPending.value', self.patched)
         self.assertIn('k.status=="CREATED"||k.status=="RUNNING"', self.patched)
         self.assertIn('k.page_train_type===t', self.patched)
+
+    def test_parameter_policy_state_machine_refs_exist(self):
+        for anchor in (
+            "__runtimeReady=ref(!0)",
+            "__runtimeBlockers=ref([])",
+            "__policyBootstrapPending=ref(!1)",
+            "__policyModeGuard=ref(!1)",
+            "__policyBootstrapGeneration=ref(0)",
+        ):
+            with self.subTest(anchor=anchor):
+                self.assertIn(anchor, self.patched)
+
+    def test_parameter_policy_bootstrap_uses_resolved_standard_snapshot(self):
+        self.assertIn(
+            '__policyBootstrapSnapshot=()=>{let R=clone(a.value||{});delete R.parameter_policy_profiles,delete R.parameter_policy_components,R.optimization_mode="standard";return __resolveGuiState(R)}',
+            self.patched,
+        )
+        self.assertIn('let m=n.value(R)', self.patched)
+        self.assertIn(
+            '__trainingRequest("/api/training/parameter-policy/bootstrap",__policyBootstrapSnapshot())',
+            self.patched,
+        )
+        self.assertNotIn(
+            '__trainingRequest("/api/training/parameter-policy/bootstrap",T())',
+            self.patched,
+        )
+
+    def test_parameter_policy_bootstrap_preserves_current_form_and_existing_policy(self):
+        self.assertIn(
+            '__hasPolicyState=()=>{let P=a.value&&a.value.parameter_policy_profiles,Cc=a.value&&a.value.parameter_policy_components;',
+            self.patched,
+        )
+        self.assertIn(
+            'Object.assign(a.value,{parameter_policy_profiles:clone(B.parameter_policy_profiles),parameter_policy_components:clone(B.parameter_policy_components)})',
+            self.patched,
+        )
+        self.assertNotIn('a.value=clone(B.parameter_policy_profiles)', self.patched)
+        self.assertIn(
+            'if(__hasPolicyState()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__refreshPreview();return}await __bootstrapPolicy()',
+            self.patched,
+        )
+
+    def test_parameter_policy_bootstrap_is_not_reentrant_while_pending(self):
+        start = self.patched.index('__bootstrapPolicy=async()=>')
+        end = self.patched.index(';const G=++__policyBootstrapGeneration.value', start)
+        prelude = self.patched[start:end]
+        self.assertIn('__policyBootstrapPending.value', prelude)
+        self.assertIn('__policyModeGuard.value', prelude)
+        self.assertIn('__hasPolicyState()', prelude)
+
+    def test_parameter_policy_bootstrap_cancels_preexisting_preview(self):
+        start = self.patched.index('__bootstrapPolicy=async()=>')
+        end = self.patched.index(',__syncPolicyMode=async()=>', start)
+        block = self.patched[start:end]
+        self.assertIn('clearTimeout(__previewTimer.value)', block)
+        self.assertIn('++__previewGeneration.value', block)
+        pending = block.index('__policyBootstrapPending.value=!0')
+        cancel = block.index('clearTimeout(__previewTimer.value)')
+        invalidate = block.index('++__previewGeneration.value')
+        self.assertLess(cancel, pending)
+        self.assertLess(invalidate, pending)
+
+    def test_parameter_policy_bootstrap_rejects_stale_mode_transitions(self):
+        self.assertIn('const G=++__policyBootstrapGeneration.value', self.patched)
+        self.assertGreaterEqual(
+            self.patched.count('G!==__policyBootstrapGeneration.value||!__isComponentMode()'),
+            2,
+        )
+        self.assertIn('++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1', self.patched)
+        self.assertIn(
+            'watch(()=>a.value&&a.value.optimization_mode,__syncPolicyMode)',
+            self.patched,
+        )
+
+    def test_existing_component_policy_cancels_stale_bootstrap(self):
+        sync_start = self.patched.index('__syncPolicyMode=async()=>')
+        sync_end = self.patched.index(',__refreshPreview=()=>', sync_start)
+        sync = self.patched[sync_start:sync_end]
+        self.assertIn(
+            'if(__hasPolicyState()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__refreshPreview();return}',
+            sync,
+        )
+
+    def test_parameter_policy_initial_mount_and_import_use_mode_sync(self):
+        self.assertIn(
+            'onMounted(async()=>{I(),y(),await nextTick(),await __syncPolicyMode()})',
+            self.patched,
+        )
+        self.assertIn(
+            '++__policyBootstrapGeneration.value,a.value=clone(B)',
+            self.patched,
+        )
+        self.assertIn('await nextTick(),await __syncPolicyMode()', self.patched)
+
+    def test_component_preview_invalidates_stale_readiness_before_debounce(self):
+        refresh = self.patched.index('__refreshPreview=()=>')
+        timer = self.patched.index('__previewTimer.value=setTimeout', refresh)
+        invalidate = self.patched.index('if(__isComponentMode())__runtimeReady.value=!1', refresh)
+        self.assertLess(invalidate, timer)
+        self.assertIn(
+            'if(__policyBootstrapPending.value)return',
+            self.patched,
+        )
+        self.assertIn(
+            '__runtimeReady.value=R.runtime_ready===!0',
+            self.patched,
+        )
+        self.assertIn(
+            '__runtimeBlockers.value=Array.isArray(R.runtime_blockers)?R.runtime_blockers:[]',
+            self.patched,
+        )
+        self.assertIn(
+            'd.value=__runtimeReady.value?[]:(__runtimeBlockers.value.length?__runtimeBlockers.value:["Component runtime is not ready."])',
+            self.patched,
+        )
+
+    def test_component_start_is_guarded_by_bootstrap_and_runtime_readiness(self):
+        guard = '__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value'
+        self.assertGreaterEqual(self.patched.count(guard), 2)
+        self.assertIn(
+            'disabled:__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value',
+            self.patched,
+        )
+
+    def test_switching_standard_does_not_delete_component_policy_state(self):
+        sync_start = self.patched.index('__syncPolicyMode=async()=>')
+        sync_end = self.patched.index(',__refreshPreview=()=>', sync_start)
+        sync = self.patched[sync_start:sync_end]
+        self.assertNotIn('delete a.value.parameter_policy_profiles', sync)
+        self.assertNotIn('delete a.value.parameter_policy_components', sync)
+        self.assertIn('__runtimeReady.value=!0,__runtimeBlockers.value=[]', sync)
 
     def test_patch_fails_closed_when_pinned_bundle_changes(self):
         with self.assertRaises(RuntimeError):
