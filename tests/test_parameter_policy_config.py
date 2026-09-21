@@ -11,6 +11,7 @@ from mikazuki.parameter_policy import (
     validate_parameter_policy,
 )
 from mikazuki.parameter_policy_bootstrap import bootstrap_parameter_policy_optimizer_profile
+from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 
 
@@ -334,8 +335,15 @@ class ParameterPolicyConfigTests(unittest.TestCase):
             sidecars=sidecars,
         )
         self.assertEqual(gui["optimization_mode"], "component")
-        self.assertEqual(gui["parameter_policy_profiles"], policy["optimizer_profiles"])
-        self.assertEqual(gui["parameter_policy_components"], policy["components"])
+        normalized = dict(gui)
+        normalize_parameter_policy_editor_state(normalized)
+        restored = canonicalize_parameter_policy(
+            {
+                "optimizer_profiles": normalized["parameter_policy_profiles"],
+                "components": normalized["parameter_policy_components"],
+            }
+        )
+        self.assertEqual(restored, policy)
 
     def test_trainer_rehydrate_missing_sidecar_never_falls_back_to_standard(self):
         with self.assertRaisesRegex(ValueError, "不能静默回退 Standard"):
