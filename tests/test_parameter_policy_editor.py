@@ -243,6 +243,45 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         )
         self.assertEqual(round_tripped, canonical)
 
+    def test_muon_editor_rehydrate_preserves_typed_args(self):
+        gui = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "momentum": 0.95,
+                        "weight_decay": 0.01,
+                        "weight_decouple": True,
+                        "nesterov": True,
+                        "ns_steps": 5,
+                        "ns_coeffs": "original",
+                        "use_adjusted_lr": False,
+                    },
+                }
+            },
+            "parameter_policy_components": {
+                component_id: {"train": False}
+                for component_id in get_model_component_profile("anima-finetune").components
+            },
+        }
+        encoded = encode_parameter_policy_editor_state(gui)
+        args = encoded["parameter_policy_profiles"]["muon"]["args"]
+        self.assertIsInstance(args["momentum"], float)
+        self.assertIsInstance(args["weight_decay"], float)
+        self.assertIs(args["weight_decouple"], True)
+        self.assertIs(args["nesterov"], True)
+        self.assertIsInstance(args["ns_steps"], int)
+        self.assertEqual(args["ns_coeffs"], "original")
+        self.assertIs(args["use_adjusted_lr"], False)
+
+        normalized = copy.deepcopy(encoded)
+        normalize_parameter_policy_editor_state(normalized)
+        self.assertEqual(
+            normalized["parameter_policy_profiles"]["muon"]["args"],
+            gui["parameter_policy_profiles"]["muon"]["args"],
+        )
+
     def test_editor_encoder_does_not_mutate_input(self):
         gui = {
             "optimization_mode": "component",
