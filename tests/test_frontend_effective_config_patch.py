@@ -103,6 +103,18 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             self.patched,
         )
 
+    def test_parameter_policy_bootstrap_cancels_preexisting_preview(self):
+        start = self.patched.index('__bootstrapPolicy=async()=>')
+        end = self.patched.index(',__syncPolicyMode=async()=>', start)
+        block = self.patched[start:end]
+        self.assertIn('clearTimeout(__previewTimer.value)', block)
+        self.assertIn('++__previewGeneration.value', block)
+        pending = block.index('__policyBootstrapPending.value=!0')
+        cancel = block.index('clearTimeout(__previewTimer.value)')
+        invalidate = block.index('++__previewGeneration.value')
+        self.assertLess(cancel, pending)
+        self.assertLess(invalidate, pending)
+
     def test_parameter_policy_bootstrap_rejects_stale_mode_transitions(self):
         self.assertIn('const G=++__policyBootstrapGeneration.value', self.patched)
         self.assertGreaterEqual(
