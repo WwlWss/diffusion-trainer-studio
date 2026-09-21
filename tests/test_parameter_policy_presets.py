@@ -4,7 +4,7 @@ from copy import deepcopy
 from pathlib import Path
 import unittest
 
-import toml
+import tomllib
 
 from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.optimizer_profiles import get_optimizer_capability
@@ -27,7 +27,8 @@ CURATED = {
 
 class ParameterPolicyPresetTests(unittest.TestCase):
     def _load(self, filename: str) -> dict:
-        return toml.loads((PRESET_DIR / filename).read_text(encoding="utf-8"))
+        with (PRESET_DIR / filename).open("rb") as handle:
+            return tomllib.load(handle)
 
     def _normalized_policy(self, preset: dict) -> tuple[dict, dict]:
         data = deepcopy(preset["data"])
