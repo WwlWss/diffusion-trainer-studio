@@ -23,7 +23,8 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertNotIn('stringify(parseParams(n.value(clone(m.value)),t))', self.patched)
 
     def test_raw_gui_normalization_does_not_mutate_watched_form_state(self):
-        self.assertIn('T=()=>{let _=clone(a.value);', self.patched)
+        self.assertIn('__resolveGuiState=_=>{let R=clone(_);', self.patched)
+        self.assertIn('T=()=>__resolveGuiState(a.value)', self.patched)
         self.assertNotIn('T=()=>{let _=a.value;', self.patched)
 
     def test_preview_mutable_state_uses_refs_not_const_reassignment(self):
@@ -74,11 +75,12 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             with self.subTest(anchor=anchor):
                 self.assertIn(anchor, self.patched)
 
-    def test_parameter_policy_bootstrap_uses_raw_standard_snapshot(self):
+    def test_parameter_policy_bootstrap_uses_resolved_standard_snapshot(self):
         self.assertIn(
-            '__policyBootstrapSnapshot=()=>{let R=clone(a.value||{});delete R.parameter_policy_profiles,delete R.parameter_policy_components,R.optimization_mode="standard";return R}',
+            '__policyBootstrapSnapshot=()=>{let R=clone(a.value||{});delete R.parameter_policy_profiles,delete R.parameter_policy_components,R.optimization_mode="standard";return __resolveGuiState(R)}',
             self.patched,
         )
+        self.assertIn('let m=n.value(R)', self.patched)
         self.assertIn(
             '__trainingRequest("/api/training/parameter-policy/bootstrap",__policyBootstrapSnapshot())',
             self.patched,
@@ -102,6 +104,14 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             'if(__hasPolicyState()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__refreshPreview();return}await __bootstrapPolicy()',
             self.patched,
         )
+
+    def test_parameter_policy_bootstrap_is_not_reentrant_while_pending(self):
+        start = self.patched.index('__bootstrapPolicy=async()=>')
+        end = self.patched.index(';const G=++__policyBootstrapGeneration.value', start)
+        prelude = self.patched[start:end]
+        self.assertIn('__policyBootstrapPending.value', prelude)
+        self.assertIn('__policyModeGuard.value', prelude)
+        self.assertIn('__hasPolicyState()', prelude)
 
     def test_parameter_policy_bootstrap_cancels_preexisting_preview(self):
         start = self.patched.index('__bootstrapPolicy=async()=>')
