@@ -152,6 +152,7 @@ RELEASE_CASES = (
                 "cache_text_encoder_outputs": True,
                 "cache_text_encoder_outputs_to_disk": True,
                 "anima_lora_checkpoint_mode": "standard",
+                "anima_lora_compile_mode": "off",
                 "blocks_to_swap": 0,
             }
         ),
