@@ -8,10 +8,14 @@ import tomllib
 
 from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.optimizer_profiles import get_optimizer_capability
-from mikazuki.parameter_policy import canonicalize_parameter_policy
+from mikazuki.parameter_policy import (
+    build_parameter_policy_sidecar,
+    canonicalize_parameter_policy,
+    parameter_policy_runtime_blockers,
+)
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
+from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
 from mikazuki.training_config import PAGE_BACKEND_MAP
-from mikazuki.training_request import prepare_request_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -94,17 +98,26 @@ class ParameterPolicyPresetTests(unittest.TestCase):
                     )
                     self.assertGreater(float(route["fallback_learning_rate"]), 0)
 
-    def test_curated_presets_prepare_without_parameter_policy_runtime_blockers(self):
+    def test_curated_presets_compile_sidecar_without_runtime_blockers(self):
         for filename, (page_type, backend) in CURATED.items():
             with self.subTest(filename=filename):
                 preset = self._load(filename)
-                prepared = prepare_request_config(
-                    deepcopy(preset["data"]),
+                data = deepcopy(preset["data"])
+                normalize_parameter_policy_editor_state(data)
+                policy_path, sidecars, policy = build_parameter_policy_sidecar(
+                    data,
                     page_type,
-                    launch=False,
                 )
-                self.assertEqual(prepared.train_type, backend)
-                self.assertEqual(prepared.runtime_blockers, [])
+                self.assertIsNotNone(policy_path)
+                self.assertIn(policy_path, sidecars)
+                self.assertIsNotNone(policy)
+                blockers = parameter_policy_runtime_blockers(
+                    policy,
+                    train_type=backend,
+                    effective_config=data,
+                    integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+                )
+                self.assertEqual(blockers, [])
 
 
 if __name__ == "__main__":
