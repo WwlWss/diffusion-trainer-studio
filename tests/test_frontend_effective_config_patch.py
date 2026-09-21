@@ -99,7 +99,7 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         )
         self.assertNotIn('a.value=clone(B.parameter_policy_profiles)', self.patched)
         self.assertIn(
-            '__hasPolicyState()?__refreshPreview():await __bootstrapPolicy()',
+            'if(__hasPolicyState()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__refreshPreview();return}await __bootstrapPolicy()',
             self.patched,
         )
 
@@ -125,6 +125,15 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertIn(
             'watch(()=>a.value&&a.value.optimization_mode,__syncPolicyMode)',
             self.patched,
+        )
+
+    def test_existing_component_policy_cancels_stale_bootstrap(self):
+        sync_start = self.patched.index('__syncPolicyMode=async()=>')
+        sync_end = self.patched.index(',__refreshPreview=()=>', sync_start)
+        sync = self.patched[sync_start:sync_end]
+        self.assertIn(
+            'if(__hasPolicyState()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__refreshPreview();return}',
+            sync,
         )
 
     def test_parameter_policy_initial_mount_and_import_use_mode_sync(self):
