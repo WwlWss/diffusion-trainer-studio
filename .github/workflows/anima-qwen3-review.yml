@@ -215,6 +215,7 @@ jobs:
             tests/test_parameter_policy_step6d_contract.py \
             tests/test_parameter_policy_step6e_contract.py \
             tests/test_parameter_policy_step6f_contract.py \
+            tests/test_parameter_policy_step7_contract.py \
             tests/test_parameter_policy_anima_staging.py \
             tests/test_parameter_policy_trainer_runtime_smoke.py \
             tests/test_parameter_policy_network_runtime_smoke.py \
