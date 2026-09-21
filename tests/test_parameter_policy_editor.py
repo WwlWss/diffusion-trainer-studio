@@ -275,7 +275,20 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         self.assertEqual(args["ns_coeffs"], "original")
         self.assertIs(args["use_adjusted_lr"], False)
 
-        normalized = copy.deepcopy(encoded)
+        canonical = canonicalize_parameter_policy(
+            {
+                "optimizer_profiles": gui["parameter_policy_profiles"],
+                "components": gui["parameter_policy_components"],
+            }
+        )
+        rehydrated = rehydrate_parameter_policy_editor(canonical)
+        rehydrated_args = rehydrated["parameter_policy_profiles"]["muon"]["args"]
+        self.assertEqual(rehydrated_args, args)
+        self.assertIsInstance(rehydrated_args["momentum"], float)
+        self.assertIs(rehydrated_args["weight_decouple"], True)
+        self.assertIsInstance(rehydrated_args["ns_steps"], int)
+
+        normalized = copy.deepcopy(rehydrated)
         normalize_parameter_policy_editor_state(normalized)
         self.assertEqual(
             normalized["parameter_policy_profiles"]["muon"]["args"],
