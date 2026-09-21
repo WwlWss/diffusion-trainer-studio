@@ -91,10 +91,32 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
                 optimization_mode: Schema.const("component").required()
             }}),
             Schema.object({{
-                parameter_policy_profiles: Schema.dict(Schema.object({{
-                    type: Schema.union({optimizer_choice_expr}).default("AdamW").description("Supported optimizers are selectable; restricted/planned entries remain readable for imported policies but cannot be newly selected."),
-                    args: Schema.dict(Schema.string()).description("优化器构造参数。左侧填写参数名，右侧只填写参数值；支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")
-                }})).description("Optimizer Profiles；字典 key 是自定义 Profile 名称，例如 main、muon、fallback。"),
+                parameter_policy_profiles: Schema.dict(Schema.intersect([
+                    Schema.object({{
+                        type: Schema.union({optimizer_choice_expr}).default("AdamW").description("优化器类型；仅 Component 已支持的优化器可新建使用，受限/计划项仅用于读取旧配置。")
+                    }}),
+                    Schema.union([
+                        Schema.intersect([
+                            Schema.object({{
+                                type: Schema.const("Muon").required()
+                            }}),
+                            Schema.object({{
+                                args: Schema.object({{
+                                    momentum: Schema.number().min(0).max(0.999999).step(0.01).description("Muon 动量，例如 0.95。"),
+                                    weight_decay: Schema.number().min(0).step(0.001).description("Muon 权重衰减，例如 0.01。"),
+                                    weight_decouple: Schema.boolean().description("使用 decoupled weight decay。"),
+                                    nesterov: Schema.boolean().description("启用 Nesterov momentum。"),
+                                    ns_steps: Schema.number().min(1).step(1).description("Newton-Schulz 迭代次数，例如 5。"),
+                                    ns_coeffs: Schema.union(["original", "quintic", "polar_express", "polar_express_safer"]).description("Newton-Schulz 系数预设。"),
+                                    use_adjusted_lr: Schema.boolean().description("按 Muon 实现启用 adjusted LR。")
+                                }}).description("Muon 参数；这些是 DTS 当前明确支持的 Muon 参数，直接填写即可，无需手工添加 key/value。")
+                            }})
+                        ]),
+                        Schema.object({{
+                            args: Schema.dict(Schema.string()).description("优化器构造参数。左侧填写参数名，右侧只填写参数值；支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")
+                        }})
+                    ])
+                ])).description("Optimizer Profiles；字典 key 是自定义 Profile 名称，例如 main、muon、fallback。"),
                 parameter_policy_components: Schema.object({{
 {components}
                 }}).description("后端组件；Train=false 为最终语义，关闭的组件会忽略残留的学习率/Profile。")
