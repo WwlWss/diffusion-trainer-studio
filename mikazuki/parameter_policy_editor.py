@@ -31,7 +31,7 @@ from mikazuki.training_config import PAGE_BACKEND_MAP
 
 _COMPONENT_MODE_ALIASES = {"component", "component-wise", "componentwise"}
 _NUMERIC_LITERAL = re.compile(
-    r"^[+-]?(?:(?:\\d+(?:\\.\\d*)?)|(?:\\.\\d+))(?:[eE][+-]?\\d+)?$"
+    r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$"
 )
 
 
@@ -168,6 +168,27 @@ def normalize_parameter_policy_editor_state(config: dict) -> None:
     config["parameter_policy_profiles"] = normalized_profiles
 
 
+def _validate_policy_backend_components(
+    policy: Mapping[str, Any],
+    train_type: str,
+) -> None:
+    backend = _backend_train_type(train_type)
+    expected = set(get_model_component_profile(backend).components)
+    actual = set(policy.get("components", {}))
+    if actual != expected:
+        missing = sorted(expected.difference(actual))
+        extra = sorted(actual.difference(expected))
+        details = []
+        if missing:
+            details.append("missing=" + ", ".join(missing))
+        if extra:
+            details.append("extra=" + ", ".join(extra))
+        raise ValueError(
+            f"Parameter Policy editor: Component set does not match backend {backend!r}: "
+            + "; ".join(details)
+        )
+
+
 def _existing_component_editor_policy(raw_config: Mapping[str, Any]) -> dict[str, Any] | None:
     mode = str(raw_config.get("optimization_mode") or "standard").strip().lower()
     if mode not in _COMPONENT_MODE_ALIASES:
@@ -208,6 +229,7 @@ def bootstrap_parameter_policy_editor(
 
     existing = _existing_component_editor_policy(raw_config)
     if existing is not None:
+        _validate_policy_backend_components(existing, page_train_type)
         return rehydrate_parameter_policy(existing)
 
     candidate = deepcopy(dict(raw_config))
@@ -237,6 +259,7 @@ def parameter_policy_editor_preview(
     """Build a model-free component-level preview for the future GUI surface."""
 
     canonical = validate_parameter_policy(policy)
+    _validate_policy_backend_components(canonical, train_type)
     metadata = parameter_policy_editor_metadata(train_type)
     component_meta = {row["id"]: row for row in metadata["components"]}
 
