@@ -1,0 +1,39 @@
+[metadata]
+name = "Component：SDXL LoRA — selective U-Net"
+version = "1.0"
+author = "Diffusion Trainer Studio"
+train_type = "sdxl-lora"
+description = "示例：只训练 SDXL LoRA 的 U-Net Attention/FFN 组件，并使用独立学习率；其余 U-Net 与文本编码器 LoRA 冻结。"
+
+[data]
+optimization_mode = "component"
+network_train_unet_only = false
+network_train_text_encoder_only = false
+mixed_precision = "bf16"
+
+[data.parameter_policy_profiles.main]
+type = "AdamW"
+
+[data.parameter_policy_profiles.main.args]
+
+[data.parameter_policy_components."unet.attention.adapter"]
+train = true
+optimizer_profile = "main"
+learning_rate = "1e-4"
+
+[data.parameter_policy_components."unet.feed_forward.adapter"]
+train = true
+optimizer_profile = "main"
+learning_rate = "7.5e-5"
+
+[data.parameter_policy_components."unet.conv.adapter"]
+train = false
+
+[data.parameter_policy_components."unet.other.adapter"]
+train = false
+
+[data.parameter_policy_components."text_encoder_1.adapter"]
+train = false
+
+[data.parameter_policy_components."text_encoder_2.adapter"]
+train = false
