@@ -37,17 +37,28 @@ def _component_row(component: dict) -> str:
         label, description = translated
     row_description = label if not description else f"{label}：{description}"
 
-    # Keep one real object instead of an intersect+union wrapper.  The pinned
-    # Schemastery renderer otherwise repeats the same group heading.  Frozen
-    # routes may keep stale LR/profile fields because the backend canonicalizer
-    # already makes Train=false authoritative.
-    return f"""Schema.object({{
-        train: Schema.boolean().default(false).description("是否训练该组件；关闭后后端会忽略残留的学习率和 Profile。"),
-        learning_rate: Schema.string().description("该组件的学习率，例如 1e-4。"),
-        optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback", Schema.string().description("自定义 Profile 名称")]).description("主 Optimizer Profile；常用名称可直接选择，也可切换到自定义名称。"),
-        fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main", Schema.string().description("自定义回退 Profile 名称")]).description("可选回退 Profile；常用名称可直接选择，也可使用自定义名称。"),
-        fallback_learning_rate: Schema.string().description("可选回退学习率；设置回退 Profile 时使用。")
-    }}).description({_js_string(row_description)}).collapse()"""
+    # Keep conditional visibility without attaching the same description to the
+    # outer intersect.  In the pinned renderer that avoids duplicate headings,
+    # while Train=false still hides stale LR/profile controls.
+    return f"""Schema.intersect([
+        Schema.object({{
+            train: Schema.boolean().default(false).description({_js_string(row_description + " 是否训练该组件；关闭后后端会忽略残留的学习率和 Profile。")})
+        }}),
+        Schema.union([
+            Schema.intersect([
+                Schema.object({{
+                    train: Schema.const(true).required()
+                }}),
+                Schema.object({{
+                    learning_rate: Schema.string().description("该组件的学习率，例如 1e-4。"),
+                    optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback", Schema.string().description("自定义 Profile 名称")]).description("主 Optimizer Profile；常用名称可直接选择，也可切换到自定义名称。"),
+                    fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main", Schema.string().description("自定义回退 Profile 名称")]).description("可选回退 Profile；常用名称可直接选择，也可使用自定义名称。"),
+                    fallback_learning_rate: Schema.string().description("可选回退学习率；设置回退 Profile 时使用。")
+                }})
+            ]),
+            Schema.object({{}})
+        ])
+    ]).collapse()"""
 
 def parameter_policy_schema_fragment(train_type: str) -> str:
     """Return the Parameter Policy editor as one Schemastery expression."""
@@ -102,8 +113,8 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
                             }}),
                             Schema.object({{
                                 args: Schema.object({{
-                                    momentum: Schema.number().min(0).max(0.999999).step(0.01).description("Muon 动量，例如 0.95。"),
-                                    weight_decay: Schema.number().min(0).step(0.001).description("Muon 权重衰减，例如 0.01。"),
+                                    momentum: Schema.number().min(0).description("Muon 动量，例如 0.95；必须小于 1，最终范围由后端严格校验。"),
+                                    weight_decay: Schema.number().min(0).description("Muon 权重衰减，例如 0.01。"),
                                     weight_decouple: Schema.boolean().description("使用 decoupled weight decay。"),
                                     nesterov: Schema.boolean().description("启用 Nesterov momentum。"),
                                     ns_steps: Schema.number().min(1).step(1).description("Newton-Schulz 迭代次数，例如 5。"),
