@@ -20,6 +20,7 @@ def _load_prepare_request_config(**overrides):
 
     namespace = {
         "train_utils": SimpleNamespace(fix_config_types=lambda config: None),
+        "normalize_parameter_policy_editor_state": lambda config: None,
         "build_parameter_policy_sidecar": lambda config, page_type: (None, {}, None),
         "build_multi_caption_sidecar": lambda config, page_type: (None, {}, None),
         "prepare_prompt_fields": lambda config, page_type: ({}, []),
@@ -44,6 +45,13 @@ def _prepared(config=None, train_type="sd-lora"):
         runtime_blockers=[],
         gpu_ids=None,
     )
+
+
+class ParameterPolicyEditorRequestContractTests(unittest.TestCase):
+    def test_editor_normalization_precedes_policy_sidecar_compile(self):
+        normalize = REQUEST.index("normalize_parameter_policy_editor_state(config)")
+        sidecar = REQUEST.index("build_parameter_policy_sidecar(config, page_type)")
+        self.assertLess(normalize, sidecar)
 
 
 class ParameterPolicyRequestContractTests(unittest.TestCase):

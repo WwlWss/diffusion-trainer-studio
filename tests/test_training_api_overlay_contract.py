@@ -32,6 +32,8 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
 
     def test_preview_export_rehydrate_and_run_live_in_one_api_module(self):
         for route in (
+            '@router.get("/training/parameter-policy/metadata")',
+            '@router.post("/training/parameter-policy/bootstrap")',
             '@router.post("/training/preview")',
             '@router.post("/training/export")',
             '@router.post("/training/rehydrate")',
@@ -43,6 +45,15 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn("rehydrate_trainer_config", TRAINING_API)
         self.assertIn("validate_prepared_config", TRAINING_API)
         self.assertIn("materialize_sidecars", TRAINING_API)
+
+    def test_parameter_policy_editor_api_is_host_only(self):
+        self.assertIn("parameter_policy_editor_metadata", TRAINING_API)
+        self.assertIn("bootstrap_parameter_policy_editor", TRAINING_API)
+        self.assertIn('data={"stage": "parameter-policy-metadata"}', TRAINING_API)
+        self.assertIn('data={"stage": "parameter-policy-bootstrap"}', TRAINING_API)
+        metadata = TRAINING_API.index('@router.get("/training/parameter-policy/metadata")')
+        preview = TRAINING_API.index('@router.post("/training/preview")')
+        self.assertLess(metadata, preview)
 
     def test_launch_does_not_reenter_process_normalization(self):
         self.assertIn("run_prepared_train", TRAINING_API)

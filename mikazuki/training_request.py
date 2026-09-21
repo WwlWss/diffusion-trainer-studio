@@ -11,6 +11,7 @@ from pathlib import Path
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
+from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
     parameter_policy_gpu_selection_blockers,
@@ -186,6 +187,7 @@ def prepare_request_config(
 ):
     del stamp
     train_utils.fix_config_types(config)
+    normalize_parameter_policy_editor_state(config)
     policy_path, policy_sidecars, policy = build_parameter_policy_sidecar(config, page_type)
     multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
