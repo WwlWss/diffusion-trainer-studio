@@ -78,6 +78,30 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn("hashlib.sha256(raw_content.encode", TRAINING_API)
         self.assertIn("materialize_sidecars(sidecars)", TRAINING_API)
 
+    def test_preview_and_export_build_payload_inside_error_boundary(self):
+        preview = TRAINING_API.index('@router.post("/training/preview")')
+        export = TRAINING_API.index('@router.post("/training/export")')
+        rehydrate = TRAINING_API.index('@router.post("/training/rehydrate")')
+
+        preview_block = TRAINING_API[preview:export]
+        export_block = TRAINING_API[export:rehydrate]
+
+        self.assertIn("payload = _prepared_payload(prepared)", preview_block)
+        self.assertLess(
+            preview_block.index("payload = _prepared_payload(prepared)"),
+            preview_block.index("except (KeyError, TypeError, ValueError, RuntimeError) as exc:"),
+        )
+        self.assertIn("payload = _prepared_payload(prepared)", export_block)
+        self.assertIn("materialize_sidecars(prepared.sidecars)", export_block)
+        self.assertLess(
+            export_block.index("payload = _prepared_payload(prepared)"),
+            export_block.index("materialize_sidecars(prepared.sidecars)"),
+        )
+        self.assertLess(
+            export_block.index("materialize_sidecars(prepared.sidecars)"),
+            export_block.index("except (KeyError, TypeError, ValueError, RuntimeError, OSError) as exc:"),
+        )
+
     def test_parameter_policy_bundle_and_runtime_readiness_are_exposed(self):
         self.assertIn('autosave" / "parameter-policy"', TRAINING_API)
         self.assertIn("def _prepared_parameter_policy_preview(prepared)", TRAINING_API)
