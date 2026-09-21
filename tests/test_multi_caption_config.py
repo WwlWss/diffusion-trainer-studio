@@ -24,6 +24,26 @@ class MultiCaptionConfigTests(unittest.TestCase):
         self.assertIsNone(policy)
         self.assertEqual(config, {"learning_rate": 1e-4})
 
+    def test_switching_to_multi_without_groups_bootstraps_editable_files_group(self):
+        config = {
+            "caption_mode": "multi",
+            "multi_caption_storage": "files",
+        }
+        state = extract_multi_caption_gui_state(config, "anima-finetune")
+        self.assertEqual(
+            state["groups"],
+            {
+                "caption": {
+                    "enabled": True,
+                    "weight": 1.0,
+                    "extension": ".txt",
+                    "processing": {},
+                }
+            },
+        )
+        policy = canonicalize_multi_caption_policy(state)
+        self.assertEqual(policy["groups"]["caption"]["source"]["extension"], ".txt")
+
     def test_files_policy_is_canonical_and_group_order_does_not_change_hash(self):
         a = {
             "caption_mode": "multi",
