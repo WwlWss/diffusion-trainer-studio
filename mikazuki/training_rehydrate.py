@@ -134,14 +134,15 @@ def rehydrate_trainer_config(
     else:
         multi_caption_gui = {"caption_mode": "standard"}
 
-    if _as_bool(config.pop("lowram", False)):
-        config["memory_mode"] = "lowram"
-        config.pop("highvram", None)
-    elif _as_bool(config.pop("highvram", False)):
-        config["memory_mode"] = "highvram"
-    else:
-        config.pop("highvram", None)
-        config["memory_mode"] = "auto"
+    if page_train_type != "lora-basic":
+        if _as_bool(config.pop("lowram", False)):
+            config["memory_mode"] = "lowram"
+            config.pop("highvram", None)
+        elif _as_bool(config.pop("highvram", False)):
+            config["memory_mode"] = "highvram"
+        else:
+            config.pop("highvram", None)
+            config["memory_mode"] = "auto"
 
     sd_pages = {"lora-basic", "lora-master", "sd-lora", "sdxl-lora", "dreambooth", "sd-dreambooth"}
     if page_train_type in sd_pages:
