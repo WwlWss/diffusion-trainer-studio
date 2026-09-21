@@ -261,6 +261,22 @@ def _normalize_groups(
     return groups
 
 
+def _default_groups_for_storage(storage_mode: str) -> dict[str, dict[str, Any]]:
+    """Return one immediately valid editable group for a newly enabled Multi mode."""
+
+    base: dict[str, Any] = {
+        "enabled": True,
+        "weight": 1.0,
+        "processing": {},
+    }
+    if storage_mode == "files":
+        base["extension"] = ".txt"
+    elif storage_mode == "multiline":
+        base["line"] = 1
+    elif storage_mode in {"json", "jsonl"}:
+        base["key"] = "caption"
+    return {"caption": base}
+
 def extract_multi_caption_gui_state(
     config: dict,
     page_train_type: str | None,
@@ -279,16 +295,19 @@ def extract_multi_caption_gui_state(
         "profile": processing_profile_for_page(page_train_type),
     }
     if storage_mode == "files":
-        state["groups"] = raw.get("multi_caption_file_groups")
+        groups = raw.get("multi_caption_file_groups")
+        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
     elif storage_mode == "multiline":
         state["extension"] = raw.get("multi_caption_line_extension")
-        state["groups"] = raw.get("multi_caption_line_groups")
+        groups = raw.get("multi_caption_line_groups")
+        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
     elif storage_mode in {"json", "jsonl"}:
         state["path"] = raw.get("multi_caption_json_path")
         state["root"] = raw.get("multi_caption_json_root")
         state["image_key_mode"] = raw.get("multi_caption_image_key_mode")
         state["jsonl_image_key_field"] = raw.get("multi_caption_jsonl_image_key_field")
-        state["groups"] = raw.get("multi_caption_json_groups")
+        groups = raw.get("multi_caption_json_groups")
+        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
     else:
         raise ValueError(f"Multi-Caption: 未知 Storage Mode {storage_mode!r}。")
     return state
