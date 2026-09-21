@@ -44,8 +44,8 @@ def _component_row(component: dict) -> str:
     return f"""Schema.object({{
         train: Schema.boolean().default(false).description("是否训练该组件；关闭后后端会忽略残留的学习率和 Profile。"),
         learning_rate: Schema.string().description("该组件的学习率，例如 1e-4。"),
-        optimizer_profile: Schema.string().description("主 Optimizer Profile 名称；填写上方已定义的 Profile 名称。"),
-        fallback_optimizer_profile: Schema.string().description("可选回退 Profile；Muon 等需要 eligibility 检查的优化器可在不适用参数上回退。"),
+        optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback", Schema.string().description("自定义 Profile 名称")]).description("主 Optimizer Profile；常用名称可直接选择，也可切换到自定义名称。"),
+        fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main", Schema.string().description("自定义回退 Profile 名称")]).description("可选回退 Profile；常用名称可直接选择，也可使用自定义名称。"),
         fallback_learning_rate: Schema.string().description("可选回退学习率；设置回退 Profile 时使用。")
     }}).description({_js_string(row_description)}).collapse()"""
 
