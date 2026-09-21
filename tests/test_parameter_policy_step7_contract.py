@@ -270,12 +270,6 @@ def _project_rehydrated_gui_for_page(
                 f"SD3 rehydrate unexpectedly produced memory_mode={mode!r}."
             )
         projected["lowram"] = False
-    elif page_type == "lora-basic":
-        # The Basic page intentionally does not expose the expert SD LoRA
-        # semantic controls restored by the shared rehydrator. Schemastery
-        # projects these unknown fields away before the next request.
-        for key in ("lora_target", "memory_mode", "sd_max_token_length_mode"):
-            projected.pop(key, None)
     return projected
 
 
@@ -588,21 +582,16 @@ class ParameterPolicyStep7BasicPageAcceptanceTests(unittest.TestCase):
         )
         self.assertTrue(preview_a["runtime_ready"])
 
-        rehydrated_raw = rehydrate_trainer_config(
+        rehydrated = rehydrate_trainer_config(
             deepcopy(prepared_a.config),
             case.page_type,
             sidecars=deepcopy(prepared_a.sidecars),
         )
-        self.assertEqual(rehydrated_raw["lora_target"], "unet_text_encoder")
-        self.assertEqual(rehydrated_raw["memory_mode"], "auto")
-        self.assertEqual(rehydrated_raw["sd_max_token_length_mode"], "75")
-
-        rehydrated = _project_rehydrated_gui_for_page(
-            rehydrated_raw,
-            case.page_type,
-        )
-        for key in ("lora_target", "memory_mode", "sd_max_token_length_mode"):
-            self.assertNotIn(key, rehydrated)
+        self.assertEqual(rehydrated["lora_target"], "unet_text_encoder")
+        self.assertEqual(rehydrated["sd_max_token_length_mode"], "75")
+        self.assertNotIn("memory_mode", rehydrated)
+        self.assertNotIn("lowram", rehydrated)
+        self.assertNotIn("highvram", rehydrated)
         self.assertEqual(rehydrated["optimization_mode"], "component")
         self.assertTrue(rehydrated["parameter_policy_profiles"])
         self.assertTrue(rehydrated["parameter_policy_components"])
