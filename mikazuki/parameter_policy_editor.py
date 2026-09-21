@@ -53,20 +53,22 @@ def parameter_policy_editor_metadata(train_type: str) -> dict[str, Any]:
     profile = get_model_component_profile(backend)
 
     optimizer_types = []
+    optimizer_capabilities = []
     for capability in list_optimizer_capabilities():
-        if capability.component_support != "supported":
-            continue
-        optimizer_types.append(
-            {
-                "type": capability.name,
-                "supports_group_lr": capability.supports_group_lr,
-                "uses_external_scheduler": capability.uses_external_scheduler,
-                "lr_semantics": capability.lr_semantics,
-                "dependency": capability.dependency,
-                "eligibility_policy": capability.eligibility_policy,
-                "requires_parameter_eligibility": capability.requires_parameter_eligibility,
-            }
-        )
+        row = {
+            "type": capability.name,
+            "component_support": capability.component_support,
+            "supports_group_lr": capability.supports_group_lr,
+            "uses_external_scheduler": capability.uses_external_scheduler,
+            "lr_semantics": capability.lr_semantics,
+            "dependency": capability.dependency,
+            "eligibility_policy": capability.eligibility_policy,
+            "requires_parameter_eligibility": capability.requires_parameter_eligibility,
+            "restriction": capability.restriction,
+        }
+        optimizer_capabilities.append(row)
+        if capability.component_support == "supported":
+            optimizer_types.append(deepcopy(row))
 
     components = []
     for component_id in sorted(profile.components):
@@ -84,6 +86,7 @@ def parameter_policy_editor_metadata(train_type: str) -> dict[str, Any]:
         "version": PARAMETER_POLICY_VERSION,
         "train_type": backend,
         "optimizer_types": optimizer_types,
+        "optimizer_capabilities": optimizer_capabilities,
         "components": components,
     }
 
@@ -125,6 +128,103 @@ def _parse_editor_literal(value: Any, *, field: str) -> Any:
         raise ValueError(
             f"Parameter Policy editor: {field} is not a valid literal: {value!r}."
         ) from exc
+
+
+def _format_editor_literal(value: Any, *, field: str) -> str:
+    """Encode one canonical optimizer arg into the legacy string editor.
+
+    The result must round-trip through _parse_editor_literal without changing
+    type or value. Bare strings are preserved when they are unambiguous; values
+    that look like literals are quoted so a canonical string such as "false"
+    cannot silently become a boolean on the next request.
+    """
+
+    if isinstance(value, str):
+        candidate = value
+        parsed = _parse_editor_literal(candidate, field=field)
+        if type(parsed) is str and parsed == value:
+            return candidate
+        candidate = repr(value)
+    elif value is None:
+        candidate = "null"
+    elif value is True:
+        candidate = "true"
+    elif value is False:
+        candidate = "false"
+    else:
+        candidate = repr(value)
+
+    parsed = _parse_editor_literal(candidate, field=field)
+    if type(parsed) is not type(value) or parsed != value:
+        raise ValueError(
+            f"Parameter Policy editor: {field} cannot be represented losslessly "
+            f"by the legacy string editor: {value!r}."
+        )
+    return candidate
+
+
+def encode_parameter_policy_editor_state(gui_state: Mapping[str, Any]) -> dict[str, Any]:
+    """Encode canonical/native Component GUI state for legacy Schemastery.
+
+    Only fields rendered as Schema.string() are converted. Structural booleans
+    and optimizer/profile names remain native strings/bools.
+    """
+
+    if not isinstance(gui_state, Mapping):
+        raise ValueError("Parameter Policy editor: GUI state must be a mapping.")
+
+    encoded = deepcopy(dict(gui_state))
+    profiles = encoded.get("parameter_policy_profiles")
+    if profiles is not None:
+        if not isinstance(profiles, Mapping):
+            raise ValueError("Parameter Policy editor: Optimizer Profiles must be an object.")
+        encoded_profiles: dict[Any, Any] = {}
+        for raw_name, raw_profile in profiles.items():
+            if not isinstance(raw_profile, Mapping):
+                raise ValueError(
+                    f"Parameter Policy editor: Optimizer Profile {raw_name!r} must be an object."
+                )
+            profile = deepcopy(dict(raw_profile))
+            args = profile.get("args")
+            if args is not None:
+                if not isinstance(args, Mapping):
+                    raise ValueError(
+                        f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
+                    )
+                profile["args"] = {
+                    key: _format_editor_literal(
+                        value,
+                        field=f"parameter_policy_profiles.{raw_name}.args.{key}",
+                    )
+                    for key, value in args.items()
+                }
+            encoded_profiles[raw_name] = profile
+        encoded["parameter_policy_profiles"] = encoded_profiles
+
+    components = encoded.get("parameter_policy_components")
+    if components is not None:
+        if not isinstance(components, Mapping):
+            raise ValueError("Parameter Policy editor: Components must be an object.")
+        encoded_components: dict[Any, Any] = {}
+        for component_id, raw_route in components.items():
+            if not isinstance(raw_route, Mapping):
+                raise ValueError(
+                    f"Parameter Policy editor: Component {component_id!r} must be an object."
+                )
+            route = deepcopy(dict(raw_route))
+            for key in ("learning_rate", "fallback_learning_rate"):
+                if key in route and route[key] is not None:
+                    route[key] = str(route[key])
+            encoded_components[component_id] = route
+        encoded["parameter_policy_components"] = encoded_components
+
+    return encoded
+
+
+def rehydrate_parameter_policy_editor(policy: object) -> dict[str, Any]:
+    """Return a policy as legacy-Schemastery-safe Component editor state."""
+
+    return encode_parameter_policy_editor_state(rehydrate_parameter_policy(policy))
 
 
 def normalize_parameter_policy_editor_state(config: dict) -> None:
@@ -253,7 +353,7 @@ def bootstrap_parameter_policy_editor(
     existing = _existing_component_editor_policy(raw_config)
     if existing is not None:
         _validate_policy_backend_components(existing, page_train_type)
-        return rehydrate_parameter_policy(existing)
+        return rehydrate_parameter_policy_editor(existing)
 
     candidate = deepcopy(dict(raw_config))
     for key in PARAMETER_POLICY_GUI_KEYS:
@@ -272,7 +372,7 @@ def bootstrap_parameter_policy_editor(
         resolve_backend=resolve_backend,
     )
     _validate_bootstrap_optimizer_support(policy)
-    return rehydrate_parameter_policy(policy)
+    return rehydrate_parameter_policy_editor(policy)
 
 
 def parameter_policy_editor_preview(
@@ -321,7 +421,9 @@ def parameter_policy_editor_preview(
 
 __all__ = [
     "bootstrap_parameter_policy_editor",
+    "encode_parameter_policy_editor_state",
     "normalize_parameter_policy_editor_state",
     "parameter_policy_editor_metadata",
     "parameter_policy_editor_preview",
+    "rehydrate_parameter_policy_editor",
 ]
