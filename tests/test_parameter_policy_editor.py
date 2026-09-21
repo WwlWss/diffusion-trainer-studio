@@ -193,7 +193,7 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         self.assertEqual(args["eps"], "1e-08")
         self.assertEqual(args["amsgrad"], "false")
         self.assertEqual(args["optional"], "null")
-        self.assertEqual(args["betas"], "(0.9, 0.95)")
+        self.assertEqual(args["betas"], "[0.9, 0.95]")
         self.assertEqual(args["preset"], "quintic")
         self.assertEqual(args["literal_string"], "'false'")
         self.assertEqual(args["numeric_string"], "'1e-8'")
