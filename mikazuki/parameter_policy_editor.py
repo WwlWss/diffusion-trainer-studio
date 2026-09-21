@@ -191,13 +191,20 @@ def encode_parameter_policy_editor_state(gui_state: Mapping[str, Any]) -> dict[s
                     raise ValueError(
                         f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
                     )
-                profile["args"] = {
-                    key: _format_editor_literal(
-                        value,
-                        field=f"parameter_policy_profiles.{raw_name}.args.{key}",
-                    )
-                    for key, value in args.items()
-                }
+                # Muon has a dedicated typed Schemastery form.  Keep its
+                # canonical number/bool/string values native across bootstrap
+                # and rehydrate; only legacy generic dict editors need string
+                # literals for lossless round-trips.
+                if str(profile.get("type") or "").strip().casefold() == "muon":
+                    profile["args"] = deepcopy(dict(args))
+                else:
+                    profile["args"] = {
+                        key: _format_editor_literal(
+                            value,
+                            field=f"parameter_policy_profiles.{raw_name}.args.{key}",
+                        )
+                        for key, value in args.items()
+                    }
             encoded_profiles[raw_name] = profile
         encoded["parameter_policy_profiles"] = encoded_profiles
 
