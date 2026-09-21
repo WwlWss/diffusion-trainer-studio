@@ -30,6 +30,7 @@ Diffusion Trainer Studio (DTS) is a WebUI, training-script preset collection and
 - Anima and Anima 2.9B LoRA and full finetuning.
 - Optional Qwen3 text-encoder joint finetuning for Anima full training.
 - One authoritative effective-config pipeline shared by Preview, Import, Export and Start.
+- Opt-in Component-wise Parameter Policy for the ten qualified training backends, with independent optimizer/LR routing and fail-closed runtime readiness.
 - Expanded anime taggers including AnimeTimm, DanbooruTagQuery and PixAI while retaining the existing WD / CL workflows.
 - Runtime validation for model family, training target, cache, dataset and memory-mode combinations.
 - Contract and regression tests for training pages, schemas, APIs and trainer routing.
@@ -50,6 +51,8 @@ The WebUI currently exposes these main paths:
 | SD3 / SD3.5 | Yes | — |
 
 Anima has additional controls documented in [ANIMA.md](ANIMA.md), including 2.9B model selection, block swapping and optional Qwen3 joint training.
+
+Component-wise optimizer/LR routing is documented in [Parameter Policy](docs/parameter-policy.md). Standard mode remains the default; Component mode is opt-in and currently qualified on the ten backends listed in that guide.
 
 ## WebUI
 
