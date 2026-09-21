@@ -254,9 +254,13 @@ def _prepare_policy_request(raw, page_type):
     return prepared, policy
 ~~~
 
-The Step 7E fixture intentionally excludes Multi-Caption and prompt-generation
-controls. Those sidecar paths have their own existing tests; 7E is closing the
-Parameter Policy regression surface, not replacing all request tests.
+The Step 7E fixture intentionally excludes non-Standard Multi-Caption and
+prompt-generation controls. The dependency-light helper still calls
+`build_multi_caption_sidecar()` so rehydrate's `caption_mode="standard"`
+sentinel is normalized exactly like the real request pipeline. Non-Standard
+Multi-Caption and prompt sidecars retain their own existing tests; 7E is
+closing the Parameter Policy regression surface, not replacing all request
+tests.
 
 This helper must preserve the real ordering:
 
@@ -413,9 +417,11 @@ Require semantic identity:
 - same target availability for every `Train=true` route;
 - editor Preview summaries are equal.
 
-If exact effective-config equality exposes an intentional inverse-mapping
-normalization, isolate that one documented field instead of broadly weakening
-the assertion.
+Exact effective-config comparison permits one already-documented inverse
+mapping normalization only: rehydrate emits `memory_mode="auto"` when
+`lowram/highvram` are absent, and re-preparation materializes those two flags
+as explicit `False`. Normalize only absent-vs-False for `lowram` and
+`highvram`; all other effective fields remain exact.
 
 # 7E5 — Cross-layer matrix closure
 
