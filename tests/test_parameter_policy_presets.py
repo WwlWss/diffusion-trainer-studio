@@ -6,7 +6,10 @@ import unittest
 
 import tomllib
 
-from mikazuki.model_component_profiles import get_model_component_profile
+from mikazuki.model_component_profiles import (
+    get_model_component_profile,
+    resolve_training_target_profile,
+)
 from mikazuki.optimizer_profiles import get_optimizer_capability
 from mikazuki.parameter_policy import (
     build_parameter_policy_sidecar,
@@ -15,11 +18,15 @@ from mikazuki.parameter_policy import (
 )
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
-from mikazuki.training_config import PAGE_BACKEND_MAP
+from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
 
 
 ROOT = Path(__file__).resolve().parents[1]
 PRESET_DIR = ROOT / "config" / "presets"
+
+def _resolve_backend(config: dict, requested: str):
+    return requested, f"./{requested}.py"
+
 
 CURATED = {
     "component-flux-finetune-muon.toml": ("flux-finetune", "flux-finetune"),
@@ -98,7 +105,7 @@ class ParameterPolicyPresetTests(unittest.TestCase):
                     )
                     self.assertGreater(float(route["fallback_learning_rate"]), 0)
 
-    def test_curated_presets_compile_sidecar_without_runtime_blockers(self):
+    def test_curated_presets_compile_effective_config_without_runtime_or_target_blockers(self):
         for filename, (page_type, backend) in CURATED.items():
             with self.subTest(filename=filename):
                 preset = self._load(filename)
@@ -111,13 +118,64 @@ class ParameterPolicyPresetTests(unittest.TestCase):
                 self.assertIsNotNone(policy_path)
                 self.assertIn(policy_path, sidecars)
                 self.assertIsNotNone(policy)
+
+                prepared = prepare_training_config(
+                    data,
+                    page_train_type=page_type,
+                    resolve_backend=_resolve_backend,
+                    launch=False,
+                )
+                self.assertEqual(prepared.train_type, backend)
+
                 blockers = parameter_policy_runtime_blockers(
                     policy,
-                    train_type=backend,
-                    effective_config=data,
+                    train_type=prepared.train_type,
+                    effective_config=prepared.config,
                     integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
                 )
                 self.assertEqual(blockers, [])
+
+                target = resolve_training_target_profile(
+                    prepared.train_type,
+                    prepared.config,
+                )
+                for component_id, route in policy["components"].items():
+                    if route.get("train"):
+                        self.assertTrue(
+                            target.is_available(component_id),
+                            (
+                                f"{filename}: {component_id} is Train=true but "
+                                "unavailable after effective-config normalization"
+                            ),
+                        )
+
+    def test_sdxl_lora_preset_overrides_stale_public_target_state(self):
+        preset = self._load("component-sdxl-lora-selective.toml")
+        current = {"lora_target": "text_encoder"}
+        merged = {**current, **deepcopy(preset["data"])}
+        normalize_parameter_policy_editor_state(merged)
+        _path, _sidecars, policy = build_parameter_policy_sidecar(
+            merged,
+            preset["metadata"]["train_type"],
+        )
+        prepared = prepare_training_config(
+            merged,
+            page_train_type=preset["metadata"]["train_type"],
+            resolve_backend=_resolve_backend,
+            launch=False,
+        )
+        target = resolve_training_target_profile(
+            prepared.train_type,
+            prepared.config,
+        )
+        self.assertTrue(prepared.config["network_train_unet_only"])
+        self.assertNotIn("network_train_text_encoder_only", prepared.config)
+        self.assertTrue(target.is_available("unet.attention.adapter"))
+        self.assertTrue(target.is_available("unet.feed_forward.adapter"))
+        self.assertFalse(target.is_available("text_encoder_1.adapter"))
+        self.assertFalse(target.is_available("text_encoder_2.adapter"))
+        self.assertTrue(policy["components"]["unet.attention.adapter"]["train"])
+        self.assertTrue(policy["components"]["unet.feed_forward.adapter"]["train"])
 
 
 if __name__ == "__main__":
