@@ -202,7 +202,7 @@ __policyBootstrapSnapshot=()=>{
     delete R.parameter_policy_profiles;
     delete R.parameter_policy_components;
     R.optimization_mode="standard";
-    return R;
+    return __resolveGuiState(R);
 }
 ~~~
 
@@ -220,6 +220,7 @@ __bootstrapPolicy=async()=>{ ... }
 Required behavior:
 
 1. return immediately when:
+   - `__policyBootstrapPending` is active;
    - `__policyModeGuard` is active;
    - mode is no longer Component;
    - a non-empty policy already exists;
