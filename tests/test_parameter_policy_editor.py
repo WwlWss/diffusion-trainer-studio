@@ -5,11 +5,14 @@ import unittest
 
 from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.optimizer_profiles import list_optimizer_capabilities
+from mikazuki.parameter_policy import canonicalize_parameter_policy
 from mikazuki.parameter_policy_editor import (
     bootstrap_parameter_policy_editor,
+    encode_parameter_policy_editor_state,
     normalize_parameter_policy_editor_state,
     parameter_policy_editor_metadata,
     parameter_policy_editor_preview,
+    rehydrate_parameter_policy_editor,
 )
 from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
 
@@ -142,6 +145,93 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         self.assertEqual(args["label"], "quintic")
         self.assertEqual(args["quoted"], "hello")
 
+    def test_canonical_editor_round_trip_is_lossless(self):
+        component_ids = sorted(get_model_component_profile("sd-lora").components)
+        canonical = canonicalize_parameter_policy(
+            {
+                "optimizer_profiles": {
+                    "main": {
+                        "type": "AdamW",
+                        "args": {
+                            "eps": 1e-8,
+                            "amsgrad": False,
+                            "optional": None,
+                            "betas": (0.9, 0.95),
+                            "preset": "quintic",
+                            "literal_string": "false",
+                            "numeric_string": "1e-8",
+                            "list_string": "[1, 2]",
+                        },
+                    }
+                },
+                "components": {
+                    component_id: (
+                        {
+                            "train": True,
+                            "optimizer_profile": "main",
+                            "learning_rate": 1e-4,
+                        }
+                        if index == 0
+                        else {"train": False}
+                    )
+                    for index, component_id in enumerate(component_ids)
+                },
+            }
+        )
+        editor = rehydrate_parameter_policy_editor(
+            {
+                "version": 1,
+                "optimizer_profiles": canonical["optimizer_profiles"],
+                "components": canonical["components"],
+            }
+        )
+        self.assertIsInstance(
+            editor["parameter_policy_components"][component_ids[0]]["learning_rate"],
+            str,
+        )
+        args = editor["parameter_policy_profiles"]["main"]["args"]
+        self.assertEqual(args["eps"], "1e-08")
+        self.assertEqual(args["amsgrad"], "false")
+        self.assertEqual(args["optional"], "null")
+        self.assertEqual(args["betas"], "[0.9, 0.95]")
+        self.assertEqual(args["preset"], "quintic")
+        self.assertEqual(args["literal_string"], "'false'")
+        self.assertEqual(args["numeric_string"], "'1e-8'")
+        self.assertEqual(args["list_string"], "'[1, 2]'")
+
+        normalized = copy.deepcopy(editor)
+        normalize_parameter_policy_editor_state(normalized)
+        round_tripped = canonicalize_parameter_policy(
+            {
+                "optimizer_profiles": normalized["parameter_policy_profiles"],
+                "components": normalized["parameter_policy_components"],
+            }
+        )
+        self.assertEqual(round_tripped, canonical)
+
+    def test_editor_encoder_does_not_mutate_input(self):
+        gui = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "main": {
+                    "type": "AdamW",
+                    "args": {"eps": 1e-8, "name": "quintic"},
+                }
+            },
+            "parameter_policy_components": {
+                component_id: {"train": False}
+                for component_id in get_model_component_profile("sd-lora").components
+            },
+        }
+        before = copy.deepcopy(gui)
+        encoded = encode_parameter_policy_editor_state(gui)
+        self.assertEqual(gui, before)
+        self.assertIsNot(encoded, gui)
+        self.assertEqual(
+            encoded["parameter_policy_profiles"]["main"]["args"]["eps"],
+            "1e-08",
+        )
+
     def test_malformed_structured_literal_fails_closed_with_context(self):
         config = {
             "optimization_mode": "component",
@@ -212,7 +302,7 @@ class ParameterPolicyEditorBootstrapTests(unittest.TestCase):
         self.assertEqual(gui["optimization_mode"], "component")
         self.assertEqual(
             gui["parameter_policy_profiles"]["main"]["args"]["eps"],
-            1e-8,
+            "1e-08",
         )
         self.assertEqual(
             set(gui["parameter_policy_components"]),

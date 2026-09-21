@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 
 from mikazuki.multi_caption_config import rehydrate_multi_caption_policy
-from mikazuki.parameter_policy import rehydrate_parameter_policy, validate_parameter_policy
+from mikazuki.parameter_policy import validate_parameter_policy
 from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
 
 
@@ -102,11 +102,16 @@ def rehydrate_trainer_config(
         except json.JSONDecodeError as exc:
             raise ValueError(f"Parameter Policy sidecar JSON 无效: {path_key}: {exc}") from exc
         policy = validate_parameter_policy(raw_policy)
-        parameter_policy_gui = rehydrate_parameter_policy(policy)
+        # Lazy import avoids training_config -> training_gui_semantics ->
+        # training_rehydrate -> parameter_policy_editor ->
+        # parameter_policy_bootstrap -> training_config during module startup.
+        from mikazuki.parameter_policy_editor import rehydrate_parameter_policy_editor
+
+        parameter_policy_gui = rehydrate_parameter_policy_editor(policy)
     else:
-        # Step 2 has no public Parameter Policy GUI yet. Keep Standard rehydrate
-        # byte-for-byte semantic surface unchanged and add policy GUI state only
-        # when a real policy sidecar is present.
+        # Standard rehydrate remains byte-for-byte semantic surface unchanged;
+        # add Component editor state only when a real Parameter Policy sidecar
+        # is present.
         parameter_policy_gui = {}
 
     multi_caption_path = config.pop("multi_caption_config", None)

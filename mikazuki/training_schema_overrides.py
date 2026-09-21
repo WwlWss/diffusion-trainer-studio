@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import re
 
+from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+from mikazuki.parameter_policy_schema import wrap_parameter_policy_editor
+from mikazuki.training_config import PAGE_BACKEND_MAP
 from mikazuki.training_schema_factory import (
     fixed_flux_family_schema as _fixed_flux_family_schema,
     fixed_sd_schema as _fixed_sd_schema,
@@ -90,6 +93,9 @@ def override_raw_schema(name: str, content: str) -> str:
             '        dynamo_backend: Schema.string().default("inductor").description("Accelerate dynamo backend；trainer 默认 inductor"),',
             1,
         )
+    backend = str(PAGE_BACKEND_MAP.get(name, name))
+    if backend in PARAMETER_POLICY_RUNTIME_TRAIN_TYPES:
+        content = wrap_parameter_policy_editor(content, backend)
     return content
 
 

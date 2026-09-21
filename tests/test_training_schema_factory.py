@@ -27,6 +27,7 @@ const Schema = {
   number() { return decorate({type: "number"}); },
   boolean() { return decorate({type: "boolean"}); },
   array(inner) { return decorate({type: "array", inner}); },
+  dict(inner) { return decorate({type: "dict", inner}); },
 };
 
 function collectKeys(schema, out = []) {
