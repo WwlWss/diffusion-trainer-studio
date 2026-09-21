@@ -187,6 +187,19 @@ RELEASE_CASES = (
     ),
 )
 
+LORA_BASIC_CASE = ReleaseCase(
+    "lora-basic",
+    "sd-lora",
+    _frozen(
+        {
+            "optimizer_type": "AdamW8bit",
+            "unet_lr": "2e-4",
+            "text_encoder_lr": "5e-5",
+        }
+    ),
+)
+
+
 def _resolve_backend(config: dict, requested: str):
     del config
     return requested, f"./{requested}.py"
@@ -257,6 +270,12 @@ def _project_rehydrated_gui_for_page(
                 f"SD3 rehydrate unexpectedly produced memory_mode={mode!r}."
             )
         projected["lowram"] = False
+    elif page_type == "lora-basic":
+        # The Basic page intentionally does not expose the expert SD LoRA
+        # semantic controls restored by the shared rehydrator. Schemastery
+        # projects these unknown fields away before the next request.
+        for key in ("lora_target", "memory_mode", "sd_max_token_length_mode"):
+            projected.pop(key, None)
     return projected
 
 
@@ -446,6 +465,191 @@ class ParameterPolicyStep7ReleaseMatrixTests(unittest.TestCase):
                     prepared_b.runtime_blockers,
                 )
                 self.assertEqual(preview_a, preview_b)
+
+
+class ParameterPolicyStep7BasicPageAcceptanceTests(unittest.TestCase):
+    def test_lora_basic_standard_states_are_identical(self):
+        case = LORA_BASIC_CASE
+        raw_missing = deepcopy(dict(case.standard_raw))
+        raw_explicit = {
+            **deepcopy(dict(case.standard_raw)),
+            "optimization_mode": "standard",
+        }
+        raw_stale = _stale_standard_state(case.standard_raw)
+
+        prepared_missing, policy_missing = _prepare_policy_request(
+            raw_missing,
+            case.page_type,
+        )
+        prepared_explicit, policy_explicit = _prepare_policy_request(
+            raw_explicit,
+            case.page_type,
+        )
+        prepared_stale, policy_stale = _prepare_policy_request(
+            raw_stale,
+            case.page_type,
+        )
+
+        self.assertIsNone(policy_missing)
+        self.assertIsNone(policy_explicit)
+        self.assertIsNone(policy_stale)
+
+        for prepared in (
+            prepared_missing,
+            prepared_explicit,
+            prepared_stale,
+        ):
+            self.assertEqual(prepared.train_type, case.backend)
+            self.assertEqual(prepared.trainer_file, f"./{case.backend}.py")
+            self.assertEqual(prepared.sidecars, {})
+            self.assertEqual(prepared.runtime_blockers, [])
+            self.assertNotIn("parameter_policy_config", prepared.config)
+
+        self.assertEqual(prepared_missing.config, prepared_explicit.config)
+        self.assertEqual(prepared_missing.config, prepared_stale.config)
+        self.assertEqual(prepared_missing.warnings, prepared_explicit.warnings)
+        self.assertEqual(prepared_missing.warnings, prepared_stale.warnings)
+        self.assertEqual(prepared_missing.gpu_ids, prepared_explicit.gpu_ids)
+        self.assertEqual(prepared_missing.gpu_ids, prepared_stale.gpu_ids)
+
+    def test_lora_basic_component_round_trip_is_stable(self):
+        case = LORA_BASIC_CASE
+        self.assertEqual(
+            PAGE_BACKEND_MAP.get(case.page_type, case.page_type),
+            case.backend,
+        )
+
+        source = deepcopy(dict(case.standard_raw))
+        before = deepcopy(source)
+        editor_state = bootstrap_parameter_policy_editor(
+            source,
+            case.page_type,
+            resolve_backend=_resolve_backend,
+        )
+        self.assertEqual(source, before)
+
+        component_gui = deepcopy(source)
+        component_gui.update(editor_state)
+        prepared_a, policy_a = _prepare_policy_request(
+            component_gui,
+            case.page_type,
+        )
+
+        self.assertIsNotNone(policy_a)
+        canonical_a = validate_parameter_policy(policy_a)
+        self.assertEqual(prepared_a.train_type, case.backend)
+        self.assertEqual(prepared_a.runtime_blockers, [])
+        self.assertEqual(len(prepared_a.sidecars), 1)
+
+        policy_path_a = prepared_a.config.get("parameter_policy_config")
+        self.assertIsInstance(policy_path_a, str)
+        self.assertIn(policy_path_a, prepared_a.sidecars)
+
+        self.assertEqual(
+            canonical_a["optimizer_profiles"]["legacy_main"]["type"],
+            "AdamW8bit",
+        )
+        unet_components = {
+            "unet.attention.adapter",
+            "unet.feed_forward.adapter",
+            "unet.conv.adapter",
+            "unet.other.adapter",
+        }
+        self.assertEqual(
+            set(canonical_a["components"]),
+            unet_components | {"text_encoder.adapter"},
+        )
+        for component_id in unet_components:
+            route = canonical_a["components"][component_id]
+            self.assertTrue(route["train"])
+            self.assertEqual(route["optimizer_profile"], "legacy_main")
+            self.assertEqual(route["learning_rate"], 2e-4)
+
+        text_route = canonical_a["components"]["text_encoder.adapter"]
+        self.assertTrue(text_route["train"])
+        self.assertEqual(text_route["optimizer_profile"], "legacy_main")
+        self.assertEqual(text_route["learning_rate"], 5e-5)
+
+        target_a = resolve_training_target_profile(
+            prepared_a.train_type,
+            prepared_a.config,
+        )
+        for component_id, route in canonical_a["components"].items():
+            if route.get("train"):
+                self.assertTrue(
+                    target_a.is_available(component_id),
+                    f"{component_id} is Train=true but unavailable before rehydrate",
+                )
+
+        preview_a = parameter_policy_editor_preview(
+            canonical_a,
+            case.page_type,
+            prepared_a.runtime_blockers,
+        )
+        self.assertTrue(preview_a["runtime_ready"])
+
+        rehydrated_raw = rehydrate_trainer_config(
+            deepcopy(prepared_a.config),
+            case.page_type,
+            sidecars=deepcopy(prepared_a.sidecars),
+        )
+        self.assertEqual(rehydrated_raw["lora_target"], "unet_text_encoder")
+        self.assertEqual(rehydrated_raw["memory_mode"], "auto")
+        self.assertEqual(rehydrated_raw["sd_max_token_length_mode"], "75")
+
+        rehydrated = _project_rehydrated_gui_for_page(
+            rehydrated_raw,
+            case.page_type,
+        )
+        for key in ("lora_target", "memory_mode", "sd_max_token_length_mode"):
+            self.assertNotIn(key, rehydrated)
+        self.assertEqual(rehydrated["optimization_mode"], "component")
+        self.assertTrue(rehydrated["parameter_policy_profiles"])
+        self.assertTrue(rehydrated["parameter_policy_components"])
+
+        prepared_b, policy_b = _prepare_policy_request(
+            rehydrated,
+            case.page_type,
+        )
+        self.assertIsNotNone(policy_b)
+        canonical_b = validate_parameter_policy(policy_b)
+
+        policy_path_b = prepared_b.config.get("parameter_policy_config")
+        self.assertEqual(canonical_a, canonical_b)
+        self.assertEqual(policy_path_a, policy_path_b)
+        self.assertEqual(
+            prepared_a.sidecars[policy_path_a],
+            prepared_b.sidecars[policy_path_b],
+        )
+        self.assertEqual(prepared_a.config, prepared_b.config)
+        self.assertEqual(prepared_a.warnings, prepared_b.warnings)
+        self.assertEqual(prepared_a.runtime_blockers, prepared_b.runtime_blockers)
+
+        target_b = resolve_training_target_profile(
+            prepared_b.train_type,
+            prepared_b.config,
+        )
+        for component_id, route in canonical_b["components"].items():
+            if route.get("train"):
+                self.assertTrue(
+                    target_b.is_available(component_id),
+                    f"{component_id} is Train=true but unavailable after rehydrate",
+                )
+        self.assertEqual(
+            target_a.available_components,
+            target_b.available_components,
+        )
+        self.assertEqual(
+            dict(target_a.unavailable_reasons),
+            dict(target_b.unavailable_reasons),
+        )
+
+        preview_b = parameter_policy_editor_preview(
+            canonical_b,
+            case.page_type,
+            prepared_b.runtime_blockers,
+        )
+        self.assertEqual(preview_a, preview_b)
 
 
 class ParameterPolicyStep7RegistryClosureTests(unittest.TestCase):
