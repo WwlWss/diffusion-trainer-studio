@@ -30,6 +30,7 @@ Diffusion Trainer Studio（DTS）是一套面向多种 Diffusion 模型架构的
 - 支持 Anima 与 Anima 2.9B 的 LoRA 和全参微调。
 - Anima 全参训练支持可选的 Qwen3 文本编码器联合微调。
 - Preview、Import、Export 与 Start 统一使用同一套 effective-config 管线。
+- 十个已验证训练后端支持可选的 Component-wise Parameter Policy，可按组件独立设置优化器、学习率与冻结状态，并在 Start 前 fail-closed 检查运行时兼容性。
 - Tagger 新增 AnimeTimm、DanbooruTagQuery、PixAI 等模型，同时保留原有 WD / CL 工作流。
 - 补充模型类型、训练目标、缓存、数据集与显存模式等组合的后端校验。
 - 增加训练页面、schema、API 与 trainer 路由的自动化契约测试。
@@ -48,6 +49,8 @@ Diffusion Trainer Studio（DTS）是一套面向多种 Diffusion 模型架构的
 | SD3 / SD3.5 | 支持 | — |
 
 Anima 的 2.9B 模型、Block Swap、Qwen3 联合训练等额外说明见 [ANIMA.md](ANIMA.md)。
+
+按组件配置优化器与学习率的使用方法见 [Parameter Policy 指南](docs/parameter-policy.md)。Standard 仍是默认模式；Component 为显式启用，当前支持范围与限制以该指南中的十后端矩阵为准。
 
 ## WebUI
 

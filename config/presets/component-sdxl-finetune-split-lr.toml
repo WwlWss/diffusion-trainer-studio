@@ -1,0 +1,53 @@
+[metadata]
+name = "Component：SDXL Full — U-Net / Text Encoder split LR"
+version = "1.0"
+author = "Diffusion Trainer Studio"
+train_type = "sdxl-full"
+description = "示例：SDXL 全参微调按 U-Net 子组件和两个文本编码器分别设置学习率。数值仅用于展示独立 LR。"
+
+[data]
+optimization_mode = "component"
+train_text_encoder = true
+cache_text_encoder_outputs = false
+cache_text_encoder_outputs_to_disk = false
+mixed_precision = "bf16"
+full_fp16 = false
+full_bf16 = false
+fused_backward_pass = false
+deepspeed = false
+torch_compile = false
+
+[data.parameter_policy_profiles.main]
+type = "AdamW"
+
+[data.parameter_policy_profiles.main.args]
+
+[data.parameter_policy_components."unet.transformer"]
+train = true
+optimizer_profile = "main"
+learning_rate = "1e-6"
+
+[data.parameter_policy_components."unet.conv_resnet"]
+train = true
+optimizer_profile = "main"
+learning_rate = "8e-7"
+
+[data.parameter_policy_components."unet.norm_bias_other"]
+train = true
+optimizer_profile = "main"
+learning_rate = "5e-7"
+
+[data.parameter_policy_components."unet.base_other"]
+train = true
+optimizer_profile = "main"
+learning_rate = "5e-7"
+
+[data.parameter_policy_components.text_encoder_1]
+train = true
+optimizer_profile = "main"
+learning_rate = "5e-7"
+
+[data.parameter_policy_components.text_encoder_2]
+train = true
+optimizer_profile = "main"
+learning_rate = "2.5e-7"

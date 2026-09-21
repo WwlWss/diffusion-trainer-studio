@@ -380,7 +380,7 @@ def parameter_policy_editor_preview(
     train_type: str,
     runtime_blockers: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Build a model-free component-level preview for the future GUI surface."""
+    """Build a model-free component-level preview for the public GUI surface."""
 
     canonical = validate_parameter_policy(policy)
     _validate_policy_backend_components(canonical, train_type)

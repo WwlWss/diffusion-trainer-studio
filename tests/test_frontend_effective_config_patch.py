@@ -49,6 +49,36 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertGreaterEqual(self.patched.count('if(__generation!==__previewGeneration.value)return'), 2)
         self.assertIn('return D.data||{}', self.patched)
 
+    def test_component_preset_exact_merge_preserves_explicit_defaults(self):
+        self.assertIn(
+            '__isComponentPreset=_=>{let P=_&&_.parameter_policy_profiles,Cc=_&&_.parameter_policy_components;',
+            self.patched,
+        )
+        self.assertIn(
+            'let m=Pc?clone(_):findChangedDataBySchema(_,n.value)',
+            self.patched,
+        )
+        self.assertIn(
+            'a.value==null?a.value=clone(m):a.value=Object.assign({},a.value,m)',
+            self.patched,
+        )
+
+    def test_component_preset_cancels_stale_bootstrap_and_refreshes_preview(self):
+        self.assertIn(
+            'Pc&&(++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1)',
+            self.patched,
+        )
+        self.assertIn(
+            'Pc&&(__runtimeReady.value=!1,__runtimeBlockers.value=[],__refreshPreview())',
+            self.patched,
+        )
+
+    def test_standard_preset_path_still_uses_legacy_schema_diff(self):
+        self.assertIn(
+            'Pc?clone(_):findChangedDataBySchema(_,n.value)',
+            self.patched,
+        )
+
     def test_preset_and_history_preview_use_effective_backend(self):
         self.assertIn('q=async _=>', self.patched)
         self.assertIn('Z=async(_,m)=>', self.patched)
