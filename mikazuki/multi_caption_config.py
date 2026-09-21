@@ -296,18 +296,30 @@ def extract_multi_caption_gui_state(
     }
     if storage_mode == "files":
         groups = raw.get("multi_caption_file_groups")
-        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
+        if groups is None:
+            groups = _default_groups_for_storage(storage_mode)
+        elif not isinstance(groups, dict):
+            raise ValueError("Multi-Caption: Caption Groups 必须是 object/dict。")
+        state["groups"] = groups
     elif storage_mode == "multiline":
         state["extension"] = raw.get("multi_caption_line_extension")
         groups = raw.get("multi_caption_line_groups")
-        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
+        if groups is None:
+            groups = _default_groups_for_storage(storage_mode)
+        elif not isinstance(groups, dict):
+            raise ValueError("Multi-Caption: Caption Groups 必须是 object/dict。")
+        state["groups"] = groups
     elif storage_mode in {"json", "jsonl"}:
         state["path"] = raw.get("multi_caption_json_path")
         state["root"] = raw.get("multi_caption_json_root")
         state["image_key_mode"] = raw.get("multi_caption_image_key_mode")
         state["jsonl_image_key_field"] = raw.get("multi_caption_jsonl_image_key_field")
         groups = raw.get("multi_caption_json_groups")
-        state["groups"] = groups if isinstance(groups, dict) and groups else _default_groups_for_storage(storage_mode)
+        if groups is None:
+            groups = _default_groups_for_storage(storage_mode)
+        elif not isinstance(groups, dict):
+            raise ValueError("Multi-Caption: Caption Groups 必须是 object/dict。")
+        state["groups"] = groups
     else:
         raise ValueError(f"Multi-Caption: 未知 Storage Mode {storage_mode!r}。")
     return state
