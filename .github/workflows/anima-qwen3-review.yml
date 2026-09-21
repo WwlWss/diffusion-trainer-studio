@@ -52,6 +52,8 @@ on:
       - "mikazuki/schema/shared.ts"
       - "config/presets/anima*.toml"
       - "config/presets/chroma.toml"
+      - "config/presets/component-*.toml"
+      - "docs/parameter-policy*.md"
       - "tests/test_anima_qwen_config.py"
       - "tests/test_anima_qwen_off_compat.py"
       - "tests/test_anima_finetune_config.py"
