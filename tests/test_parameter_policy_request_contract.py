@@ -46,6 +46,13 @@ def _prepared(config=None, train_type="sd-lora"):
     )
 
 
+class ParameterPolicyEditorRequestContractTests(unittest.TestCase):
+    def test_editor_normalization_precedes_policy_sidecar_compile(self):
+        normalize = REQUEST.index("normalize_parameter_policy_editor_state(config)")
+        sidecar = REQUEST.index("build_parameter_policy_sidecar(config, page_type)")
+        self.assertLess(normalize, sidecar)
+
+
 class ParameterPolicyRequestContractTests(unittest.TestCase):
     def test_component_start_disables_launch_staging_and_fails_before_materialization(self):
         calls = []
