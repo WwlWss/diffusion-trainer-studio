@@ -60,24 +60,34 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                 fragment = parameter_policy_schema_fragment(train_type)
                 declared = set(
                     re.findall(
-                        r'^\s*"([^"]+)": Schema\.intersect\(\[',
+                        r'^\s*"([^"]+)": Schema\.object\(\{',
                         fragment,
                         flags=re.MULTILINE,
                     )
                 )
                 self.assertEqual(declared, set(profile.components))
 
-    def test_component_rows_default_frozen_and_use_string_references(self):
+    def test_component_rows_default_frozen_and_offer_profile_choices(self):
         fragment = parameter_policy_schema_fragment("flux-finetune")
         self.assertIn("train: Schema.boolean().default(false)", fragment)
-        self.assertIn("optimizer_profile: Schema.string()", fragment)
-        self.assertIn("fallback_optimizer_profile: Schema.string()", fragment)
+        self.assertIn('optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback"', fragment)
+        self.assertIn('fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main"', fragment)
         self.assertIn("learning_rate: Schema.string()", fragment)
         self.assertIn("fallback_learning_rate: Schema.string()", fragment)
 
-    def test_profile_args_use_string_dictionary_for_legacy_schemastery(self):
+    def test_muon_profile_uses_dedicated_typed_controls(self):
         fragment = parameter_policy_schema_fragment("sd-lora")
-        self.assertIn("parameter_policy_profiles: Schema.dict", fragment)
+        self.assertIn('type: Schema.const("Muon").required()', fragment)
+        self.assertIn("momentum: Schema.number()", fragment)
+        self.assertIn("weight_decay: Schema.number()", fragment)
+        self.assertIn("weight_decouple: Schema.boolean()", fragment)
+        self.assertIn("nesterov: Schema.boolean()", fragment)
+        self.assertIn("ns_steps: Schema.number()", fragment)
+        self.assertIn(
+            'ns_coeffs: Schema.union(["original", "quintic", "polar_express", "polar_express_safer"])',
+            fragment,
+        )
+        self.assertIn("use_adjusted_lr: Schema.boolean()", fragment)
         self.assertIn("args: Schema.dict(Schema.string())", fragment)
 
     def test_wrapper_is_idempotent_and_marks_exactly_once(self):
