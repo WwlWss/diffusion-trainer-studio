@@ -17,6 +17,10 @@ from mikazuki.anima_runtime import prepare_runtime_trainer
 from mikazuki.app.models import APIResponseFail, APIResponseSuccess
 from mikazuki.frontend_training_patch import install_frontend_training_patch
 from mikazuki.log import log
+from mikazuki.parameter_policy_editor import (
+    bootstrap_parameter_policy_editor,
+    parameter_policy_editor_metadata,
+)
 from mikazuki.training_config import PAGE_BACKEND_MAP
 from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_rehydrate import rehydrate_trainer_config
@@ -111,6 +115,33 @@ def _validated_bundle_sidecars(raw: object) -> dict[str, str]:
             )
         sidecars[path] = raw_content
     return sidecars
+
+
+@router.get("/training/parameter-policy/metadata")
+async def parameter_policy_metadata(request: Request):
+    try:
+        train_type = request.query_params.get("train_type")
+        if not train_type:
+            raise ValueError("Parameter Policy metadata requires train_type.")
+        data = parameter_policy_editor_metadata(str(train_type))
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        return APIResponseFail(message=str(exc), data={"stage": "parameter-policy-metadata"})
+    return APIResponseSuccess(message="parameter policy metadata ready", data=data)
+
+
+@router.post("/training/parameter-policy/bootstrap")
+async def bootstrap_parameter_policy(request: Request):
+    try:
+        page_type, config = decode_training_request(await request.body())
+        if not page_type:
+            raise ValueError("Parameter Policy bootstrap requires train_type.")
+        gui_state = bootstrap_parameter_policy_editor(config, str(page_type))
+    except (KeyError, TypeError, ValueError, RuntimeError) as exc:
+        return APIResponseFail(message=str(exc), data={"stage": "parameter-policy-bootstrap"})
+    return APIResponseSuccess(
+        message="parameter policy bootstrap ready",
+        data={"gui_state": gui_state},
+    )
 
 
 @router.post("/training/preview")
