@@ -44,6 +44,31 @@ class MultiCaptionConfigTests(unittest.TestCase):
         policy = canonicalize_multi_caption_policy(state)
         self.assertEqual(policy["groups"]["caption"]["source"]["extension"], ".txt")
 
+    def test_multi_caption_malformed_groups_still_fail_closed(self):
+        for value in ("bad", [], 1):
+            with self.subTest(value=value):
+                config = {
+                    "caption_mode": "multi",
+                    "multi_caption_storage": "files",
+                    "multi_caption_file_groups": value,
+                }
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Caption Groups 必须是 object/dict",
+                ):
+                    extract_multi_caption_gui_state(config, "anima-finetune")
+
+    def test_multi_caption_explicit_empty_groups_are_not_silently_defaulted(self):
+        config = {
+            "caption_mode": "multi",
+            "multi_caption_storage": "files",
+            "multi_caption_file_groups": {},
+        }
+        state = extract_multi_caption_gui_state(config, "anima-finetune")
+        self.assertEqual(state["groups"], {})
+        with self.assertRaisesRegex(ValueError, "至少需要一个 Caption Group"):
+            canonicalize_multi_caption_policy(state)
+
     def test_files_policy_is_canonical_and_group_order_does_not_change_hash(self):
         a = {
             "caption_mode": "multi",
