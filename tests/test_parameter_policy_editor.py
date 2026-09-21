@@ -78,6 +78,22 @@ class ParameterPolicyEditorMetadataTests(unittest.TestCase):
             "sdxl-finetune",
         )
 
+    def test_release_backend_component_id_sets_are_pairwise_distinct(self):
+        seen = {}
+        for train_type in sorted(EXPECTED_BACKENDS):
+            component_ids = frozenset(
+                get_model_component_profile(train_type).components
+            )
+            self.assertNotIn(
+                component_ids,
+                seen,
+                msg=(
+                    f"{train_type} and {seen.get(component_ids)!r} expose the same "
+                    "Component ID set; editor backend ownership would become ambiguous."
+                ),
+            )
+            seen[component_ids] = train_type
+
     def test_unknown_backend_fails_closed(self):
         with self.assertRaisesRegex(ValueError, "does not support"):
             parameter_policy_editor_metadata("unknown-backend")
@@ -224,6 +240,53 @@ class ParameterPolicyEditorBootstrapTests(unittest.TestCase):
                 "flux-finetune",
                 resolve_backend=_resolver,
             )
+
+    def test_standard_bootstrap_rejects_restricted_optimizer_profiles(self):
+        for optimizer_type in ("AdaFactor", "Prodigy"):
+            with self.subTest(optimizer_type=optimizer_type):
+                raw = {
+                    "optimizer_type": optimizer_type,
+                    "learning_rate": 1e-4,
+                    "lora_target": "unet",
+                }
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "cannot be migrated into a runnable Component-wise profile",
+                ):
+                    bootstrap_parameter_policy_editor(
+                        raw,
+                        "lora-master",
+                        resolve_backend=_resolver,
+                    )
+
+    def test_existing_restricted_component_policy_remains_rehydratable(self):
+        components = {
+            component_id: {
+                "train": True,
+                "optimizer_profile": "main",
+                "learning_rate": 1e-4,
+            }
+            for component_id in get_model_component_profile("sd-lora").components
+        }
+        raw = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "main": {"type": "AdaFactor", "args": {}}
+            },
+            "parameter_policy_components": components,
+        }
+
+        gui = bootstrap_parameter_policy_editor(
+            raw,
+            "sd-lora",
+            resolve_backend=lambda *args, **kwargs: (_ for _ in ()).throw(
+                AssertionError("existing restricted Component policy must not re-bootstrap Standard")
+            ),
+        )
+        self.assertEqual(
+            gui["parameter_policy_profiles"]["main"]["type"],
+            "AdaFactor",
+        )
 
     def test_partial_existing_component_state_fails_closed(self):
         raw = {
