@@ -191,7 +191,9 @@ Use explicit public Anima semantics rather than legacy derived flags:
 }
 ~~~
 
-Do not enable TE output cache in the regression baseline.
+TE output cache is allowed in this frozen-Qwen3 baseline. Do not combine
+it with preloaded adapter/base weights, because that combination is a current
+Component semantic blocker.
 
 ### Anima Full
 
@@ -425,11 +427,13 @@ Require semantic identity:
 - same target availability for every `Train=true` route;
 - editor Preview summaries are equal.
 
-Exact effective-config comparison permits one already-documented inverse
-mapping normalization only: rehydrate emits `memory_mode="auto"` when
-`lowram/highvram` are absent, and re-preparation materializes those two flags
-as explicit `False`. Normalize only absent-vs-False for `lowram` and
-`highvram`; all other effective fields remain exact.
+Exact effective-config comparison remains strict. Release fixtures for the
+new semantic pages explicitly include the real GUI default
+`memory_mode="auto"`, so both preparations must produce byte-for-byte equal
+effective trainer config dictionaries. The only schema projection is
+`sd3-lora`: that legacy page still exposes raw `lowram`, so the generic
+rehydrator's `memory_mode="auto"` is projected back to `lowram=False` before
+the second preparation. No global absent-vs-False normalization is allowed.
 
 # 7E5 — Cross-layer matrix closure
 
