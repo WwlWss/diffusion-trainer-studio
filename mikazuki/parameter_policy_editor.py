@@ -16,7 +16,7 @@ from copy import deepcopy
 from typing import Any
 
 from mikazuki.model_component_profiles import get_model_component_profile
-from mikazuki.optimizer_profiles import list_optimizer_capabilities
+from mikazuki.optimizer_profiles import get_optimizer_capability, list_optimizer_capabilities
 from mikazuki.parameter_policy import (
     PARAMETER_POLICY_GUI_KEYS,
     PARAMETER_POLICY_VERSION,
@@ -189,6 +189,29 @@ def _validate_policy_backend_components(
         )
 
 
+def _validate_bootstrap_optimizer_support(policy: Mapping[str, Any]) -> None:
+    """Reject new Standard migrations that would create non-runnable profiles.
+
+    Existing imported Component policies intentionally remain readable even
+    when they reference restricted/planned optimizers; runtime blockers surface
+    those states. This gate applies only to a freshly generated Standard ->
+    Component migration.
+    """
+
+    for profile_name, profile in policy.get("optimizer_profiles", {}).items():
+        capability = get_optimizer_capability(profile.get("type"))
+        if capability.component_support == "supported":
+            continue
+        raise ValueError(
+            "Parameter Policy editor bootstrap: current Standard optimizer "
+            f"{capability.name!r} cannot be migrated into a runnable "
+            "Component-wise profile yet "
+            f"(component_support={capability.component_support!r}). "
+            "Standard mode remains available; choose a supported Component "
+            "optimizer before migrating."
+        )
+
+
 def _existing_component_editor_policy(raw_config: Mapping[str, Any]) -> dict[str, Any] | None:
     mode = str(raw_config.get("optimization_mode") or "standard").strip().lower()
     if mode not in _COMPONENT_MODE_ALIASES:
@@ -248,6 +271,7 @@ def bootstrap_parameter_policy_editor(
         page_train_type,
         resolve_backend=resolve_backend,
     )
+    _validate_bootstrap_optimizer_support(policy)
     return rehydrate_parameter_policy(policy)
 
 
