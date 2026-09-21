@@ -10,6 +10,7 @@ from mikazuki.model_component_profiles import (
     get_model_component_profile,
     resolve_training_target_profile,
 )
+from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.optimizer_profiles import list_optimizer_capabilities
 from mikazuki.parameter_policy import (
     build_parameter_policy_sidecar,
@@ -182,6 +183,12 @@ def _prepare_policy_request(raw: Mapping[str, object], page_type: str):
         config,
         page_type,
     )
+    multi_path, multi_sidecars, multi_policy = build_multi_caption_sidecar(
+        config,
+        page_type,
+    )
+    if multi_path is not None or multi_policy is not None:
+        raise AssertionError("Step 7 release fixtures must remain caption_mode=standard.")
     prepared = prepare_training_config(
         config,
         page_train_type=page_type,
@@ -189,6 +196,7 @@ def _prepare_policy_request(raw: Mapping[str, object], page_type: str):
         launch=False,
     )
     prepared.sidecars.update(sidecars)
+    prepared.sidecars.update(multi_sidecars)
 
     effective_policy_path = prepared.config.get("parameter_policy_config")
     if policy_path is None:
