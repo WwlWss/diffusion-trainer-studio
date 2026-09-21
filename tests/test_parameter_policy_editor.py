@@ -164,19 +164,25 @@ class ParameterPolicyEditorBootstrapTests(unittest.TestCase):
                 self.assertEqual(route, {"train": False})
 
     def test_existing_complete_component_state_is_preserved_without_migration(self):
+        components = {}
+        for index, component_id in enumerate(
+            sorted(get_model_component_profile("flux-finetune").components)
+        ):
+            components[component_id] = (
+                {
+                    "train": True,
+                    "optimizer_profile": "main",
+                    "learning_rate": 2e-4,
+                }
+                if index == 0
+                else {"train": False}
+            )
         raw = {
             "optimization_mode": "component",
             "parameter_policy_profiles": {
                 "main": {"type": "AdamW", "args": {"eps": "1e-8"}}
             },
-            "parameter_policy_components": {
-                "transformer.double_stream": {
-                    "train": True,
-                    "optimizer_profile": "main",
-                    "learning_rate": 2e-4,
-                },
-                "transformer.single_stream": {"train": False},
-            },
+            "parameter_policy_components": components,
         }
 
         def forbidden_resolver(*args, **kwargs):
@@ -193,9 +199,31 @@ class ParameterPolicyEditorBootstrapTests(unittest.TestCase):
             1e-8,
         )
         self.assertEqual(
-            gui["parameter_policy_components"]["transformer.single_stream"],
-            {"train": False},
+            set(gui["parameter_policy_components"]),
+            set(get_model_component_profile("flux-finetune").components),
         )
+
+    def test_existing_component_state_from_another_backend_fails_closed(self):
+        raw = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "main": {"type": "AdamW", "args": {}}
+            },
+            "parameter_policy_components": {
+                component_id: {
+                    "train": True,
+                    "optimizer_profile": "main",
+                    "learning_rate": 1e-4,
+                }
+                for component_id in get_model_component_profile("sd-lora").components
+            },
+        }
+        with self.assertRaisesRegex(ValueError, "does not match backend"):
+            bootstrap_parameter_policy_editor(
+                raw,
+                "flux-finetune",
+                resolve_backend=_resolver,
+            )
 
     def test_partial_existing_component_state_fails_closed(self):
         raw = {
