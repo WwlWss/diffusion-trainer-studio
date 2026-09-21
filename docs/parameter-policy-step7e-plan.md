@@ -181,6 +181,12 @@ Use explicit public Anima semantics rather than legacy derived flags:
     "learning_rate": "1e-4",
     "anima_lora_target": "dit",
     "mixed_precision": "bf16",
+    "cache_latents": True,
+    "cache_latents_to_disk": True,
+    "cache_text_encoder_outputs": True,
+    "cache_text_encoder_outputs_to_disk": True,
+    "anima_lora_checkpoint_mode": "standard",
+    "anima_lora_compile_mode": "off",
     "blocks_to_swap": 0,
 }
 ~~~
@@ -196,6 +202,8 @@ Do not enable TE output cache in the regression baseline.
     "anima_finetune_learning_rate": "1e-5",
     "lr_scheduler": "constant",
     "anima_precision_mode": "mixed_bf16",
+    "anima_latent_cache_mode": "disk",
+    "anima_text_encoder_cache_mode": "disk",
     "anima_checkpoint_mode": "standard",
     "blocks_to_swap": 0,
     "train_qwen3_text_encoder": False,
