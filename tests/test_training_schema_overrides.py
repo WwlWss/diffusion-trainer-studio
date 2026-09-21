@@ -4,6 +4,7 @@ import shutil
 import subprocess
 import unittest
 
+from mikazuki.parameter_policy_schema import PARAMETER_POLICY_EDITOR_MARKER
 from mikazuki.training_schema_overrides import fixed_flux_family_schema, fixed_sd_schema, override_raw_schema
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -102,20 +103,91 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertIn('dynamo_backend: Schema.string().default("inductor")', fixed)
         self.assertIn("memory_mode", fixed)
 
+    def test_release_pages_receive_exactly_one_parameter_policy_editor(self):
+        lora_master = (SCHEMA / "lora-master.ts").read_text(encoding="utf-8")
+        dreambooth = (SCHEMA / "dreambooth.ts").read_text(encoding="utf-8")
+        flux_lora = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
+        final = {
+            "lora-master": override_raw_schema(
+                "lora-master",
+                fixed_sd_schema(lora_master, "sd-lora"),
+            ),
+            "sdxl-lora": override_raw_schema(
+                "sdxl-lora",
+                fixed_sd_schema(lora_master, "sdxl-lora"),
+            ),
+            "dreambooth": override_raw_schema(
+                "dreambooth",
+                fixed_sd_schema(dreambooth, "sd-dreambooth"),
+            ),
+            "sdxl-finetune": override_raw_schema(
+                "sdxl-finetune",
+                fixed_sd_schema(dreambooth, "sdxl-finetune"),
+            ),
+            "flux-lora": override_raw_schema(
+                "flux-lora",
+                fixed_flux_family_schema(flux_lora, "flux", "flux-lora"),
+            ),
+            "chroma-lora": override_raw_schema(
+                "chroma-lora",
+                fixed_flux_family_schema(flux_lora, "chroma", "chroma-lora"),
+            ),
+            "anima-lora": override_raw_schema(
+                "anima-lora",
+                fixed_flux_family_schema(flux_lora, "anima", "anima-lora", "lora"),
+            ),
+            "anima-finetune": override_raw_schema(
+                "anima-finetune",
+                fixed_flux_family_schema(flux_lora, "anima", "anima-finetune", "finetune"),
+            ),
+            "sd3-lora": override_raw_schema(
+                "sd3-lora",
+                (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8"),
+            ),
+            "flux-finetune": override_raw_schema(
+                "flux-finetune",
+                (SCHEMA / "flux-finetune.ts").read_text(encoding="utf-8"),
+            ),
+            "sdxl-full": override_raw_schema(
+                "sdxl-full",
+                (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8"),
+            ),
+            "lora-basic": override_raw_schema(
+                "lora-basic",
+                (SCHEMA / "lora-basic.ts").read_text(encoding="utf-8"),
+            ),
+        }
+        for label, source in final.items():
+            with self.subTest(label=label):
+                self.assertEqual(source.count(PARAMETER_POLICY_EDITOR_MARKER), 1)
+                self.assertIn("parameter_policy_profiles", source)
+                self.assertIn("parameter_policy_components", source)
+                self.assertIn('default("standard")', source)
+
+    def test_non_release_pages_do_not_receive_parameter_policy_editor(self):
+        for name in ("shared", "lumina2-lora", "tagger"):
+            with self.subTest(name=name):
+                source = (SCHEMA / f"{name}.ts").read_text(encoding="utf-8")
+                fixed = override_raw_schema(name, source)
+                self.assertNotIn(PARAMETER_POLICY_EDITOR_MARKER, fixed)
+                self.assertNotIn("parameter_policy_profiles", fixed)
+
     def test_all_transformed_training_schemas_remain_valid_javascript(self):
         lora_master = (SCHEMA / "lora-master.ts").read_text(encoding="utf-8")
         dreambooth = (SCHEMA / "dreambooth.ts").read_text(encoding="utf-8")
         flux_lora = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         transformed = {
-            "sd-lora": fixed_sd_schema(lora_master, "sd-lora"),
-            "sdxl-lora": fixed_sd_schema(lora_master, "sdxl-lora"),
-            "sd-dreambooth": fixed_sd_schema(dreambooth, "sd-dreambooth"),
-            "flux-lora": fixed_flux_family_schema(flux_lora, "flux", "flux-lora"),
-            "chroma-lora": fixed_flux_family_schema(flux_lora, "chroma", "chroma-lora"),
-            "anima-lora": fixed_flux_family_schema(flux_lora, "anima", "anima-lora", "lora"),
-            "anima-finetune": fixed_flux_family_schema(flux_lora, "anima", "anima-finetune", "finetune"),
+            "sd-lora": override_raw_schema("lora-master", fixed_sd_schema(lora_master, "sd-lora")),
+            "sdxl-lora": override_raw_schema("sdxl-lora", fixed_sd_schema(lora_master, "sdxl-lora")),
+            "sd-dreambooth": override_raw_schema("dreambooth", fixed_sd_schema(dreambooth, "sd-dreambooth")),
+            "flux-lora": override_raw_schema("flux-lora", fixed_flux_family_schema(flux_lora, "flux", "flux-lora")),
+            "chroma-lora": override_raw_schema("chroma-lora", fixed_flux_family_schema(flux_lora, "chroma", "chroma-lora")),
+            "anima-lora": override_raw_schema("anima-lora", fixed_flux_family_schema(flux_lora, "anima", "anima-lora", "lora")),
+            "anima-finetune": override_raw_schema("anima-finetune", fixed_flux_family_schema(flux_lora, "anima", "anima-finetune", "finetune")),
             "flux-finetune": override_raw_schema("flux-finetune", (SCHEMA / "flux-finetune.ts").read_text(encoding="utf-8")),
             "sdxl-finetune": override_raw_schema("sdxl-full", (SCHEMA / "sdxl-full.ts").read_text(encoding="utf-8")),
+            "sd3-lora": override_raw_schema("sd3-lora", (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")),
+            "lora-basic": override_raw_schema("lora-basic", (SCHEMA / "lora-basic.ts").read_text(encoding="utf-8")),
         }
         for label, source in transformed.items():
             with self.subTest(label=label):
