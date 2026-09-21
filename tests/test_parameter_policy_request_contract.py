@@ -20,6 +20,7 @@ def _load_prepare_request_config(**overrides):
 
     namespace = {
         "train_utils": SimpleNamespace(fix_config_types=lambda config: None),
+        "normalize_parameter_policy_editor_state": lambda config: None,
         "build_parameter_policy_sidecar": lambda config, page_type: (None, {}, None),
         "build_multi_caption_sidecar": lambda config, page_type: (None, {}, None),
         "prepare_prompt_fields": lambda config, page_type: ({}, []),
