@@ -52,6 +52,7 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
 
     metadata = parameter_policy_editor_metadata(train_type)
     optimizer_types = [row["type"] for row in metadata["optimizer_types"]]
+    optimizer_capabilities = list(metadata["optimizer_capabilities"])
     if not optimizer_types:
         raise RuntimeError(
             f"Parameter Policy editor has no supported optimizer choices for {metadata['train_type']!r}."
@@ -59,7 +60,18 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
     if "AdamW" not in optimizer_types:
         raise RuntimeError("Parameter Policy editor requires AdamW as the safe default profile type.")
 
-    optimizer_choices = json.dumps(optimizer_types, ensure_ascii=False, separators=(",", ":"))
+    optimizer_choices = []
+    for row in optimizer_capabilities:
+        option = f"Schema.const({_js_string(row['type'])})"
+        if row["component_support"] != "supported":
+            detail = row.get("restriction") or (
+                f"Component support is {row['component_support']}."
+            )
+            option += (
+                f".disabled().description({_js_string(row['component_support'].title() + ': ' + detail)})"
+            )
+        optimizer_choices.append(option)
+    optimizer_choice_expr = "[" + ",".join(optimizer_choices) + "]"
     component_lines = []
     for component in metadata["components"]:
         component_lines.append(
@@ -78,7 +90,7 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
             }}),
             Schema.object({{
                 parameter_policy_profiles: Schema.dict(Schema.object({{
-                    type: Schema.union({optimizer_choices}).default("AdamW").description("Component-supported optimizer implementation."),
+                    type: Schema.union({optimizer_choice_expr}).default("AdamW").description("Supported optimizers are selectable; restricted/planned entries remain readable for imported policies but cannot be newly selected."),
                     args: Schema.dict(Schema.string()).description("Optimizer constructor args. Values accept literals such as 0.95, false, [1, 2], or (0.9, 0.95).")
                 }})).description("Optimizer Profiles; dictionary key is the user-defined Profile name."),
                 parameter_policy_components: Schema.object({{
