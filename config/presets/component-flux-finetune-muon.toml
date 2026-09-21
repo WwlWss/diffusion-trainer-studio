@@ -1,0 +1,72 @@
+[metadata]
+name = "Component：Flux Full — Muon + AdamW fallback"
+version = "1.0"
+author = "Diffusion Trainer Studio"
+train_type = "flux-finetune"
+description = "示例：Flux 全参按组件使用 Muon，非 Muon eligible 参数回退到 AdamW。学习率仅用于演示，请按数据集调整。"
+
+[data]
+optimization_mode = "component"
+mixed_precision = "bf16"
+full_fp16 = false
+full_bf16 = false
+fp8_base = false
+fp8_base_unet = false
+cpu_offload_checkpointing = false
+fused_backward_pass = false
+blockwise_fused_optimizers = false
+blocks_to_swap = 0
+deepspeed = false
+torch_compile = false
+
+[data.parameter_policy_profiles.muon]
+type = "Muon"
+
+[data.parameter_policy_profiles.muon.args]
+
+[data.parameter_policy_profiles.fallback]
+type = "AdamW"
+
+[data.parameter_policy_profiles.fallback.args]
+
+[data.parameter_policy_components."transformer.double_stream"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "1e-4"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "1e-4"
+
+[data.parameter_policy_components."transformer.single_stream"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "1e-4"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "1e-4"
+
+[data.parameter_policy_components."transformer.modulation_norm_other"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
+
+[data.parameter_policy_components."transformer.input_conditioning"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
+
+[data.parameter_policy_components."transformer.final"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
+
+[data.parameter_policy_components."transformer.other"]
+train = true
+optimizer_profile = "muon"
+learning_rate = "5e-5"
+fallback_optimizer_profile = "fallback"
+fallback_learning_rate = "5e-5"
