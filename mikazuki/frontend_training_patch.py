@@ -38,7 +38,7 @@ def patch_training_layout_js(content: str) -> str:
     content = _replace_once(
         content,
         'C=ref([]),d=ref([]),w=["network_args_custom","optimizer_args_custom"]',
-        'C=ref([]),d=ref([]),__effectiveToml=ref("Loading..."),__previewTimer=ref(null),__previewGeneration=ref(0),__startPending=ref(!1),w=["network_args_custom","optimizer_args_custom"]',
+        'C=ref([]),d=ref([]),__effectiveToml=ref("Loading..."),__previewTimer=ref(null),__previewGeneration=ref(0),__startPending=ref(!1),__runtimeReady=ref(!0),__runtimeBlockers=ref([]),__policyBootstrapPending=ref(!1),__policyModeGuard=ref(!1),__policyBootstrapGeneration=ref(0),w=["network_args_custom","optimizer_args_custom"]',
         "effective preview state",
     )
 
@@ -53,18 +53,18 @@ def patch_training_layout_js(content: str) -> str:
     content = _replace_once(
         content,
         'onMounted(async()=>{I(),y()})',
-        'onMounted(async()=>{I(),y(),await nextTick(),__refreshPreview()})',
+        'onMounted(async()=>{I(),y(),await nextTick(),await __syncPolicyMode()})',
         "initial effective preview",
     )
 
     content = _replace_once(
         content,
         'const x=()=>{if(n.value==null)return"Loading...";let _=T(),m=parseParams(_,t),g=checkParams(m);return C.value=g.warnings,d.value=g.errors,stringify(m)},L=computed(()=>{try{return x()}catch(_){console.log(_)}}),I=()=>',
-        'const __trainingRequest=async(endpoint,raw)=>{let N=await post(endpoint,JSON.stringify({train_type:t,config:raw}),{"Content-Type":"application/json"});let D=await N.json();if(!N.ok||D.status!="success")throw new Error(D.message||"配置校验失败");return D},__requestEffective=async(raw=T(),endpoint="/api/training/preview")=>{if(n.value==null)return{toml:"Loading...",warnings:[]};let D=await __trainingRequest(endpoint,raw);return D.data||{}},__refreshPreview=()=>{clearTimeout(__previewTimer.value);const __generation=++__previewGeneration.value;__previewTimer.value=setTimeout(async()=>{try{let R=await __requestEffective();if(__generation!==__previewGeneration.value)return;C.value=R.warnings||[],d.value=[],__effectiveToml.value=R.toml||""}catch(_){if(__generation!==__previewGeneration.value)return;d.value=[_.message||String(_)],C.value=[],__effectiveToml.value="# 配置解析失败\\n# "+(_.message||String(_))}},300)},x=()=>__effectiveToml.value,L=computed(()=>x());watch(a,__refreshPreview,{deep:!0});const I=()=>',
+        'const __trainingRequest=async(endpoint,raw)=>{let N=await post(endpoint,JSON.stringify({train_type:t,config:raw}),{"Content-Type":"application/json"});let D=await N.json();if(!N.ok||D.status!="success")throw new Error(D.message||"配置校验失败");return D},__requestEffective=async(raw=T(),endpoint="/api/training/preview")=>{if(n.value==null)return{toml:"Loading...",warnings:[]};let D=await __trainingRequest(endpoint,raw);return D.data||{}},__isComponentMode=()=>String(a.value&&a.value.optimization_mode||"standard").toLowerCase()=="component",__hasPolicyState=()=>{let P=a.value&&a.value.parameter_policy_profiles,Cc=a.value&&a.value.parameter_policy_components;return!!(P&&typeof P=="object"&&Object.keys(P).length&&Cc&&typeof Cc=="object"&&Object.keys(Cc).length)},__policyBootstrapSnapshot=()=>{let R=clone(a.value||{});delete R.parameter_policy_profiles,delete R.parameter_policy_components,R.optimization_mode="standard";return R},__bootstrapPolicy=async()=>{if(__policyModeGuard.value||!__isComponentMode()||__hasPolicyState())return;const G=++__policyBootstrapGeneration.value;__policyBootstrapPending.value=!0,__runtimeReady.value=!1,__runtimeBlockers.value=[];try{let U=await __trainingRequest("/api/training/parameter-policy/bootstrap",__policyBootstrapSnapshot()),B=U.data&&U.data.gui_state;if(G!==__policyBootstrapGeneration.value||!__isComponentMode())return;if(!B||typeof B!="object"||!B.parameter_policy_profiles||!B.parameter_policy_components)throw new Error("Parameter Policy bootstrap 返回不完整 gui_state");__policyModeGuard.value=!0,Object.assign(a.value,{parameter_policy_profiles:clone(B.parameter_policy_profiles),parameter_policy_components:clone(B.parameter_policy_components)}),await nextTick()}catch(_){if(G!==__policyBootstrapGeneration.value||!__isComponentMode())return;__runtimeReady.value=!1,__runtimeBlockers.value=[_.message||String(_)],d.value=[_.message||String(_)]}finally{if(G===__policyBootstrapGeneration.value){__policyModeGuard.value=!1,__policyBootstrapPending.value=!1;if(__isComponentMode()&&__hasPolicyState())__refreshPreview()}}},__syncPolicyMode=async()=>{if(__policyModeGuard.value)return;if(!__isComponentMode()){++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1,__runtimeReady.value=!0,__runtimeBlockers.value=[],__refreshPreview();return}__runtimeReady.value=!1,__hasPolicyState()?__refreshPreview():await __bootstrapPolicy()},__refreshPreview=()=>{clearTimeout(__previewTimer.value);const __generation=++__previewGeneration.value;if(__isComponentMode())__runtimeReady.value=!1;if(__policyBootstrapPending.value)return;__previewTimer.value=setTimeout(async()=>{try{let R=await __requestEffective();if(__generation!==__previewGeneration.value)return;C.value=R.warnings||[],__effectiveToml.value=R.toml||"";if(__isComponentMode()){__runtimeReady.value=R.runtime_ready===!0,__runtimeBlockers.value=Array.isArray(R.runtime_blockers)?R.runtime_blockers:[],d.value=__runtimeReady.value?[]:(__runtimeBlockers.value.length?__runtimeBlockers.value:["Component runtime is not ready."])}else __runtimeReady.value=!0,__runtimeBlockers.value=[],d.value=[]}catch(_){if(__generation!==__previewGeneration.value)return;let M=_.message||String(_);if(__isComponentMode())__runtimeReady.value=!1,__runtimeBlockers.value=[M];d.value=[M],C.value=[],__effectiveToml.value="# 配置解析失败\\n# "+M}},300)},x=()=>__effectiveToml.value,L=computed(()=>x());watch(a,__refreshPreview,{deep:!0});watch(()=>a.value&&a.value.optimization_mode,__syncPolicyMode);const I=()=>',
         "backend-only effective preview",
     )
 
-    new_start = 'O=async()=>{if(__startPending.value)return;__startPending.value=!0;try{let g=await __trainingRequest("/api/run",T());g.data&&g.data.task_id&&sessionStorage.setItem(`current-task:${t}`,String(g.data.task_id)),ElMessage.success("\\u8BAD\\u7EC3\\u4EFB\\u52A1\\u5DF2\\u63D0\\u4EA4\\u6210\\u529F\\uFF1A"+g.message)}catch(m){ElMessage.error(m.message||v("networkError")),console.error("There was a problem with the fetch operation:",m)}finally{__startPending.value=!1}}'
+    new_start = 'O=async()=>{if(__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value)return;__startPending.value=!0;try{let g=await __trainingRequest("/api/run",T());g.data&&g.data.task_id&&sessionStorage.setItem(`current-task:${t}`,String(g.data.task_id)),ElMessage.success("\\u8BAD\\u7EC3\\u4EFB\\u52A1\\u5DF2\\u63D0\\u4EA4\\u6210\\u529F\\uFF1A"+g.message)}catch(m){ElMessage.error(m.message||v("networkError")),console.error("There was a problem with the fetch operation:",m)}finally{__startPending.value=!1}}'
     content = _replace_span_once(
         content,
         'O=async()=>{const _=parseParams(n.value(a.value),t);',
@@ -89,7 +89,7 @@ def patch_training_layout_js(content: str) -> str:
         "effective config export",
     )
 
-    new_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml,.json",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=async D=>{const V=D.target.result;try{let k=g.name.toLowerCase().endsWith(".json")?JSON.parse(V):TomlParse(V),U=await __trainingRequest("/api/training/rehydrate",k),B=U.data&&U.data.gui_state;if(!B||typeof B!=="object")throw new Error("导入结果缺少 gui_state");a.value=clone(B),ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F"),await nextTick(),__refreshPreview()}catch(k){console.log(k),ElMessage.error(k.message||"\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
+    new_import = 'S=()=>{const _=document.createElement("input");_.type="file",_.accept=".toml,.json",_.onchange=m=>{const g=m.target.files[0],N=new FileReader;N.onload=async D=>{const V=D.target.result;try{let k=g.name.toLowerCase().endsWith(".json")?JSON.parse(V):TomlParse(V),U=await __trainingRequest("/api/training/rehydrate",k),B=U.data&&U.data.gui_state;if(!B||typeof B!=="object")throw new Error("导入结果缺少 gui_state");++__policyBootstrapGeneration.value,a.value=clone(B),ElMessage.success("\\u5BFC\\u5165\\u6210\\u529F"),await nextTick(),await __syncPolicyMode()}catch(k){console.log(k),ElMessage.error(k.message||"\\u5BFC\\u5165\\u5931\\u8D25")}},N.readAsText(g)},_.click()}'
     content = _replace_span_once(
         content,
         'S=()=>{const _=document.createElement("input");',
@@ -114,7 +114,7 @@ def patch_training_layout_js(content: str) -> str:
     content = _replace_once(
         content,
         'createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",onClick:O}',
-        'createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",disabled:__startPending.value,onClick:O}',
+        'createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",disabled:__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value,onClick:O}',
         "start pending disable",
     )
 
@@ -128,6 +128,7 @@ def patch_training_layout_js(content: str) -> str:
         '__previewGeneration=0',
         '++__previewGeneration;',
         '__previewTimer=setTimeout',
+        '__trainingRequest("/api/training/parameter-policy/bootstrap",T())',
     )
     for anchor in forbidden:
         if anchor in content:
