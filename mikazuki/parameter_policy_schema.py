@@ -58,7 +58,7 @@ def _component_row(component: dict) -> str:
             ]),
             Schema.object({{}})
         ])
-    ]).collapse()"""
+    ])"""
 
 def parameter_policy_schema_fragment(train_type: str) -> str:
     """Return the Parameter Policy editor as one Schemastery expression."""
