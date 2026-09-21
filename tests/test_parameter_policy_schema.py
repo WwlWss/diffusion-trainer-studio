@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 import unittest
 
@@ -24,21 +25,19 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                 self.assertIn("parameter_policy_components", fragment)
 
     def test_optimizer_choices_match_editor_metadata_exactly(self):
+        pattern = re.compile(
+            r"type: Schema\\.union\\((\\[[^\\n]+\\])\\)\\.default\\(\\"AdamW\\"\\)"
+        )
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
             with self.subTest(train_type=train_type):
                 metadata = parameter_policy_editor_metadata(train_type)
                 fragment = parameter_policy_schema_fragment(train_type)
-                for row in metadata["optimizer_types"]:
-                    self.assertIn(f'"{row["type"]}"', fragment)
-                unsupported = {
-                    "AdaFactor",
-                    "Prodigy",
-                    "DAdaptation",
-                    "Custom",
-                }
-                offered = {row["type"] for row in metadata["optimizer_types"]}
-                for optimizer_type in unsupported.difference(offered):
-                    self.assertNotIn(f'"{optimizer_type}"', fragment)
+                match = pattern.search(fragment)
+                self.assertIsNotNone(match)
+                self.assertEqual(
+                    json.loads(match.group(1)),
+                    [row["type"] for row in metadata["optimizer_types"]],
+                )
 
     def test_component_ids_match_model_profile_exactly(self):
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
