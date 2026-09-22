@@ -118,6 +118,31 @@ class TrainingPageRoutingTests(unittest.TestCase):
             self.assertIsNotNone(virtual_asset(page.content_asset))
 
 
+    def test_frontend_patch_pins_explicit_union_discriminators_before_full_validation(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn("function __dtsUnionDiscriminator(e,t)", patched)
+        self.assertIn(
+            "const __dtsPinned=t.schema.list.find(v=>!v.meta.hidden&&__dtsUnionDiscriminator(v,d));",
+            patched,
+        )
+        self.assertIn("if(__dtsPinned)a.value=__dtsPinned;", patched)
+        self.assertIn("let f=!a.value,h=0;", patched)
+        self.assertNotIn(
+            "const l=oo({input(d){a.value=null;let f=!0,h=0;",
+            patched,
+        )
+
+    def test_union_discriminator_patch_only_pins_explicit_top_level_consts(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        helper_start = patched.index("function __dtsUnionDiscriminator")
+        helper_end = patched.index("function md(e,t){", helper_start)
+        helper = patched[helper_start:helper_end]
+        self.assertIn('o.type==="intersect"', helper)
+        self.assertIn('o.type!=="object"', helper)
+        self.assertIn('i&&i.type==="const"', helper)
+        self.assertIn("n.length>0", helper)
+        self.assertIn("Object.prototype.hasOwnProperty.call(t,o)&&t[o]===a", helper)
+
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('Je(Ee(c(o)("collapse")),1)', patched)
