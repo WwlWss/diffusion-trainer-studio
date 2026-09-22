@@ -19,6 +19,37 @@ class MultiCaptionRequestContractTests(unittest.TestCase):
         self.assertIsNone(policy)
         self.assertEqual(config, {"caption_extension": ".txt", "shuffle_caption": True})
 
+    def test_legacy_frontend_multi_caption_uses_files_as_unconstrained_fallback(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "mikazuki"
+            / "schema"
+            / "shared.ts"
+        ).read_text(encoding="utf-8")
+
+        body = source.split("const multiCaptionBody", 1)[1].split(
+            "const captionModeSchema", 1
+        )[0]
+        self.assertIn(
+            'multi_caption_storage: Schema.union(["files", "multiline", "json", "jsonl"]).default("files")',
+            body,
+        )
+        self.assertIn('multi_caption_storage: Schema.const("multiline").required()', body)
+        self.assertIn('multi_caption_storage: Schema.const("json").required()', body)
+        self.assertIn('multi_caption_storage: Schema.const("jsonl").required()', body)
+        # The files branch must be the unguarded final fallback.  Otherwise the
+        # pinned legacy renderer can fail branch selection before the sibling
+        # storage default has been materialized.
+        files_pos = body.rfind('multi_caption_storage: Schema.const("files").default("files")')
+        jsonl_pos = body.rfind('multi_caption_storage: Schema.const("jsonl").required()')
+        self.assertGreater(files_pos, jsonl_pos)
+        files_tail = body[files_pos:]
+        self.assertIn(
+            'multi_caption_storage: Schema.const("files").default("files")',
+            files_tail,
+        )
+        self.assertNotIn('multi_caption_storage: Schema.const("files").required()', files_tail)
+
     def test_all_supported_training_schema_sources_expose_multi_caption(self):
         root = Path(__file__).resolve().parents[1] / "mikazuki" / "schema"
         expectations = {

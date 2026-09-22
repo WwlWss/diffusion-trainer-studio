@@ -30,16 +30,12 @@
         Schema.object({
             multi_caption_storage: Schema.union(["files", "multiline", "json", "jsonl"]).default("files").description("Multi-Caption caption 来源"),
         }),
+        // The pinned legacy union renderer validates the active branch before
+        // sibling defaults are materialized.  Keep guarded non-default storage
+        // branches first, and use files as the unconstrained fallback.  This
+        // lets caption_mode=multi immediately reveal the Multi-Caption editor
+        // even before multi_caption_storage has been written into form state.
         Schema.union([
-            Schema.object({
-                multi_caption_storage: Schema.const("files").required(),
-                multi_caption_file_groups: Schema.dict(Schema.object({
-                    enabled: Schema.boolean().default(true),
-                    weight: Schema.number().min(0).default(1),
-                    extension: Schema.string().default(".txt").description("该 Group 的 caption 文件扩展名"),
-                    processing: processingFactory(),
-                })).default({ caption: { enabled: true, weight: 1, extension: ".txt", processing: {} } }).description("独立文件 Caption Groups；字典 key 就是 Group 名称；切换到 Multi 时默认创建 caption 组。"),
-            }),
             Schema.object({
                 multi_caption_storage: Schema.const("multiline").required(),
                 multi_caption_line_extension: Schema.string().default(".txt").description("多行 caption 文件扩展名"),
@@ -74,6 +70,15 @@
                     key: Schema.string().description("JSON key；以 / 开头时按 RFC6901 JSON Pointer 读取嵌套路径"),
                     processing: processingFactory(),
                 })).default({ caption: { enabled: true, weight: 1, key: "caption", processing: {} } }).description("JSONL Caption Groups；字典 key 就是 Group 名称；默认创建 caption 组。"),
+            }),
+            Schema.object({
+                multi_caption_storage: Schema.const("files").default("files"),
+                multi_caption_file_groups: Schema.dict(Schema.object({
+                    enabled: Schema.boolean().default(true),
+                    weight: Schema.number().min(0).default(1),
+                    extension: Schema.string().default(".txt").description("该 Group 的 caption 文件扩展名"),
+                    processing: processingFactory(),
+                })).default({ caption: { enabled: true, weight: 1, extension: ".txt", processing: {} } }).description("独立文件 Caption Groups；字典 key 就是 Group 名称；切换到 Multi 时默认创建 caption 组。"),
             }),
         ]),
     ]);
