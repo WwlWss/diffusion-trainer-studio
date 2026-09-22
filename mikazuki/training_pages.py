@@ -160,6 +160,74 @@ def patch_frontend_app_js(content: str) -> str:
     own foldability; conditional Schema.union branches must remain non-foldable
     or union.vue renders empty selector/collapse rows.
     """
+
+    # Schemastery's pinned union renderer normally selects the first branch for
+    # which the *entire* branch validates. That is hostile to editable forms:
+    # one temporarily-invalid child can make an explicit discriminator such as
+    # optimization_mode=component, caption_mode=multi, type=Muon, or train=true
+    # fall through to a broad fallback branch and make the visible editor
+    # disappear. Prefer an explicit top-level const discriminator when present;
+    # if no branch has an exact discriminator match, retain upstream validation
+    # and default behavior unchanged.
+    discriminator_anchor = (
+        'function Zx(e,t){try{return Hr(e)(t),!0}catch{return!1}}'
+        'function md(e,t){'
+    )
+    discriminator_replacement = (
+        'function Zx(e,t){try{return Hr(e)(t),!0}catch{return!1}}'
+        'function __dtsUnionDiscriminator(e,t){'
+        'if(!t||typeof t!="object"||Array.isArray(t))return!1;'
+        'const n=[];'
+        'function r(o){'
+        'if(!o)return;'
+        'if(o.type==="transform")return r(o.inner);'
+        'if(o.type==="intersect"){for(const a of o.list||[])r(a);return}'
+        'if(o.type!=="object")return;'
+        'for(const[a,l]of Object.entries(o.dict||{})){'
+        'let i=l;for(;i&&i.type==="transform";)i=i.inner;'
+        'i&&i.type==="const"&&n.push([a,i.value])'
+        '}'
+        '}'
+        'return r(e),n.length>0&&n.every(([o,a])=>'
+        'Object.prototype.hasOwnProperty.call(t,o)&&t[o]===a)'
+        '}'
+        'function md(e,t){'
+    )
+    discriminator_count = content.count(discriminator_anchor)
+    if discriminator_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery discriminator helper anchor expected once, "
+            f"found {discriminator_count}"
+        )
+    content = content.replace(
+        discriminator_anchor,
+        discriminator_replacement,
+        1,
+    )
+
+    union_input_anchor = (
+        'const l=oo({input(d){a.value=null;let f=!0,h=0;'
+        'for(;!a.value&&f&&++h<10;){'
+    )
+    union_input_replacement = (
+        'const l=oo({input(d){a.value=null;'
+        'const __dtsPinned=t.schema.list.find(v=>'
+        '!v.meta.hidden&&__dtsUnionDiscriminator(v,d));'
+        'if(__dtsPinned)a.value=__dtsPinned;'
+        'let f=!a.value,h=0;for(;!a.value&&f&&++h<10;){'
+    )
+    union_input_count = content.count(union_input_anchor)
+    if union_input_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery union input anchor expected once, "
+            f"found {union_input_count}"
+        )
+    content = content.replace(
+        union_input_anchor,
+        union_input_replacement,
+        1,
+    )
+
     foldable_anchor = 'extra:{foldable:!1}'
     foldable_count = content.count(foldable_anchor)
     if foldable_count != 1:
