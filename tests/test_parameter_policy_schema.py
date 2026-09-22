@@ -25,7 +25,7 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                 self.assertIn("parameter_policy_profiles", fragment)
                 self.assertIn("parameter_policy_components", fragment)
 
-    def test_optimizer_choices_cover_registry_and_disable_non_supported(self):
+    def test_optimizer_choices_are_self_discriminating_and_disable_non_supported(self):
         capabilities = list_optimizer_capabilities()
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
             with self.subTest(train_type=train_type):
@@ -43,15 +43,26 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                     [row["type"] for row in metadata["optimizer_capabilities"]],
                     [capability.name for capability in capabilities],
                 )
+                self.assertIn(
+                    "parameter_policy_profiles: Schema.dict(\n                    Schema.union([",
+                    fragment,
+                )
+                self.assertNotIn(
+                    "parameter_policy_profiles: Schema.dict(Schema.intersect([",
+                    fragment,
+                )
                 for capability in capabilities:
-                    option = f'Schema.const("{capability.name}")'
+                    option = f'type: Schema.const("{capability.name}").required()'
+                    default = f'.default({{ type: "{capability.name}", args: {{}} }})'
                     self.assertIn(option, fragment)
-                    tail = fragment.split(option, 1)[1].split(",", 1)[0]
+                    self.assertIn(default, fragment)
+                    branch_start = fragment.index(option)
+                    next_branch = fragment.find("Schema.object({", branch_start + len(option))
+                    branch_tail = fragment[branch_start: next_branch if next_branch >= 0 else len(fragment)]
                     if capability.component_support == "supported":
-                        self.assertNotIn(".disabled()", tail)
+                        self.assertNotIn(".disabled()", branch_tail)
                     else:
-                        self.assertIn(".disabled()", tail)
-                        self.assertIn(capability.component_support.title(), tail)
+                        self.assertIn(".disabled()", branch_tail)
 
     def test_component_ids_match_model_profile_exactly(self):
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
@@ -80,6 +91,7 @@ class ParameterPolicySchemaTests(unittest.TestCase):
     def test_muon_profile_uses_dedicated_typed_controls(self):
         fragment = parameter_policy_schema_fragment("sd-lora")
         self.assertIn('type: Schema.const("Muon").required()', fragment)
+        self.assertIn('.default({ type: "Muon", args: {} })', fragment)
         self.assertIn("momentum: Schema.number().min(0)", fragment)
         self.assertNotIn("momentum: Schema.number().min(0).max(", fragment)
         self.assertNotIn("momentum: Schema.number().min(0).step(", fragment)
@@ -94,6 +106,15 @@ class ParameterPolicySchemaTests(unittest.TestCase):
         )
         self.assertIn("use_adjusted_lr: Schema.boolean()", fragment)
         self.assertIn("args: Schema.dict(Schema.string())", fragment)
+
+    def test_optimizer_switch_cannot_drop_type_via_sibling_union(self):
+        fragment = parameter_policy_schema_fragment("anima-finetune")
+        profiles = fragment.split("parameter_policy_profiles:", 1)[1].split(
+            "parameter_policy_components:", 1
+        )[0]
+        self.assertIn("Schema.dict(\n                    Schema.union([", profiles)
+        self.assertNotIn("type: Schema.union(", profiles)
+        self.assertNotIn("Schema.dict(Schema.intersect([", profiles)
 
     def test_wrapper_is_idempotent_and_marks_exactly_once(self):
         base = "Schema.object({foo: Schema.string()});"
