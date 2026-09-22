@@ -40,10 +40,14 @@ class MultiCaptionRequestContractTests(unittest.TestCase):
         # The files branch must be the unguarded final fallback.  Otherwise the
         # pinned legacy renderer can fail branch selection before the sibling
         # storage default has been materialized.
-        files_pos = body.rfind("multi_caption_file_groups:")
+        files_pos = body.rfind('multi_caption_storage: Schema.const("files").default("files")')
         jsonl_pos = body.rfind('multi_caption_storage: Schema.const("jsonl").required()')
         self.assertGreater(files_pos, jsonl_pos)
         files_tail = body[files_pos:]
+        self.assertIn(
+            'multi_caption_storage: Schema.const("files").default("files")',
+            files_tail,
+        )
         self.assertNotIn('multi_caption_storage: Schema.const("files").required()', files_tail)
 
     def test_all_supported_training_schema_sources_expose_multi_caption(self):
