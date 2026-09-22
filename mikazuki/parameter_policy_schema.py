@@ -86,10 +86,17 @@ def _optimizer_profile_branch(row: dict) -> str:
             '支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")'
         )
 
+    description = optimizer_type
+    if row["component_support"] != "supported":
+        detail = row.get("restriction") or (
+            f"Component support is {row['component_support']}."
+        )
+        description = f"{optimizer_type} — {row['component_support'].title()}: {detail}"
+
     branch = f"""Schema.object({{
         type: Schema.const({type_literal}).required(),
         args: {args_schema}
-    }}).default({{ type: {type_literal}, args: {{}} }}).description({type_literal})"""
+    }}).default({{ type: {type_literal}, args: {{}} }}).description({_js_string(description)})"""
     if row["component_support"] != "supported":
         branch += ".disabled()"
     return branch
