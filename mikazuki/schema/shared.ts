@@ -72,6 +72,7 @@
                 })).default({ caption: { enabled: true, weight: 1, key: "caption", processing: {} } }).description("JSONL Caption Groups；字典 key 就是 Group 名称；默认创建 caption 组。"),
             }),
             Schema.object({
+                multi_caption_storage: Schema.const("files").default("files"),
                 multi_caption_file_groups: Schema.dict(Schema.object({
                     enabled: Schema.boolean().default(true),
                     weight: Schema.number().min(0).default(1),
