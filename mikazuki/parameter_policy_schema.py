@@ -60,6 +60,40 @@ def _component_row(component: dict) -> str:
         ])
     ])"""
 
+def _optimizer_profile_branch(row: dict) -> str:
+    """Return one self-contained optimizer branch for the legacy union renderer.
+
+    The pinned frontend replaces the whole union model when the user changes
+    branches.  Every branch therefore owns and defaults its discriminator
+    (`type`) so switching optimizer can never erase the profile type.
+    """
+
+    optimizer_type = str(row["type"])
+    type_literal = _js_string(optimizer_type)
+    if optimizer_type == "Muon":
+        args_schema = """Schema.object({
+            momentum: Schema.number().min(0).description("Muon 动量，例如 0.95；必须小于 1，最终范围由后端严格校验。"),
+            weight_decay: Schema.number().min(0).description("Muon 权重衰减，例如 0.01。"),
+            weight_decouple: Schema.boolean().description("使用 decoupled weight decay。"),
+            nesterov: Schema.boolean().description("启用 Nesterov momentum。"),
+            ns_steps: Schema.number().min(1).step(1).description("Newton-Schulz 迭代次数，例如 5。"),
+            ns_coeffs: Schema.union(["original", "quintic", "polar_express", "polar_express_safer"]).description("Newton-Schulz 系数预设。"),
+            use_adjusted_lr: Schema.boolean().description("按 Muon 实现启用 adjusted LR。")
+        }).description("Muon 参数；这些是 DTS 当前明确支持的 Muon 参数，直接填写即可，无需手工添加 key/value。")"""
+    else:
+        args_schema = (
+            'Schema.dict(Schema.string()).description("优化器构造参数。左侧填写参数名，右侧只填写参数值；'
+            '支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")'
+        )
+
+    branch = f"""Schema.object({{
+        type: Schema.const({type_literal}).required(),
+        args: {args_schema}
+    }}).default({{ type: {type_literal}, args: {{}} }}).description({type_literal})"""
+    if row["component_support"] != "supported":
+        branch += ".disabled()"
+    return branch
+
 def parameter_policy_schema_fragment(train_type: str) -> str:
     """Return the Parameter Policy editor as one Schemastery expression."""
 
@@ -73,18 +107,11 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
     if "AdamW" not in optimizer_types:
         raise RuntimeError("Parameter Policy editor requires AdamW as the safe default profile type.")
 
-    optimizer_choices = []
-    for row in optimizer_capabilities:
-        option = f"Schema.const({_js_string(row['type'])})"
-        if row["component_support"] != "supported":
-            detail = row.get("restriction") or (
-                f"Component support is {row['component_support']}."
-            )
-            option += (
-                f".disabled().description({_js_string(row['component_support'].title() + ': ' + detail)})"
-            )
-        optimizer_choices.append(option)
-    optimizer_choice_expr = "[" + ",".join(optimizer_choices) + "]"
+    optimizer_profile_branches = [
+        _optimizer_profile_branch(row)
+        for row in optimizer_capabilities
+    ]
+    optimizer_profile_expr = "[\n                    " + ",\n                    ".join(optimizer_profile_branches) + "\n                ]"
     component_lines = []
     for component in metadata["components"]:
         component_lines.append(
@@ -102,32 +129,9 @@ def parameter_policy_schema_fragment(train_type: str) -> str:
                 optimization_mode: Schema.const("component").required()
             }}),
             Schema.object({{
-                parameter_policy_profiles: Schema.dict(Schema.intersect([
-                    Schema.object({{
-                        type: Schema.union({optimizer_choice_expr}).default("AdamW").description("优化器类型；仅 Component 已支持的优化器可新建使用，受限/计划项仅用于读取旧配置。")
-                    }}),
-                    Schema.union([
-                        Schema.intersect([
-                            Schema.object({{
-                                type: Schema.const("Muon").required()
-                            }}),
-                            Schema.object({{
-                                args: Schema.object({{
-                                    momentum: Schema.number().min(0).description("Muon 动量，例如 0.95；必须小于 1，最终范围由后端严格校验。"),
-                                    weight_decay: Schema.number().min(0).description("Muon 权重衰减，例如 0.01。"),
-                                    weight_decouple: Schema.boolean().description("使用 decoupled weight decay。"),
-                                    nesterov: Schema.boolean().description("启用 Nesterov momentum。"),
-                                    ns_steps: Schema.number().min(1).step(1).description("Newton-Schulz 迭代次数，例如 5。"),
-                                    ns_coeffs: Schema.union(["original", "quintic", "polar_express", "polar_express_safer"]).description("Newton-Schulz 系数预设。"),
-                                    use_adjusted_lr: Schema.boolean().description("按 Muon 实现启用 adjusted LR。")
-                                }}).description("Muon 参数；这些是 DTS 当前明确支持的 Muon 参数，直接填写即可，无需手工添加 key/value。")
-                            }})
-                        ]),
-                        Schema.object({{
-                            args: Schema.dict(Schema.string()).description("优化器构造参数。左侧填写参数名，右侧只填写参数值；支持 0.95、false、[1, 2]、(0.9, 0.95) 等 literal。空白行会被忽略。")
-                        }})
-                    ])
-                ])).description("Optimizer Profiles；字典 key 是自定义 Profile 名称，例如 main、muon、fallback。"),
+                parameter_policy_profiles: Schema.dict(
+                    Schema.union({optimizer_profile_expr})
+                ).description("Optimizer Profiles；每个分支自己保存 optimizer type，切换类型不会丢失 Profile；字典 key 是自定义 Profile 名称。"),
                 parameter_policy_components: Schema.object({{
 {components}
                 }}).description("后端组件；Train=false 为最终语义，关闭的组件会忽略残留的学习率/Profile。")
