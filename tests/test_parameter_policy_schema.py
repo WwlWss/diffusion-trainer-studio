@@ -64,6 +64,17 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                     else:
                         self.assertIn(".disabled()", branch_tail)
 
+    def test_disabled_optimizer_branches_keep_restriction_reason(self):
+        fragment = parameter_policy_schema_fragment("anima-finetune")
+        self.assertIn(
+            "AdaFactor — Restricted: Component v1 requires relative_step=False.",
+            fragment,
+        )
+        self.assertIn(
+            "pytorch_optimizer.CAME — Planned: Enable only after dedicated GPU smoke coverage.",
+            fragment,
+        )
+
     def test_component_ids_match_model_profile_exactly(self):
         for train_type in sorted(PARAMETER_POLICY_RUNTIME_TRAIN_TYPES):
             with self.subTest(train_type=train_type):
