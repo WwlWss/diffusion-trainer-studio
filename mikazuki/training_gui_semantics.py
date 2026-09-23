@@ -124,25 +124,13 @@ def _component_policy_active(config: dict) -> bool:
     return bool(str(config.get("parameter_policy_config") or "").strip())
 
 
-def _strict_bool(value: object, *, field: str) -> bool:
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in {0, 1}:
-        return bool(value)
-    text = str(value or "").strip().casefold()
-    if text in {"1", "true", "yes", "on"}:
-        return True
-    if text in {"0", "false", "no", "off"}:
-        return False
-    raise ValueError(f"{field} 必须是布尔值。")
+def _network_arg_exact_true(config: dict, key: str) -> bool | None:
+    """Mirror the LoRA network modules' exact string-bool wire semantics.
 
-
-def _network_arg_bool(config: dict, key: str) -> bool | None:
-    """Return the final bool value for one network_args key.
-
-    sd-scripts treats later duplicate kwargs as authoritative. Mirror that
-    behavior for validation, then canonicalizers collapse the key to at most
-    one entry before the effective config leaves this module.
+    networks.lora_flux and networks.lora_sd3 enable train_t5xxl only when the
+    final keyword value is exactly the string "True". Other values are false.
+    Keep that behavior when canonicalizing imported/custom effective configs;
+    GUI booleans are still emitted canonically as "True" or omission.
     """
 
     expected = str(key).strip().casefold()
@@ -151,9 +139,9 @@ def _network_arg_bool(config: dict, key: str) -> bool | None:
         if _arg_key(item) != expected:
             continue
         if "=" not in item:
-            raise ValueError(f"network_args {key} 必须使用 {key}=true/false 形式。")
+            raise ValueError(f"network_args {key} 必须使用 {key}=... 形式。")
         _raw_key, raw_value = item.split("=", 1)
-        result = _strict_bool(raw_value, field=f"network_args {key}")
+        result = raw_value == "True"
     return result
 
 
@@ -237,6 +225,8 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
 
     semantic_target = target not in (None, "")
     if not semantic_target and legacy_t5_present and legacy_train_t5:
+        # Legacy/custom top-level train_t5xxl=true means the target must expose
+        # T5 so the LoRA network can actually create those adapters.
         target = "dit_t5xxl" if chroma else "dit_clip_l_t5xxl"
         semantic_target = True
 
@@ -258,39 +248,45 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
             train_t5 = target == "dit_clip_l_t5xxl"
             config["network_train_unet_only"] = target == "dit"
 
-        # Flux/Chroma semantic targets always include the transformer, so an
-        # old text-encoder-only flag must not survive a GUI target selection.
         config.pop("network_train_text_encoder_only", None)
         _set_network_arg_bool(config, "train_t5xxl", train_t5)
+    elif legacy_t5_present:
+        # ui_custom_params is last-write-wins. In particular, an explicit
+        # train_t5xxl=false must be able to clear the True emitted by the first
+        # semantic pass. Chroma has no CLIP branch, so false canonicalizes to
+        # transformer-only.
+        _set_network_arg_bool(config, "train_t5xxl", bool(legacy_train_t5))
+        if chroma and not legacy_train_t5:
+            config["network_train_unet_only"] = True
+            config.pop("network_train_text_encoder_only", None)
 
     unet_only, _te_only = _validate_lora_only_flags(
         config,
         label="Flux/Chroma LoRA",
     )
-    train_t5 = _network_arg_bool(config, "train_t5xxl")
+    train_t5 = _network_arg_exact_true(config, "train_t5xxl")
     train_t5 = bool(train_t5) if train_t5 is not None else False
 
     if unet_only and train_t5:
         raise ValueError(
             "Flux/Chroma LoRA target 不一致：network_train_unet_only=true "
-            "不能与 network_args train_t5xxl=true 同时使用。"
+            "不能与 network_args train_t5xxl=True 同时使用。"
         )
 
-    # Collapse duplicate/custom entries while preserving the same final value
-    # sd-scripts would observe.
+    # Preserve the network modules' final exact-"True" semantics while
+    # collapsing duplicates to one canonical entry.
     _set_network_arg_bool(config, "train_t5xxl", train_t5)
 
     if (
         not _component_policy_active(config)
-        and not unet_only
+        and train_t5
         and _text_encoder_cache_enabled(config)
     ):
-        # Preserve the pre-existing Standard-mode DTS restriction. Component
-        # mode defers cache legality to policy-aware host preflight.
+        # Flux/SD3 trainers support partial caching while CLIP adapters train;
+        # only T5 training conflicts with the cached T5 output.
         raise ValueError(
-            "训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。"
+            "训练 Flux/Chroma T5XXL LoRA 时不能缓存 Text Encoder outputs。"
         )
-
 
 def normalize_sd3_lora_target(config: dict) -> None:
     """Canonicalize SD3 GUI target/T5 state into the real trainer contract."""
@@ -328,7 +324,7 @@ def normalize_sd3_lora_target(config: dict) -> None:
         )
 
     unet_only, _te_only = _validate_lora_only_flags(config, label="SD3 LoRA")
-    train_t5 = _network_arg_bool(config, "train_t5xxl")
+    train_t5 = _network_arg_exact_true(config, "train_t5xxl")
     train_t5 = bool(train_t5) if train_t5 is not None else False
 
     if unet_only and train_t5:
