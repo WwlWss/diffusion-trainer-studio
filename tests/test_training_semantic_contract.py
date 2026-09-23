@@ -259,6 +259,46 @@ class TrainingSemanticContractTests(unittest.TestCase):
         self.assertIn("custom=ok", rebuilt["network_args"])
         self.assertNotIn("train_t5xxl", rebuilt)
 
+    def test_rehydrate_preserves_lowercase_true_as_disabled_t5(self):
+        cases = (
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "network_module": "networks.lora_flux",
+                    "network_train_unet_only": False,
+                    "network_args": ["train_t5xxl=true", "custom=ok"],
+                },
+            ),
+            (
+                "sd3-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "network_module": "networks.lora_sd3",
+                    "network_train_unet_only": False,
+                    "network_train_text_encoder_only": False,
+                    "network_args": ["train_t5xxl=true", "custom=ok"],
+                },
+            ),
+        )
+        for train_type, effective in cases:
+            with self.subTest(train_type=train_type):
+                gui = rehydrate_trainer_config(effective, train_type)
+                if train_type == "sd3-lora":
+                    self.assertFalse(gui["train_t5xxl"])
+                else:
+                    self.assertEqual(gui["flux_lora_target"], "dit_clip_l")
+                rebuilt = prepare_training_config(
+                    gui,
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                ).config
+                self.assertNotIn(
+                    "train_t5xxl=True",
+                    rebuilt.get("network_args", []),
+                )
+                self.assertIn("custom=ok", rebuilt["network_args"])
+
     def test_lora_target_normalizers_are_idempotent(self):
         cases = (
             (
