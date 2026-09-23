@@ -62,6 +62,15 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertIn("bucket_reso_steps: Schema.number().default(32)", fixed)
         self.assertIn("memory_mode", fixed)
 
+    def test_sd3_lora_uses_single_semantic_target_control(self):
+        source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
+        fixed = override_raw_schema("sd3-lora", source)
+        self.assertIn("sd3_lora_target", fixed)
+        self.assertIn('Schema.union(["mmdit", "text_encoder", "mmdit_text_encoder"])', fixed)
+        self.assertNotIn("network_train_unet_only: Schema.boolean", fixed)
+        self.assertNotIn("network_train_text_encoder_only: Schema.boolean", fixed)
+        self.assertIn("train_t5xxl", fixed)
+
     def test_flux_and_chroma_lora_gain_semantic_target_dataset_and_memory(self):
         source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         flux = fixed_flux_family_schema(source, "flux", "flux-lora")
