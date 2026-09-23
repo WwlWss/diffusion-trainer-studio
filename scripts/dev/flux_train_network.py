@@ -242,12 +242,18 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
     def get_text_encoder_outputs_caching_strategy(self, args):
         if args.cache_text_encoder_outputs:
-            # if the text encoders is trained, we need tokenization, so is_partial is True
+            # Parameter Policy routing is resolved only after the cache is
+            # created. Keep token IDs for every policy-owned cache so a later
+            # CLIP-L Train=true route can recompute CLIP while reusing cached
+            # T5 outputs.
+            policy_cache_requires_tokens = bool(
+                str(getattr(args, "parameter_policy_config", "") or "").strip()
+            )
             return strategy_flux.FluxTextEncoderOutputsCachingStrategy(
                 args.cache_text_encoder_outputs_to_disk,
                 args.text_encoder_batch_size,
                 args.skip_cache_check,
-                is_partial=self.train_clip_l or self.train_t5xxl,
+                is_partial=self.train_clip_l or self.train_t5xxl or policy_cache_requires_tokens,
                 apply_t5_attn_mask=args.apply_t5_attn_mask,
             )
         else:
