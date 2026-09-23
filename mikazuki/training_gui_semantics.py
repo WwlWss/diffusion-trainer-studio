@@ -11,6 +11,7 @@ from mikazuki.training_gui_args import (
     _as_bool,
     _is_empty,
     _items,
+    _network_arg_items,
     apply_raw_gui_semantics,
 )
 
@@ -134,7 +135,7 @@ def _network_arg_exact_true(config: dict, key: str) -> bool | None:
     """
 
     result: bool | None = None
-    for item in _items(config.get("network_args")):
+    for item in _network_arg_items(config.get("network_args")):
         if "=" not in item:
             continue
         raw_key, raw_value = item.split("=", 1)
@@ -149,7 +150,7 @@ def _set_network_arg_bool(config: dict, key: str, value: bool) -> None:
     # aliases such as TRAIN_T5XXL or "train_t5xxl " are separate kwargs in
     # sd-scripts and must not be silently corrected by DTS.
     args = []
-    for item in _items(config.get("network_args")):
+    for item in _network_arg_items(config.get("network_args")):
         if "=" in item and item.split("=", 1)[0] == key:
             continue
         args.append(item)
