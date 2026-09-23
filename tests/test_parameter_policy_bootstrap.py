@@ -793,14 +793,14 @@ class ParameterPolicyFullBootstrapTests(unittest.TestCase):
 
         message = str(ctx.exception)
         markers = (
-            "fused_backward_pass",
-            "DeepSpeed",
             "LoRA+",
             "network_reg_lrs",
             "network_module",
         )
         positions = [message.index(marker) for marker in markers]
         self.assertEqual(positions, sorted(positions))
+        self.assertNotIn("fused_backward_pass", message)
+        self.assertNotIn("DeepSpeed", message)
 
     def test_public_bootstrap_never_invents_fallback_optimizer(self):
         prepared = PreparedTrainingConfig(
