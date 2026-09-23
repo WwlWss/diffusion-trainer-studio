@@ -24,15 +24,29 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertIn('@app.get("/branding/logo.webp"', APPLICATION)
 
     def test_generated_frontend_assets_use_media_type_helper(self):
-        self.assertIn(
-            "from mikazuki.frontend_branding import frontend_asset_media_type, patch_branding_index_html",
-            APPLICATION,
+        branding_import = next(
+            line
+            for line in APPLICATION.splitlines()
+            if line.startswith("from mikazuki.frontend_branding import ")
         )
-        self.assertIn("media_type = frontend_asset_media_type(asset_name)", APPLICATION)
-        self.assertNotIn('media_type="application/javascript")\n\n    asset_path', APPLICATION)
+        self.assertIn("frontend_asset_media_type", branding_import)
+
+        frontend_asset_start = APPLICATION.index("async def frontend_asset(asset_name: str):")
+        static_asset_start = APPLICATION.index(
+            "    asset_path = _safe_frontend_path",
+            frontend_asset_start,
+        )
+        generated_block = APPLICATION[frontend_asset_start:static_asset_start]
+        self.assertIn("media_type = frontend_asset_media_type(asset_name)", generated_block)
+        self.assertNotIn('media_type="application/javascript"', generated_block)
 
     def test_application_serves_branded_shell_for_document_routes(self):
-        self.assertIn("from mikazuki.frontend_branding import patch_branding_index_html", APPLICATION)
+        branding_import = next(
+            line
+            for line in APPLICATION.splitlines()
+            if line.startswith("from mikazuki.frontend_branding import ")
+        )
+        self.assertIn("patch_branding_index_html", branding_import)
         self.assertIn("content = patch_branding_index_html(", APPLICATION)
         self.assertIn("return _frontend_shell_response()", APPLICATION)
         self.assertIn('if path.endswith(".html") or (leaf and "." not in leaf):', APPLICATION)
