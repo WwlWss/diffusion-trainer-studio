@@ -71,6 +71,13 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertNotIn("network_train_text_encoder_only: Schema.boolean", fixed)
         self.assertIn("train_t5xxl", fixed)
 
+    def test_flux_and_sd3_real_schema_defaults_keep_fp8_enabled(self):
+        flux_source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
+        sd3_source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
+        marker = 'fp8_base: Schema.boolean().default(true)'
+        self.assertIn(marker, flux_source)
+        self.assertIn(marker, sd3_source)
+
     def test_flux_and_chroma_lora_gain_semantic_target_dataset_and_memory(self):
         source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         flux = fixed_flux_family_schema(source, "flux", "flux-lora")
