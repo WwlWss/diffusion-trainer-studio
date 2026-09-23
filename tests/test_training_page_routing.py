@@ -151,7 +151,7 @@ class TrainingPageRoutingTests(unittest.TestCase):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('"dts-profile-entry"', patched)
         self.assertIn('"Profile \\u540D\\u79F0"', patched)
-        self.assertIn('"\\u4F8B\\u5982 muon / fallback"', patched)
+        self.assertIn('"例如 muon / fallback"', patched)
         self.assertIn('"dts-profile-type-label"},"Optimizer Type"', patched)
 
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
