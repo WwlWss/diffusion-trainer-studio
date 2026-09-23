@@ -213,14 +213,17 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertIn('__canDeletePolicyProfile=N=>', self.patched)
         self.assertIn('仍被 "+R.length+" 个 Component 引用', self.patched)
         self.assertIn(
-            'window.__dtsPolicyProfileHooks={rename:__renamePolicyProfile,canDelete:__canDeletePolicyProfile,optimizerTypeChanged:__onPolicyOptimizerTypeChanged}',
+            'window.__dtsPolicyProfileHooks=H,H',
             self.patched,
         )
+        self.assertIn('profileNames:__profileNames', self.patched)
 
     def test_optimizer_type_change_reconciles_fallback_semantics(self):
         start = self.patched.index('__onPolicyOptimizerTypeChanged=')
         end = self.patched.index(',__installPolicyProfileHooks=', start)
         block = self.patched[start:end]
+        self.assertIn('OM=__optimizerRequiresEligibility(O)', block)
+        self.assertIn('NM=__optimizerRequiresEligibility(N)', block)
         self.assertIn(
             'OM&&!NM&&R.optimizer_profile===K&&(delete R.fallback_optimizer_profile,delete R.fallback_learning_rate)',
             block,
@@ -230,9 +233,32 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             block,
         )
 
+    def test_profile_rename_rejects_empty_existing_name(self):
+        start = self.patched.index('__renamePolicyProfile=')
+        end = self.patched.index(',__canDeletePolicyProfile=', start)
+        block = self.patched[start:end]
+        self.assertIn('String(O||"").trim()&&!F', block)
+        self.assertIn('Optimizer Profile 名称不能为空', block)
+
+    def test_profile_eligibility_logic_is_registry_driven(self):
+        self.assertIn('__optimizerRequiresEligibility=T=>', self.patched)
+        self.assertNotIn('toLowerCase()=="muon"', self.patched)
+
+    def test_profile_hook_cleanup_is_owner_guarded(self):
+        self.assertIn('__policyProfileHookOwner=__installPolicyProfileHooks()', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks===__policyProfileHookOwner&&delete window.__dtsPolicyProfileHooks',
+            self.patched,
+        )
+
     def test_parameter_policy_initial_mount_and_import_use_mode_sync(self):
         self.assertIn(
-            'onMounted(async()=>{__installPolicyProfileHooks(),I(),y(),await nextTick(),await __syncPolicyMode()})',
+            'onMounted(async()=>{I(),y(),await nextTick(),await __syncPolicyMode()})',
+            self.patched,
+        )
+        self.assertIn('__policyProfileHookOwner=__installPolicyProfileHooks()', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks===__policyProfileHookOwner&&delete window.__dtsPolicyProfileHooks',
             self.patched,
         )
         self.assertIn(
