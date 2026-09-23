@@ -159,6 +159,25 @@ class TrainingPageRoutingTests(unittest.TestCase):
             patched,
         )
 
+    def test_frontend_patch_routes_profile_mutations_through_lifecycle_hooks(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks.rename(c(t)[v][0],m)',
+            patched,
+        )
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks.canDelete(h)',
+            patched,
+        )
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks.optimizerTypeChanged(t.prefix,f,h)',
+            patched,
+        )
+        self.assertIn(
+            '__dtsOptimizerProfileUnion(t.schema,t.prefix)',
+            patched,
+        )
+
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('Je(Ee(c(o)("collapse")),1)', patched)
