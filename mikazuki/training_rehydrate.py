@@ -157,7 +157,7 @@ def rehydrate_trainer_config(
     args = _items(config.pop("network_args", None))
     if page_train_type == "sd3-lora":
         train_t5_raw, args = _extract_arg(args, "train_t5xxl")
-        config["train_t5xxl"] = _as_bool(train_t5_raw) if train_t5_raw is not None else False
+        config["train_t5xxl"] = train_t5_raw == "True" if train_t5_raw is not None else False
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
         te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
         if unet_only and te_only:
@@ -205,7 +205,7 @@ def rehydrate_trainer_config(
 
     if page_train_type in {"flux-lora", "chroma-lora"}:
         train_t5_raw, args = _extract_arg(args, "train_t5xxl")
-        train_t5 = _as_bool(train_t5_raw)
+        train_t5 = train_t5_raw == "True"
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
         if page_train_type == "chroma-lora":
             config["flux_lora_target"] = "dit_t5xxl" if train_t5 else "dit"
