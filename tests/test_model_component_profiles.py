@@ -362,6 +362,16 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertIn("clip_l.adapter", flux.available_components)
         self.assertIn("t5xxl.adapter", flux.available_components)
 
+        flux_lowercase_true = resolve_training_target_profile(
+            "flux-lora",
+            {
+                "network_train_unet_only": False,
+                "network_args": ["train_t5xxl=true"],
+            },
+        )
+        self.assertIn("clip_l.adapter", flux_lowercase_true.available_components)
+        self.assertNotIn("t5xxl.adapter", flux_lowercase_true.available_components)
+
         flux_dit = resolve_training_target_profile(
             "flux-lora",
             {"network_train_unet_only": True},
@@ -483,6 +493,15 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertIn("clip_l.adapter", sd3.available_components)
         self.assertIn("clip_g.adapter", sd3.available_components)
         self.assertIn("t5xxl.adapter", sd3.available_components)
+        sd3_lowercase_true = resolve_training_target_profile(
+            "sd3-lora",
+            {
+                "network_train_unet_only": False,
+                "network_train_text_encoder_only": False,
+                "network_args": ["train_t5xxl=true"],
+            },
+        )
+        self.assertNotIn("t5xxl.adapter", sd3_lowercase_true.available_components)
 
         sd3_unet = resolve_training_target_profile(
             "sd3-lora",
