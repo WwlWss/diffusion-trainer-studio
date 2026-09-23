@@ -191,6 +191,18 @@ def patch_frontend_app_js(content: str) -> str:
         'return r(e),n.length>0&&n.every(([o,a])=>'
         'Object.prototype.hasOwnProperty.call(t,o)&&t[o]===a)'
         '}'
+        'function __dtsOptimizerProfileUnion(e,t){'
+        'if(!String(t||"").startsWith("parameter_policy_profiles."))return!1;'
+        'if(!e||!Array.isArray(e.list)||!e.list.length)return!1;'
+        'for(const n of e.list){'
+        'let r=n;for(;r&&r.type==="transform";)r=r.inner;'
+        'if(!r||r.type!=="object")return!1;'
+        'let o=r.dict&&r.dict.type;'
+        'for(;o&&o.type==="transform";)o=o.inner;'
+        'if(!o||o.type!=="const")return!1'
+        '}'
+        'return!0'
+        '}'
         'function md(e,t){'
     )
     discriminator_count = content.count(discriminator_anchor)
@@ -253,30 +265,94 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
-    # Dict keys are editable in the pinned group renderer, but an empty key is
-    # rendered as a two-em blank with a borderless absolutely-positioned input.
-    # Make the existing input discoverable without changing dict semantics.
-    dict_key_anchor = (
-        'U("span",hI,"\\xA0")),'
-        'vt(K("input",{"onUpdate:modelValue":m=>c(t)[v][0]=m}'
+    # Parameter Policy profile names and optimizer types are independent
+    # values. Render them as two explicit rows instead of overloading the dict
+    # entry title with an invisible key editor next to the union selector.
+    profile_entry_anchor = (
+        'prefix:e.schema.type==="array"?`${e.prefix.slice(0,-1)}[${h}].`:e.prefix+h+".",'
+        'extra:{foldable:!0'
     )
-    dict_key_replacement = (
-        'U("span",hI,"\\u952E\\u540D",1)),'
-        'vt(K("input",{placeholder:"\\u952E\\u540D",'
-        '"onUpdate:modelValue":m=>c(t)[v][0]=m}'
+    profile_entry_replacement = (
+        'prefix:e.schema.type==="array"?`${e.prefix.slice(0,-1)}[${h}].`:e.prefix+h+".",'
+        'class:e.prefix==="parameter_policy_profiles."?"dts-profile-entry":void 0,'
+        'extra:{foldable:!0'
     )
-    dict_key_count = content.count(dict_key_anchor)
-    if dict_key_count != 1:
+    profile_entry_count = content.count(profile_entry_anchor)
+    if profile_entry_count != 1:
         raise RuntimeError(
-            "Frontend Schemastery dict-key input anchor expected once, "
-            f"found {dict_key_count}"
+            "Frontend Schemastery profile-entry class anchor expected once, "
+            f"found {profile_entry_count}"
         )
     content = content.replace(
-        dict_key_anchor,
-        dict_key_replacement,
+        profile_entry_anchor,
+        profile_entry_replacement,
         1,
     )
 
+    profile_name_label_anchor = 'K("span",fI,Ee(e.prefix.slice(0,-1)),1)'
+    profile_name_label_replacement = (
+        'K("span",fI,Ee(e.prefix==="parameter_policy_profiles."?'
+        '"Profile \\u540D\\u79F0":e.prefix.slice(0,-1)),1)'
+    )
+    profile_name_label_count = content.count(profile_name_label_anchor)
+    if profile_name_label_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery profile-name label anchor expected once, "
+            f"found {profile_name_label_count}"
+        )
+    content = content.replace(
+        profile_name_label_anchor,
+        profile_name_label_replacement,
+        1,
+    )
+
+    profile_key_span_anchor = (
+        'K("span",pI,[c(t)[v][0]?'
+        '(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
+        '(x(),U("span",hI,"\\xA0")),'
+        'vt(K("input",{"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
+        '[[t0,c(t)[v][0]]])])'
+    )
+    profile_key_span_replacement = (
+        'K("span",pI,[c(t)[v][0]?'
+        '(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
+        '(x(),U("span",hI,e.prefix==="parameter_policy_profiles."?'
+        '"例如 muon / fallback":"\\xA0")),'
+        'vt(K("input",{placeholder:e.prefix==="parameter_policy_profiles."?'
+        '"例如 muon / fallback":void 0,'
+        '"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
+        '[[t0,c(t)[v][0]]])])'
+    )
+    profile_key_span_count = content.count(profile_key_span_anchor)
+    if profile_key_span_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery profile-key span anchor expected once, "
+            f"found {profile_key_span_count}"
+        )
+    content = content.replace(
+        profile_key_span_anchor,
+        profile_key_span_replacement,
+        1,
+    )
+
+    profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
+    profile_type_replacement = (
+        'prefix:G(()=>['
+        '__dtsOptimizerProfileUnion(e.schema,e.prefix)?'
+        'K("span",{class:"dts-profile-type-label"},"Optimizer Type"):ye("",!0),'
+        'r.value.length>1?'
+    )
+    profile_type_count = content.count(profile_type_anchor)
+    if profile_type_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery profile-type label anchor expected once, "
+            f"found {profile_type_count}"
+        )
+    content = content.replace(
+        profile_type_anchor,
+        profile_type_replacement,
+        1,
+    )
     foldable_anchor = 'extra:{foldable:!1}'
     foldable_count = content.count(foldable_anchor)
     if foldable_count != 1:
