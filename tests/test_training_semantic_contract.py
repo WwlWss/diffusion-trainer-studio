@@ -399,6 +399,54 @@ class TrainingSemanticContractTests(unittest.TestCase):
                 resolve_backend=_resolve,
             )
 
+    def test_standard_text_encoder_cache_restrictions_remain_unchanged(self):
+        cases = (
+            (
+                "sdxl-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "lora_target": "unet_text_encoder",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_clip_l",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "chroma-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_t5xxl",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "sd3-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": True,
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+        )
+        for train_type, raw in cases:
+            with self.subTest(train_type=train_type):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Text Encoder|文本编码器|缓存",
+                ):
+                    prepare_training_config(
+                        raw,
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    )
+
     def test_dadapt_rewrites_active_lr_but_prodigy_does_not(self):
         dadapt = prepare_training_config(
             {
