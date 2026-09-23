@@ -6,10 +6,11 @@ shared Component optimizer facade, precision/autocast-scaler behavior,
 supported optimizer implementations, mixed optimizer children, and optimizer
 state_dict reload without requiring model checkpoints or datasets.
 
-It also includes one minimal single-process Accelerator.prepare + Parameter
-Policy device-audit smoke. It does not claim to qualify scheduler construction,
+It also includes minimal single-process Accelerator.prepare qualification for
+the Parameter Policy device audit and the SD3 one-live/one-frozen CLIP
+co-residency seam. It does not claim to qualify scheduler construction,
 gradient accumulation, trainer checkpoint hooks, distributed execution, or
-model-family integration.
+full model-family training.
 
 Backend/model-family smoke is a separate release axis documented in
 docs/parameter-policy-step6f-plan.md.
