@@ -38,6 +38,10 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         )
         generated_block = APPLICATION[frontend_asset_start:static_asset_start]
         self.assertIn("media_type = frontend_asset_media_type(asset_name)", generated_block)
+        self.assertIn(
+            "return Response(content=generated, media_type=media_type)",
+            generated_block,
+        )
         self.assertNotIn('media_type="application/javascript"', generated_block)
 
     def test_application_serves_branded_shell_for_document_routes(self):
