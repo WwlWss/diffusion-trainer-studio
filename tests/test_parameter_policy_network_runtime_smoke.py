@@ -153,6 +153,18 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
         )
 
 
+    def test_policy_cache_releases_pre_session_clip_residency(self):
+        for relative in (
+            ("scripts", "dev", "flux_train_network.py"),
+            ("scripts", "dev", "sd3_train_network.py"),
+        ):
+            source = ROOT.joinpath(*relative).read_text(encoding="utf-8")
+            self.assertIn(
+                "if policy_cache or not self.is_train_text_encoder(args):",
+                source,
+            )
+
+
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
 class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
     def test_component_lr_logging_survives_accelerate_scheduler_wrapper(self):
