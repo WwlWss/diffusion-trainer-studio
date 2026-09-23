@@ -19,6 +19,10 @@ class FrontendBrandingTests(unittest.TestCase):
             "application/javascript",
         )
         self.assertEqual(
+            frontend_branding.frontend_asset_media_type("runtime.module.mjs"),
+            "application/javascript",
+        )
+        self.assertEqual(
             frontend_branding.frontend_asset_media_type("runtime.asset.unknownext"),
             "application/octet-stream",
         )
