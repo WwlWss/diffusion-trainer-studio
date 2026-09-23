@@ -155,6 +155,24 @@ def rehydrate_trainer_config(
         config["lora_target"] = "unet" if unet_only else "text_encoder" if te_only else "unet_text_encoder"
 
     args = _items(config.pop("network_args", None))
+    if page_train_type == "sd3-lora":
+        train_t5_raw, args = _extract_arg(args, "train_t5xxl")
+        config["train_t5xxl"] = _as_bool(train_t5_raw) if train_t5_raw is not None else False
+        unet_only = _as_bool(config.pop("network_train_unet_only", False))
+        te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
+        if unet_only and te_only:
+            raise ValueError(
+                "SD3 LoRA effective config 同时启用了 network_train_unet_only "
+                "与 network_train_text_encoder_only，无法安全 rehydrate。"
+            )
+        config["sd3_lora_target"] = (
+            "mmdit"
+            if unet_only
+            else "text_encoder"
+            if te_only
+            else "mmdit_text_encoder"
+        )
+
     if page_train_type == "anima-lora":
         value, args = _extract_arg(args, "train_llm_adapter")
         if value is not None:
