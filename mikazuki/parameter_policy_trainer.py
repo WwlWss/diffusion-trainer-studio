@@ -768,6 +768,15 @@ class ParameterPolicyTrainerSession:
                     f"{name_by_id.get(id(parameter), '<parameter>')}=<no device>"
                 )
                 continue
+
+            actual_device = torch.device(actual_device)
+            if (
+                current_cuda_index is None
+                and actual_device.type == "cuda"
+                and actual_device.index is None
+            ):
+                current_cuda_index = _current_cuda_device_index()
+
             if not _same_runtime_device(
                 actual_device,
                 expected_device,
