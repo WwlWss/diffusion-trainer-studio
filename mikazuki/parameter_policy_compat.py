@@ -476,16 +476,150 @@ def parameter_policy_v1_semantic_blockers(
     return blockers
 
 
+def parameter_policy_bootstrap_semantic_blockers(
+    effective_config: Mapping[str, Any],
+    train_type: str,
+) -> list[str]:
+    """Return only Standard semantics that Component Policy v1 cannot encode.
+
+    Runtime qualification modes such as FP8/full-precision training, DeepSpeed,
+    compile, offload, fused optimizers, and block swapping are deliberately not
+    bootstrap blockers.  They remain fail-closed in
+    :func:`parameter_policy_v1_semantic_blockers` after the Component policy
+    has been created, so the editor can surface an actionable Runtime blocker
+    without silently rewriting the user's Standard configuration.
+    """
+
+    if not isinstance(effective_config, Mapping):
+        raise ValueError(
+            "Parameter Policy compatibility: effective_config 必须是 mapping。"
+        )
+
+    # Keep the same registry validation as runtime preflight.
+    get_model_component_profile(train_type)
+
+    network_args = _parse_network_args(effective_config.get("network_args"))
+    blockers: list[str] = []
+    seen: set[str] = set()
+
+    if train_type == "sdxl-finetune" and effective_config.get("block_lr") not in (
+        None,
+        "",
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "SDXL Full 的 block_lr 使用 23 组 U-Net block 学习率；"
+            "当前 Component schema 不能无损表示该分组。",
+        )
+
+    if train_type == "sd-dreambooth":
+        stop = effective_config.get("stop_text_encoder_training")
+        if stop not in (None, ""):
+            if isinstance(stop, bool):
+                raise ValueError(
+                    "Parameter Policy compatibility: "
+                    "stop_text_encoder_training 必须是整数 step。"
+                )
+            try:
+                stop_step = int(stop)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise ValueError(
+                    "Parameter Policy compatibility: "
+                    "stop_text_encoder_training 必须是整数 step。"
+                ) from exc
+            if isinstance(stop, float) and not stop.is_integer():
+                raise ValueError(
+                    "Parameter Policy compatibility: "
+                    "stop_text_encoder_training 必须是整数 step。"
+                )
+            if isinstance(stop, str):
+                try:
+                    if not float(stop.strip()).is_integer():
+                        raise ValueError
+                except ValueError as exc:
+                    raise ValueError(
+                        "Parameter Policy compatibility: "
+                        "stop_text_encoder_training 必须是整数 step。"
+                    ) from exc
+            if stop_step >= 0:
+                _append_once(
+                    blockers,
+                    seen,
+                    "SD DreamBooth 的 stop_text_encoder_training 会在训练中途冻结 "
+                    "Text Encoder；静态 Component Train=true/false 不能无损表示该时序语义。",
+                )
+
+    if train_type in {"sd-lora", "sdxl-lora"} and (
+        _SD_BLOCK_LR_KEYS.intersection(network_args)
+    ):
+        _append_once(
+            blockers,
+            seen,
+            "SD/SDXL LoRA block LR weighting 会按 U-Net block 重写 adapter 学习率；"
+            "当前 Component schema 不能无损表示该分组。",
+        )
+
+    if train_type in _LORA_NETWORK_MODULES and _LORAPLUS_KEYS.intersection(network_args):
+        _append_once(
+            blockers,
+            seen,
+            "LoRA+ 会将 lora_up 参数拆成独立学习率组；"
+            "Component-wise v1 尚未拥有该参数级 LR grouping 语义。",
+        )
+
+    if train_type in _REGEX_LR_BACKENDS and "network_reg_lrs" in network_args:
+        _append_once(
+            blockers,
+            seen,
+            "network_reg_lrs 会按正则匹配创建独立 adapter 学习率组；"
+            "Component-wise v1 不能无损表示该 regex-specific LR 语义。",
+        )
+
+    canonical_module = _LORA_NETWORK_MODULES.get(train_type)
+    if canonical_module is not None:
+        raw_module = effective_config.get("network_module")
+        module = str(raw_module).strip() if raw_module not in (None, "") else ""
+        if module and module != canonical_module:
+            _append_once(
+                blockers,
+                seen,
+                f"{train_type} 当前显式使用未审查的 network_module={module!r}；"
+                f"Standard -> Component bootstrap 只验证过 {canonical_module!r} "
+                "的 optimizer-group 语义。",
+            )
+
+    return blockers
+
+
 def parameter_policy_compatibility_blockers(
     effective_config: Mapping[str, Any],
     train_type: str,
 ) -> list[str]:
-    """Backward-compatible Standard -> Component bootstrap entrypoint."""
+    """Standard -> Component bootstrap gate.
 
-    return parameter_policy_v1_semantic_blockers(effective_config, train_type)
+    Non-Anima backends reject only semantics the v1 policy cannot represent.
+    Runtime-only qualification modes are intentionally deferred to Preview /
+    Start so switching modes never rewrites the user's trainer configuration.
+
+    Anima keeps its existing stricter bootstrap behavior in this hardening
+    branch; its already-qualified GUI/runtime flow is intentionally unchanged.
+    """
+
+    normalized_train_type = str(train_type or "").strip().lower()
+    if normalized_train_type in {"anima-lora", "anima-finetune"}:
+        return parameter_policy_v1_semantic_blockers(
+            effective_config,
+            normalized_train_type,
+        )
+    return parameter_policy_bootstrap_semantic_blockers(
+        effective_config,
+        normalized_train_type,
+    )
 
 
 __all__ = [
+    "parameter_policy_bootstrap_semantic_blockers",
     "parameter_policy_compatibility_blockers",
     "parameter_policy_v1_semantic_blockers",
 ]
