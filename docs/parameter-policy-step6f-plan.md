@@ -46,7 +46,10 @@ The GPU matrix has three orthogonal axes rather than one Cartesian product.
 
 `tools/run_parameter_policy_gpu_matrix.py` is the shared optimizer/runtime
 CUDA probe. It emits JSON containing repository/runtime versions, GPU identity,
-case name, and pass/fail details.
+case name, and pass/fail details. The matrix also includes a minimal
+single-process Accelerate `prepare()` + Parameter Policy device-audit case so
+implicit `cuda` versus explicit logical ordinals such as `cuda:0` are covered
+on real CUDA hardware. This does not qualify Component multi-GPU/DDP.
 
 `tools/run_parameter_policy_backend_gpu_matrix.py` is the real trainer matrix
 runner. Its machine-local JSON manifest must contain exactly the ten release
