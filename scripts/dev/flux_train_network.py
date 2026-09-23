@@ -309,8 +309,14 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
             accelerator.wait_for_everyone()
 
-            # move back to cpu
-            if not self.is_train_text_encoder(args):
+            # move back to cpu. Parameter Policy routing is not known during
+            # cache creation, so never keep CLIP-L resident based on the legacy
+            # target alone; accelerator.prepare() will move it back later if the
+            # policy actually trains the CLIP adapter.
+            policy_cache = bool(
+                str(getattr(args, "parameter_policy_config", "") or "").strip()
+            )
+            if policy_cache or not self.is_train_text_encoder(args):
                 logger.info("move CLIP-L back to cpu")
                 text_encoders[0].to("cpu")
             logger.info("move t5XXL back to cpu")
