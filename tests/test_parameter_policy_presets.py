@@ -105,6 +105,45 @@ class ParameterPolicyPresetTests(unittest.TestCase):
                         f"{filename}: {profile['type']} is not Component-supported",
                     )
 
+    def test_anima_stage1_component_preset_matches_intended_routing(self):
+        _data, policy = self._normalized_policy(
+            self._load("component-anima-finetune-muon.toml")
+        )
+        profiles = policy["optimizer_profiles"]
+        self.assertEqual(profiles["muon"]["type"], "Muon")
+        self.assertEqual(profiles["adamw"]["type"], "AdamW")
+        self.assertEqual(
+            profiles["adamw"]["args"],
+            {"betas": [0.9, 0.95], "eps": 1e-08, "weight_decay": 0.0},
+        )
+
+        components = policy["components"]
+        for component_id in (
+            "dit.self_attention",
+            "dit.cross_attention",
+            "dit.mlp",
+        ):
+            route = components[component_id]
+            self.assertTrue(route["train"])
+            self.assertEqual(route["optimizer_profile"], "muon")
+            self.assertEqual(route["fallback_optimizer_profile"], "adamw")
+            self.assertEqual(route["learning_rate"], 1e-4)
+            self.assertEqual(route["fallback_learning_rate"], 2.5e-5)
+
+        for component_id in ("dit.modulation", "dit.base_other"):
+            route = components[component_id]
+            self.assertTrue(route["train"])
+            self.assertEqual(route["optimizer_profile"], "adamw")
+            self.assertEqual(route["learning_rate"], 2.5e-5)
+            self.assertNotIn("fallback_optimizer_profile", route)
+
+        adapter = components["dit.llm_adapter"]
+        self.assertTrue(adapter["train"])
+        self.assertEqual(adapter["optimizer_profile"], "adamw")
+        self.assertEqual(adapter["learning_rate"], 2e-6)
+
+        self.assertEqual(components["qwen3"], {"train": False})
+
     def test_muon_routes_have_explicit_non_eligibility_fallback(self):
         for filename in (
             "component-flux-finetune-muon.toml",
