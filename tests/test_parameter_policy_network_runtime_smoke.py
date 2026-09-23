@@ -1,11 +1,40 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def _load_method(path: Path, class_name: str, method_name: str, **globals_):
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    cls = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+    )
+    method = next(
+        node
+        for node in cls.body
+        if isinstance(node, ast.FunctionDef) and node.name == method_name
+    )
+    module = ast.Module(body=[method], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = dict(globals_)
+    exec(compile(module, str(path), "exec"), namespace)
+    return namespace[method_name]
+
+
+class _CapturedCacheStrategy:
+    def __init__(self, *args, is_partial=False, **kwargs):
+        self.is_partial = is_partial
 
 
 _RUNTIME_DEPS_AVAILABLE = all(
@@ -48,6 +77,80 @@ if _RUNTIME_DEPS_AVAILABLE:
             self.single_blocks = torch.nn.ModuleList([torch.nn.Linear(4, 4)])
 else:
     TinyFlux = object
+
+
+class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
+    def test_flux_policy_cache_forces_partial_strategy_before_session_exists(self):
+        method = _load_method(
+            ROOT / "scripts" / "dev" / "flux_train_network.py",
+            "FluxNetworkTrainer",
+            "get_text_encoder_outputs_caching_strategy",
+            strategy_flux=SimpleNamespace(
+                FluxTextEncoderOutputsCachingStrategy=_CapturedCacheStrategy,
+            ),
+        )
+        trainer = SimpleNamespace(train_clip_l=False, train_t5xxl=False)
+        args = SimpleNamespace(
+            cache_text_encoder_outputs=True,
+            parameter_policy_config="policy.json",
+            cache_text_encoder_outputs_to_disk=False,
+            text_encoder_batch_size=1,
+            skip_cache_check=False,
+            apply_t5_attn_mask=False,
+        )
+        strategy = method(trainer, args)
+        self.assertTrue(strategy.is_partial)
+
+        args.parameter_policy_config = ""
+        strategy = method(trainer, args)
+        self.assertFalse(strategy.is_partial)
+
+        trainer.train_clip_l = True
+        strategy = method(trainer, args)
+        self.assertTrue(strategy.is_partial)
+
+    def test_sd3_policy_cache_forces_partial_strategy_before_session_exists(self):
+        method = _load_method(
+            ROOT / "scripts" / "dev" / "sd3_train_network.py",
+            "Sd3NetworkTrainer",
+            "get_text_encoder_outputs_caching_strategy",
+            strategy_sd3=SimpleNamespace(
+                Sd3TextEncoderOutputsCachingStrategy=_CapturedCacheStrategy,
+            ),
+        )
+        trainer = SimpleNamespace(
+            train_clip=False,
+            train_t5xxl=False,
+        )
+        args = SimpleNamespace(
+            cache_text_encoder_outputs=True,
+            parameter_policy_config="policy.json",
+            cache_text_encoder_outputs_to_disk=False,
+            text_encoder_batch_size=1,
+            skip_cache_check=False,
+            apply_lg_attn_mask=False,
+            apply_t5_attn_mask=False,
+        )
+        strategy = method(trainer, args)
+        self.assertTrue(strategy.is_partial)
+
+        args.parameter_policy_config = ""
+        strategy = method(trainer, args)
+        self.assertFalse(strategy.is_partial)
+
+        trainer.train_clip = True
+        strategy = method(trainer, args)
+        self.assertTrue(strategy.is_partial)
+
+    def test_partial_cache_keeps_dataset_tokenization_available(self):
+        source = (
+            ROOT / "scripts" / "dev" / "library" / "train_util.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "self.text_encoder_output_caching_strategy is None or "
+            "self.text_encoder_output_caching_strategy.is_partial",
+            source,
+        )
 
 
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
