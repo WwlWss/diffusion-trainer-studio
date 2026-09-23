@@ -147,11 +147,12 @@ class TrainingPageRoutingTests(unittest.TestCase):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('menu:G(()=>[pe(d.$slots,"menu")])', patched)
 
-    def test_frontend_patch_makes_dict_key_input_discoverable(self):
+    def test_frontend_patch_separates_profile_name_and_optimizer_type(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
-        self.assertIn('placeholder:"\\u952E\\u540D"', patched)
-        self.assertIn('U("span",hI,"\\u952E\\u540D",1)', patched)
-        self.assertNotIn('U("span",hI,"\\xA0")', patched)
+        self.assertIn('"dts-profile-entry"', patched)
+        self.assertIn('"Profile \\u540D\\u79F0"', patched)
+        self.assertIn('"\\u4F8B\\u5982 muon / fallback"', patched)
+        self.assertIn('"dts-profile-type-label"},"Optimizer Type"', patched)
 
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
