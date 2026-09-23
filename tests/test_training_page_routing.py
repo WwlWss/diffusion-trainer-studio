@@ -178,6 +178,16 @@ class TrainingPageRoutingTests(unittest.TestCase):
             patched,
         )
 
+    def test_frontend_patch_renders_dynamic_component_profile_selectors(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn("function __dtsPolicyProfileField(e)", patched)
+        self.assertIn("function __dtsPolicyProfileNames()", patched)
+        self.assertIn('props:{schema:{},modelValue:{},disabled:Boolean,minimal:Boolean,prefix:{}}', patched)
+        self.assertIn('prefix:e.prefix,modelValue:e.modelValue', patched)
+        self.assertIn('__dtsPolicyProfileField(e.prefix)?', patched)
+        self.assertIn('__dtsPolicyProfileNames()', patched)
+        self.assertIn('"allow-create":""', patched)
+
     def test_optimizer_type_switch_keeps_union_branch_cache(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn(
