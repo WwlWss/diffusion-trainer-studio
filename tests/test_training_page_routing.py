@@ -143,6 +143,16 @@ class TrainingPageRoutingTests(unittest.TestCase):
         self.assertIn("n.length>0", helper)
         self.assertIn("Object.prototype.hasOwnProperty.call(t,o)&&t[o]===a", helper)
 
+    def test_frontend_patch_forwards_union_entry_menu(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn('menu:G(()=>[pe(d.$slots,"menu")])', patched)
+
+    def test_frontend_patch_makes_dict_key_input_discoverable(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn('placeholder:"\\u952E\\u540D"', patched)
+        self.assertIn('U("span",hI,"\\u952E\\u540D",1)', patched)
+        self.assertNotIn('U("span",hI,"\\xA0")', patched)
+
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('Je(Ee(c(o)("collapse")),1)', patched)

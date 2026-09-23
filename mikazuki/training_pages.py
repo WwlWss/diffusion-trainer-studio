@@ -228,6 +228,55 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
+    # Dict entries pass their move/delete/insert controls through the value
+    # schema's menu slot.  The pinned union renderer forwards title/desc/prefix/
+    # suffix but accidentally drops menu, so a dict whose value is Schema.union
+    # cannot delete or reorder entries.  Forward the slot unchanged.
+    union_menu_anchor = (
+        '},{title:G(()=>[pe(d.$slots,"title")]),'
+        'desc:G(()=>[pe(d.$slots,"desc"'
+    )
+    union_menu_replacement = (
+        '},{title:G(()=>[pe(d.$slots,"title")]),'
+        'menu:G(()=>[pe(d.$slots,"menu")]),'
+        'desc:G(()=>[pe(d.$slots,"desc"'
+    )
+    union_menu_count = content.count(union_menu_anchor)
+    if union_menu_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery union menu-forwarding anchor expected once, "
+            f"found {union_menu_count}"
+        )
+    content = content.replace(
+        union_menu_anchor,
+        union_menu_replacement,
+        1,
+    )
+
+    # Dict keys are editable in the pinned group renderer, but an empty key is
+    # rendered as a two-em blank with a borderless absolutely-positioned input.
+    # Make the existing input discoverable without changing dict semantics.
+    dict_key_anchor = (
+        'U("span",hI,"\\xA0")),'
+        'vt(K("input",{"onUpdate:modelValue":m=>c(t)[v][0]=m}'
+    )
+    dict_key_replacement = (
+        'U("span",hI,"\\u952E\\u540D",1)),'
+        'vt(K("input",{placeholder:"\\u952E\\u540D",'
+        '"onUpdate:modelValue":m=>c(t)[v][0]=m}'
+    )
+    dict_key_count = content.count(dict_key_anchor)
+    if dict_key_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery dict-key input anchor expected once, "
+            f"found {dict_key_count}"
+        )
+    content = content.replace(
+        dict_key_anchor,
+        dict_key_replacement,
+        1,
+    )
+
     foldable_anchor = 'extra:{foldable:!1}'
     foldable_count = content.count(foldable_anchor)
     if foldable_count != 1:
