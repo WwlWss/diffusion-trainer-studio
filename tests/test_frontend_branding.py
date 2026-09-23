@@ -37,6 +37,15 @@ class FrontendBrandingTests(unittest.TestCase):
         self.assertIn('/api/training/export', branded)
         self.assertIn('/api/training/rehydrate', branded)
 
+    def test_profile_editor_css_uses_two_distinct_rows(self):
+        source = (ASSETS / frontend_branding.STYLE_ASSET).read_text(encoding="utf-8")
+        patched = frontend_branding.patch_profile_editor_css(source)
+        self.assertIn("/* DTS profile editor two-row layout */", patched)
+        self.assertIn("grid-template-rows:auto auto", patched)
+        self.assertIn("grid-row:1", patched)
+        self.assertIn("grid-row:2", patched)
+        self.assertIn(".dts-profile-entry .dts-profile-type-label", patched)
+
     def test_pre_rendered_shell_is_branded_before_hydration(self):
         source = INDEX.read_text(encoding="utf-8")
         branded = frontend_branding.patch_branding_index_html(source)
@@ -85,6 +94,10 @@ class FrontendBrandingTests(unittest.TestCase):
             self.assertIn('{"text":"Diffusion Trainer Studio","link":"/"}', app)
             self.assertIn('"text":"Anima LoRA"', app)
             self.assertIn('"text":"Anima Finetune"', app)
+
+            style = training_pages.virtual_asset(frontend_branding.STYLE_ASSET)
+            self.assertIn("DTS profile editor two-row layout", style)
+            self.assertIn("grid-template-rows:auto auto", style)
 
             layout = training_pages.virtual_asset(frontend_branding.LAYOUT_ASSET)
             self.assertIn('/api/training/preview', layout)
