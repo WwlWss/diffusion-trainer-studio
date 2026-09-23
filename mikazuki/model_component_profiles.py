@@ -207,7 +207,7 @@ def _network_exact_true(config: Mapping[str, Any], key: str) -> bool:
 
     result = False
     for raw_item in items:
-        item = str(raw_item).strip()
+        item = str(raw_item)
         if "=" not in item:
             continue
         raw_key, raw_value = item.split("=", 1)
