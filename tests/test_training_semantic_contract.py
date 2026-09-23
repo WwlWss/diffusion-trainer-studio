@@ -259,14 +259,14 @@ class TrainingSemanticContractTests(unittest.TestCase):
         self.assertIn("custom=ok", rebuilt["network_args"])
         self.assertNotIn("train_t5xxl", rebuilt)
 
-    def test_rehydrate_preserves_inert_t5_wire_variants(self):
+    def test_rehydrate_preserves_inert_t5_training_semantics(self):
         variants = (
-            "train_t5xxl=true",
-            "TRAIN_T5XXL=True",
-            "train_t5xxl =True",
+            ("train_t5xxl=true", False),
+            ("TRAIN_T5XXL=True", True),
+            ("train_t5xxl =True", True),
         )
         for train_type in ("flux-lora", "sd3-lora"):
-            for variant in variants:
+            for variant, preserve_raw in variants:
                 with self.subTest(train_type=train_type, variant=variant):
                     effective = {
                         "optimizer_type": "AdamW",
@@ -286,7 +286,10 @@ class TrainingSemanticContractTests(unittest.TestCase):
                         self.assertFalse(gui["train_t5xxl"])
                     else:
                         self.assertEqual(gui["flux_lora_target"], "dit_clip_l")
-                    self.assertIn(variant, gui["network_args_custom"])
+                    if preserve_raw:
+                        self.assertIn(variant, gui["network_args_custom"])
+                    else:
+                        self.assertNotIn(variant, gui["network_args_custom"])
 
                     rebuilt = prepare_training_config(
                         gui,
@@ -297,7 +300,8 @@ class TrainingSemanticContractTests(unittest.TestCase):
                         "train_t5xxl=True",
                         rebuilt.get("network_args", []),
                     )
-                    self.assertIn(variant, rebuilt["network_args"])
+                    if preserve_raw:
+                        self.assertIn(variant, rebuilt["network_args"])
                     self.assertIn("custom=ok", rebuilt["network_args"])
 
     def test_lora_target_normalizers_are_idempotent(self):
@@ -534,12 +538,12 @@ class TrainingSemanticContractTests(unittest.TestCase):
 
     def test_lora_t5_network_arg_preserves_exact_raw_key_and_value_semantics(self):
         inert_variants = (
-            "train_t5xxl=true",
-            "TRAIN_T5XXL=True",
-            "train_t5xxl =True",
+            ("train_t5xxl=true", False),
+            ("TRAIN_T5XXL=True", True),
+            ("train_t5xxl =True", True),
         )
         for train_type in ("flux-lora", "sd3-lora"):
-            for variant in inert_variants:
+            for variant, preserve_raw in inert_variants:
                 with self.subTest(train_type=train_type, variant=variant):
                     prepared = prepare_training_config(
                         {
@@ -553,7 +557,8 @@ class TrainingSemanticContractTests(unittest.TestCase):
                         "train_t5xxl=True",
                         prepared.config.get("network_args", []),
                     )
-                    self.assertIn(variant, prepared.config["network_args"])
+                    if preserve_raw:
+                        self.assertIn(variant, prepared.config["network_args"])
                     self.assertIn("custom=ok", prepared.config["network_args"])
 
             enabled = prepare_training_config(
