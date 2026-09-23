@@ -30,7 +30,11 @@ from mikazuki.training_config import PAGE_BACKEND_MAP
 
 
 _COMPONENT_MODE_ALIASES = {"component", "component-wise", "componentwise"}
-_DEFAULT_EDITOR_OPTIMIZER_TYPE = "AdamW"
+_DEFAULT_EDITOR_OPTIMIZER_TYPE = next(
+    capability.name
+    for capability in list_optimizer_capabilities()
+    if capability.component_support == "supported"
+)
 _NUMERIC_LITERAL = re.compile(
     r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$"
 )
