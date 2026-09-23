@@ -178,6 +178,21 @@ class TrainingPageRoutingTests(unittest.TestCase):
             patched,
         )
 
+    def test_optimizer_type_switch_keeps_union_branch_cache(self):
+        patched = patch_frontend_app_js(APP_BUNDLE)
+        self.assertIn(
+            'o.value=r.value.map(f=>f.type==="const"?f.value:Mi(f,!0))',
+            patched,
+        )
+        self.assertIn(
+            'l.value=o.value[d],a.value=r.value[d]',
+            patched,
+        )
+        self.assertIn(
+            'const f=l.value&&l.value.type,h=o.value[d]&&o.value[d].type;',
+            patched,
+        )
+
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
         self.assertIn('Je(Ee(c(o)("collapse")),1)', patched)
