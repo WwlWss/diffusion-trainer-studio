@@ -110,7 +110,8 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
                 "main": {
                     "type": "AdamW",
                     "args": {"eps": "1e-8", "amsgrad": "false"},
-                }
+                },
+                "stale_null": None,
             },
         }
         before = copy.deepcopy(config)
