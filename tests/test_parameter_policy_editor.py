@@ -145,6 +145,20 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
             {"main": {"type": "AdamW", "args": {}}},
         )
 
+    def test_unnamed_profile_object_draft_is_ignored(self):
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "": {"type": "Muon", "args": {"momentum": 0.95}},
+                "main": {"type": "AdamW", "args": {}},
+            },
+        }
+        normalize_parameter_policy_editor_state(config)
+        self.assertEqual(
+            config["parameter_policy_profiles"],
+            {"main": {"type": "AdamW", "args": {}}},
+        )
+
     def test_non_mapping_profile_still_fails_closed(self):
         config = {
             "optimization_mode": "component",
