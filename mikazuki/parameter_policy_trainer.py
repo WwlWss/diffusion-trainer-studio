@@ -153,6 +153,32 @@ def load_parameter_policy_file(path: str | os.PathLike[str]) -> tuple[dict[str, 
     return canonical, digest
 
 
+def load_parameter_policy_train_flags(
+    path: str | os.PathLike[str],
+    component_ids: Iterable[str],
+) -> dict[str, bool]:
+    """Read model-free Component Train flags from one validated policy sidecar.
+
+    This is intentionally safe to call before model/network construction. It
+    shares the exact same canonical loader as the full trainer session so cache
+    strategy decisions cannot drift from later runtime routing.
+    """
+
+    canonical, _digest = load_parameter_policy_file(path)
+    components = canonical.get("components", {})
+    requested = tuple(str(component_id) for component_id in component_ids)
+    missing = [component_id for component_id in requested if component_id not in components]
+    if missing:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Parameter Policy sidecar is missing required Component entries for "
+            f"pre-routing: {missing!r}."
+        )
+    return {
+        component_id: bool(components[component_id].get("train"))
+        for component_id in requested
+    }
+
+
 def _unique_parameters(parameters: Iterable[Any]) -> tuple[Any, ...]:
     result: list[Any] = []
     seen: set[int] = set()
@@ -1087,5 +1113,6 @@ __all__ = [
     "ParameterPolicyTrainerSession",
     "create_parameter_policy_session",
     "load_parameter_policy_file",
+    "load_parameter_policy_train_flags",
     "make_legacy_scheduler_factory",
 ]
