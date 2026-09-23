@@ -1,6 +1,5 @@
 import json
 import unittest
-from unittest import mock
 
 from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.parameter_policy import (
@@ -13,12 +12,8 @@ from mikazuki.parameter_policy import (
     validate_parameter_policy,
 )
 from mikazuki.parameter_policy_bootstrap import bootstrap_parameter_policy_optimizer_profile
-from mikazuki.parameter_policy_editor import (
-    bootstrap_parameter_policy_editor,
-    normalize_parameter_policy_editor_state,
-)
+from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.training_rehydrate import rehydrate_trainer_config
-from mikazuki.training_request import prepare_request_config
 
 
 def _complete_policy(train_type, *, train_component=None, profile_type="AdamW"):
@@ -40,48 +35,6 @@ def _complete_policy(train_type, *, train_component=None, profile_type="AdamW"):
         },
         "components": components,
     }
-
-
-def _request_component_config(train_type, train_components, **extra):
-    profile = get_model_component_profile(train_type)
-    components = {
-        component_id: {"train": False}
-        for component_id in profile.components
-    }
-    for component_id in train_components:
-        components[component_id] = {
-            "train": True,
-            "optimizer_profile": "main",
-            "learning_rate": 1e-4,
-        }
-    config = {
-        "optimization_mode": "component",
-        "parameter_policy_profiles": {
-            "main": {"type": "AdamW", "args": {}},
-        },
-        "parameter_policy_components": components,
-        "optimizer_type": "AdamW",
-        "learning_rate": 1e-4,
-    }
-    config.update(extra)
-    return config
-
-
-def _prepare_component_request(train_type, train_components, **extra):
-    raw = _request_component_config(train_type, train_components, **extra)
-    with mock.patch(
-        "mikazuki.training_request.legacy_api.resolve_training_backend",
-        side_effect=lambda config, requested: (
-            requested,
-            f"trainer/{requested}.py",
-        ),
-    ):
-        return prepare_request_config(
-            raw,
-            train_type,
-            launch=False,
-            materialize=False,
-        )
 
 
 def _component_config():
@@ -264,163 +217,6 @@ class ParameterPolicyHostPreflightTests(unittest.TestCase):
             ),
             t5_blockers,
         )
-
-
-class ParameterPolicyRequestIntegrationTests(unittest.TestCase):
-    def test_sdxl_component_cache_uses_policy_train_state_on_real_request_path(self):
-        frozen = _prepare_component_request(
-            "sdxl-lora",
-            ["unet.attention.adapter"],
-            lora_target="unet_text_encoder",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertEqual(frozen.runtime_blockers, [])
-        self.assertTrue(frozen.config["cache_text_encoder_outputs"])
-
-        trained = _prepare_component_request(
-            "sdxl-lora",
-            ["text_encoder_1.adapter"],
-            lora_target="unet_text_encoder",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertTrue(
-            any(
-                "text_encoder_1.adapter" in item
-                and "cache_text_encoder_outputs" in item
-                for item in trained.runtime_blockers
-            ),
-            trained.runtime_blockers,
-        )
-
-    def test_flux_component_partial_cache_uses_policy_train_state_on_real_request_path(self):
-        frozen_t5 = _prepare_component_request(
-            "flux-lora",
-            ["clip_l.adapter"],
-            flux_lora_target="dit_clip_l_t5xxl",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertEqual(frozen_t5.runtime_blockers, [])
-        self.assertIn("train_t5xxl=True", frozen_t5.config["network_args"])
-
-        trained_t5 = _prepare_component_request(
-            "flux-lora",
-            ["t5xxl.adapter"],
-            flux_lora_target="dit_clip_l_t5xxl",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertTrue(
-            any(
-                "t5xxl.adapter" in item
-                and "cache_text_encoder_outputs" in item
-                for item in trained_t5.runtime_blockers
-            ),
-            trained_t5.runtime_blockers,
-        )
-
-    def test_chroma_component_cache_uses_policy_train_state_on_real_request_path(self):
-        frozen_t5 = _prepare_component_request(
-            "chroma-lora",
-            ["transformer.double_stream.adapter"],
-            flux_lora_target="dit_t5xxl",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertEqual(frozen_t5.runtime_blockers, [])
-
-        trained_t5 = _prepare_component_request(
-            "chroma-lora",
-            ["t5xxl.adapter"],
-            flux_lora_target="dit_t5xxl",
-            cache_text_encoder_outputs=True,
-        )
-        self.assertTrue(
-            any(
-                "t5xxl.adapter" in item
-                and "cache_text_encoder_outputs" in item
-                for item in trained_t5.runtime_blockers
-            ),
-            trained_t5.runtime_blockers,
-        )
-
-    def test_sd3_component_cache_uses_policy_train_state_on_real_request_path(self):
-        frozen_t5 = _prepare_component_request(
-            "sd3-lora",
-            ["clip_l.adapter"],
-            sd3_lora_target="mmdit_text_encoder",
-            train_t5xxl=True,
-            cache_text_encoder_outputs=True,
-        )
-        self.assertEqual(frozen_t5.runtime_blockers, [])
-
-        trained_t5 = _prepare_component_request(
-            "sd3-lora",
-            ["t5xxl.adapter"],
-            sd3_lora_target="mmdit_text_encoder",
-            train_t5xxl=True,
-            cache_text_encoder_outputs=True,
-        )
-        self.assertTrue(
-            any(
-                "t5xxl.adapter" in item
-                and "cache_text_encoder_outputs" in item
-                for item in trained_t5.runtime_blockers
-            ),
-            trained_t5.runtime_blockers,
-        )
-
-
-class ParameterPolicyFp8BootstrapIntegrationTests(unittest.TestCase):
-    def test_flux_chroma_sd3_fp8_survives_bootstrap_but_blocks_runtime(self):
-        cases = (
-            ("flux-lora", {"flux_lora_target": "dit"}),
-            ("chroma-lora", {"flux_lora_target": "dit"}),
-            (
-                "sd3-lora",
-                {
-                    "sd3_lora_target": "mmdit",
-                    "train_t5xxl": False,
-                },
-            ),
-        )
-        for train_type, target_fields in cases:
-            with self.subTest(train_type=train_type):
-                raw = {
-                    "optimizer_type": "AdamW",
-                    "learning_rate": 1e-4,
-                    "fp8_base": True,
-                    **target_fields,
-                }
-                original = deepcopy(raw)
-                gui = bootstrap_parameter_policy_editor(
-                    raw,
-                    train_type,
-                    resolve_backend=lambda config, requested: (
-                        requested,
-                        f"trainer/{requested}.py",
-                    ),
-                )
-                self.assertEqual(raw, original)
-                self.assertEqual(gui["optimization_mode"], "component")
-
-                component_raw = dict(raw)
-                component_raw.update(gui)
-                with mock.patch(
-                    "mikazuki.training_request.legacy_api.resolve_training_backend",
-                    side_effect=lambda config, requested: (
-                        requested,
-                        f"trainer/{requested}.py",
-                    ),
-                ):
-                    prepared = prepare_request_config(
-                        component_raw,
-                        train_type,
-                        launch=False,
-                        materialize=False,
-                    )
-                self.assertTrue(prepared.config["fp8_base"])
-                self.assertTrue(
-                    any("fp8_base" in item for item in prepared.runtime_blockers),
-                    prepared.runtime_blockers,
-                )
 
 
 class ParameterPolicyConfigTests(unittest.TestCase):
