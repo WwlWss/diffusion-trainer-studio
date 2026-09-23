@@ -27,8 +27,19 @@ PROJECT_REPOSITORY = "https://github.com/WwlWss/diffusion-trainer-studio"
 PROJECT_ISSUES = f"{PROJECT_REPOSITORY}/issues"
 
 
+_GENERATED_ASSET_MEDIA_TYPES = {
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".css": "text/css",
+}
+
+
 def frontend_asset_media_type(asset_name: str) -> str:
-    """Return the HTTP media type for a generated frontend asset."""
+    """Return a deterministic HTTP media type for generated frontend assets."""
+    suffix = Path(asset_name).suffix.lower()
+    explicit = _GENERATED_ASSET_MEDIA_TYPES.get(suffix)
+    if explicit is not None:
+        return explicit
     return mimetypes.guess_type(asset_name)[0] or "application/octet-stream"
 
 
