@@ -265,6 +265,7 @@ def _accelerator_device_audit() -> dict:
         finally:
             accelerator.end_training()
 
+
 def _supported_optimizer_types() -> list[str]:
     return [
         capability.name
