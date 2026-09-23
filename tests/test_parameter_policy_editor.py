@@ -117,6 +117,92 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
         normalize_parameter_policy_editor_state(config)
         self.assertEqual(config, before)
 
+    def test_named_null_profile_materializes_default_adamw(self):
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "fallback": None,
+            },
+        }
+        normalize_parameter_policy_editor_state(config)
+        self.assertEqual(
+            config["parameter_policy_profiles"]["fallback"],
+            {"type": "AdamW", "args": {}},
+        )
+
+    def test_blank_null_profile_placeholder_is_ignored(self):
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "": None,
+                "main": {"type": "AdamW", "args": {}},
+            },
+        }
+        normalize_parameter_policy_editor_state(config)
+        self.assertEqual(
+            config["parameter_policy_profiles"],
+            {"main": {"type": "AdamW", "args": {}}},
+        )
+
+    def test_non_mapping_profile_still_fails_closed(self):
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "fallback": "AdamW",
+            },
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "Optimizer Profile 'fallback' must be an object",
+        ):
+            normalize_parameter_policy_editor_state(config)
+
+    def test_named_null_fallback_compiles_with_muon_route(self):
+        components = {
+            component_id: {"train": False}
+            for component_id in get_model_component_profile("anima-finetune").components
+        }
+        components["dit.self_attention"] = {
+            "train": True,
+            "optimizer_profile": "muon",
+            "learning_rate": "1e-4",
+            "fallback_optimizer_profile": "fallback",
+            "fallback_learning_rate": "2.5e-5",
+        }
+        config = {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": {
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "momentum": 0.95,
+                        "weight_decay": 0.01,
+                        "weight_decouple": True,
+                        "nesterov": True,
+                        "ns_steps": 5,
+                        "ns_coeffs": "original",
+                        "use_adjusted_lr": False,
+                    },
+                },
+                "fallback": None,
+            },
+            "parameter_policy_components": components,
+        }
+
+        normalize_parameter_policy_editor_state(config)
+        policy = canonicalize_parameter_policy(
+            {
+                "optimizer_profiles": config["parameter_policy_profiles"],
+                "components": config["parameter_policy_components"],
+            }
+        )
+        self.assertEqual(policy["optimizer_profiles"]["fallback"]["type"], "AdamW")
+        self.assertEqual(policy["optimizer_profiles"]["fallback"]["args"], {})
+        self.assertEqual(
+            policy["components"]["dit.self_attention"]["fallback_optimizer_profile"],
+            "fallback",
+        )
+
     def test_component_optimizer_args_parse_literals_but_preserve_bare_text(self):
         config = {
             "optimization_mode": "component",
