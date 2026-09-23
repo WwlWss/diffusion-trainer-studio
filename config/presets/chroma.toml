@@ -6,6 +6,7 @@ train_type = "chroma-lora"
 description = "使用 scripts/dev/flux_train_network.py 的 Chroma 分支训练 LoRA；页面固定为 Chroma backend。"
 
 [data]
+optimization_mode = "standard"
 apply_t5_attn_mask = true
 timestep_sampling = "sigmoid"
 model_prediction_type = "raw"
