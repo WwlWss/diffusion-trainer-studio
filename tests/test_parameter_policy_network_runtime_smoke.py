@@ -61,7 +61,16 @@ def _write_policy(path: Path, components: dict[str, bool]) -> None:
 
 
 def _bridge_module():
-    from mikazuki.parameter_policy_trainer import load_parameter_policy_train_flags
+    def load_parameter_policy_train_flags(path, component_ids):
+        payload = json.loads(Path(path).read_text(encoding="utf-8"))
+        components = payload["components"]
+        missing = [item for item in component_ids if item not in components]
+        if missing:
+            raise ValueError(f"missing components: {missing!r}")
+        return {
+            item: bool(components[item].get("train"))
+            for item in component_ids
+        }
 
     return SimpleNamespace(
         load_parameter_policy_train_flags=load_parameter_policy_train_flags,
@@ -78,7 +87,9 @@ if _RUNTIME_DEPS_AVAILABLE:
     from accelerate import Accelerator
 
     from mikazuki.parameter_policy_trainer import (
+        ParameterPolicyTrainerRuntimeError,
         create_parameter_policy_session,
+        load_parameter_policy_train_flags,
         make_legacy_scheduler_factory,
     )
 
@@ -359,6 +370,35 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
 
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
 class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
+    def test_pre_routing_train_flags_use_validated_policy_loader(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            _write_policy(
+                policy_path,
+                {
+                    "clip_l.adapter": True,
+                    "clip_g.adapter": False,
+                    "t5xxl.adapter": False,
+                },
+            )
+            flags = load_parameter_policy_train_flags(
+                policy_path,
+                ("clip_l.adapter", "clip_g.adapter", "t5xxl.adapter"),
+            )
+            self.assertEqual(
+                flags,
+                {
+                    "clip_l.adapter": True,
+                    "clip_g.adapter": False,
+                    "t5xxl.adapter": False,
+                },
+            )
+            with self.assertRaises(ParameterPolicyTrainerRuntimeError):
+                load_parameter_policy_train_flags(
+                    policy_path,
+                    ("missing.adapter",),
+                )
+
     def test_sd3_clip_pair_survives_real_accelerator_prepare(self):
         accelerator = Accelerator(cpu=True)
         try:
