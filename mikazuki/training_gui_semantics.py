@@ -125,33 +125,34 @@ def _component_policy_active(config: dict) -> bool:
 
 
 def _network_arg_exact_true(config: dict, key: str) -> bool | None:
-    """Mirror the LoRA network modules' exact string-bool wire semantics.
+    """Mirror the LoRA modules' exact network-kwargs wire semantics.
 
-    networks.lora_flux and networks.lora_sd3 enable train_t5xxl only when the
-    final keyword value is exactly the string "True". Other values are false.
-    Keep that behavior when canonicalizing imported/custom effective configs;
-    GUI booleans are still emitted canonically as "True" or omission.
+    train_network.py preserves the raw key/value around "=", then
+    networks.lora_flux / networks.lora_sd3 enable train_t5xxl only when
+    kwargs["train_t5xxl"] is exactly the string "True". Case variants or
+    whitespace variants are different kwargs and must remain inert.
     """
 
-    expected = str(key).strip().casefold()
     result: bool | None = None
     for item in _items(config.get("network_args")):
-        if _arg_key(item) != expected:
-            continue
         if "=" not in item:
-            raise ValueError(f"network_args {key} 必须使用 {key}=... 形式。")
-        _raw_key, raw_value = item.split("=", 1)
+            continue
+        raw_key, raw_value = item.split("=", 1)
+        if raw_key != key:
+            continue
         result = raw_value == "True"
     return result
 
 
 def _set_network_arg_bool(config: dict, key: str, value: bool) -> None:
-    expected = str(key).strip().casefold()
-    args = [
-        item
-        for item in _items(config.get("network_args"))
-        if _arg_key(item) != expected
-    ]
+    # Remove only the exact kwarg consumed by the LoRA module. Malformed
+    # aliases such as TRAIN_T5XXL or "train_t5xxl " are separate kwargs in
+    # sd-scripts and must not be silently corrected by DTS.
+    args = []
+    for item in _items(config.get("network_args")):
+        if "=" in item and item.split("=", 1)[0] == key:
+            continue
+        args.append(item)
     if value:
         args.append(f"{key}=True")
     if args:
