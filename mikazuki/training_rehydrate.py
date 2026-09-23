@@ -24,6 +24,18 @@ def _extract_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
     return found, remaining
 
 
+def _extract_exact_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
+    """Extract only the exact raw kwarg consumed by sd-scripts network modules."""
+    found = None
+    remaining: list[str] = []
+    for item in args:
+        if "=" in item and item.split("=", 1)[0] == key:
+            found = item.split("=", 1)[1]
+        else:
+            remaining.append(item)
+    return found, remaining
+
+
 def _infer_anima_precision_mode(config: dict) -> str:
     mixed = str(config.pop("mixed_precision", "no") or "no").lower()
     full_fp16 = _as_bool(config.pop("full_fp16", False))
@@ -156,7 +168,7 @@ def rehydrate_trainer_config(
 
     args = _items(config.pop("network_args", None))
     if page_train_type == "sd3-lora":
-        train_t5_raw, args = _extract_arg(args, "train_t5xxl")
+        train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
         config["train_t5xxl"] = train_t5_raw == "True" if train_t5_raw is not None else False
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
         te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
@@ -204,7 +216,7 @@ def rehydrate_trainer_config(
             config["anima_lora_network_verbose"] = _as_bool(value)
 
     if page_train_type in {"flux-lora", "chroma-lora"}:
-        train_t5_raw, args = _extract_arg(args, "train_t5xxl")
+        train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
         train_t5 = train_t5_raw == "True"
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
         if page_train_type == "chroma-lora":
