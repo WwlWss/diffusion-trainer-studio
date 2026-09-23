@@ -769,7 +769,13 @@ class ParameterPolicyTrainerSession:
                 )
                 continue
 
-            actual_device = torch.device(actual_device)
+            try:
+                actual_device = torch.device(actual_device)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                raise ParameterPolicyTrainerRuntimeError(
+                    "Parameter Policy device audit received an invalid "
+                    f"parameter device: {actual_device!r}."
+                ) from exc
             if (
                 current_cuda_index is None
                 and actual_device.type == "cuda"
