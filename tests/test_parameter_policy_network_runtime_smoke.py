@@ -232,6 +232,26 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
                     ),
                 )
 
+                get_models = _load_method(
+                    ROOT / "scripts" / "dev" / "sd3_train_network.py",
+                    "Sd3NetworkTrainer",
+                    "get_models_for_text_encoding",
+                )
+                models = get_models(
+                    trainer,
+                    args,
+                    None,
+                    encoders,
+                )
+                if trainer.train_clip:
+                    self.assertIsNotNone(models)
+                    self.assertIs(models[0], encoders[0])
+                    self.assertIs(models[1], encoders[1])
+                    self.assertIsNone(models[2])
+                    self.assertEqual(encoders[0].device, encoders[1].device)
+                else:
+                    self.assertIsNone(models)
+
 
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
 class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
