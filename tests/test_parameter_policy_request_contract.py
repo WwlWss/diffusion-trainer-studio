@@ -3,6 +3,18 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 
+from mikazuki.model_component_profiles import get_model_component_profile
+from mikazuki.parameter_policy import (
+    build_parameter_policy_sidecar,
+    parameter_policy_runtime_blockers,
+)
+from mikazuki.parameter_policy_editor import (
+    bootstrap_parameter_policy_editor,
+    normalize_parameter_policy_editor_state,
+)
+from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+from mikazuki.training_config import prepare_training_config
+
 
 ROOT = Path(__file__).resolve().parents[1]
 REQUEST = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
@@ -36,6 +48,44 @@ def _load_prepare_request_config(**overrides):
     return namespace["prepare_request_config"]
 
 
+def _component_gui_config(train_type, train_components, **extra):
+    profile = get_model_component_profile(train_type)
+    components = {
+        component_id: {"train": False}
+        for component_id in profile.components
+    }
+    for component_id in train_components:
+        components[component_id] = {
+            "train": True,
+            "optimizer_profile": "main",
+            "learning_rate": 1e-4,
+        }
+    config = {
+        "optimization_mode": "component",
+        "parameter_policy_profiles": {
+            "main": {"type": "AdamW", "args": {}},
+        },
+        "parameter_policy_components": components,
+        "optimizer_type": "AdamW",
+        "learning_rate": 1e-4,
+    }
+    config.update(extra)
+    return config
+
+
+def _real_prepare_request():
+    resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
+    return _load_prepare_request_config(
+        normalize_parameter_policy_editor_state=normalize_parameter_policy_editor_state,
+        build_parameter_policy_sidecar=build_parameter_policy_sidecar,
+        prepare_training_config=prepare_training_config,
+        legacy_api=SimpleNamespace(resolve_training_backend=resolver),
+        parameter_policy_runtime_blockers=parameter_policy_runtime_blockers,
+        parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
+        PARAMETER_POLICY_RUNTIME_TRAIN_TYPES=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+    )
+
+
 def _prepared(config=None, train_type="sd-lora"):
     return SimpleNamespace(
         train_type=train_type,
@@ -45,6 +95,140 @@ def _prepared(config=None, train_type="sd-lora"):
         runtime_blockers=[],
         gpu_ids=None,
     )
+
+
+class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
+    def test_sdxl_component_cache_follows_policy_on_request_pipeline(self):
+        prepare = _real_prepare_request()
+        frozen = prepare(
+            _component_gui_config(
+                "sdxl-lora",
+                ["unet.attention.adapter"],
+                lora_target="unet_text_encoder",
+                cache_text_encoder_outputs=True,
+            ),
+            "sdxl-lora",
+            launch=False,
+        )
+        self.assertEqual(frozen.runtime_blockers, [])
+
+        trained = prepare(
+            _component_gui_config(
+                "sdxl-lora",
+                ["text_encoder_1.adapter"],
+                lora_target="unet_text_encoder",
+                cache_text_encoder_outputs=True,
+            ),
+            "sdxl-lora",
+            launch=False,
+        )
+        self.assertTrue(
+            any(
+                "text_encoder_1.adapter" in item
+                and "cache_text_encoder_outputs" in item
+                for item in trained.runtime_blockers
+            ),
+            trained.runtime_blockers,
+        )
+
+    def test_flux_chroma_sd3_component_cache_follows_policy_on_request_pipeline(self):
+        prepare = _real_prepare_request()
+        cases = (
+            (
+                "flux-lora",
+                {"flux_lora_target": "dit_clip_l_t5xxl"},
+                ["clip_l.adapter"],
+                ["t5xxl.adapter"],
+            ),
+            (
+                "chroma-lora",
+                {"flux_lora_target": "dit_t5xxl"},
+                ["transformer.double_stream.adapter"],
+                ["t5xxl.adapter"],
+            ),
+            (
+                "sd3-lora",
+                {
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": True,
+                },
+                ["clip_l.adapter"],
+                ["t5xxl.adapter"],
+            ),
+        )
+        for train_type, target, frozen_train, t5_train in cases:
+            with self.subTest(train_type=train_type, case="t5-frozen"):
+                frozen = prepare(
+                    _component_gui_config(
+                        train_type,
+                        frozen_train,
+                        cache_text_encoder_outputs=True,
+                        **target,
+                    ),
+                    train_type,
+                    launch=False,
+                )
+                self.assertEqual(frozen.runtime_blockers, [])
+
+            with self.subTest(train_type=train_type, case="t5-train"):
+                trained = prepare(
+                    _component_gui_config(
+                        train_type,
+                        t5_train,
+                        cache_text_encoder_outputs=True,
+                        **target,
+                    ),
+                    train_type,
+                    launch=False,
+                )
+                self.assertTrue(
+                    any(
+                        "t5xxl.adapter" in item
+                        and "cache_text_encoder_outputs" in item
+                        for item in trained.runtime_blockers
+                    ),
+                    trained.runtime_blockers,
+                )
+
+    def test_fp8_survives_bootstrap_then_blocks_runtime(self):
+        prepare = _real_prepare_request()
+        resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
+        cases = (
+            ("flux-lora", {"flux_lora_target": "dit"}),
+            ("chroma-lora", {"flux_lora_target": "dit"}),
+            (
+                "sd3-lora",
+                {"sd3_lora_target": "mmdit", "train_t5xxl": False},
+            ),
+        )
+        for train_type, target in cases:
+            with self.subTest(train_type=train_type):
+                raw = {
+                    "optimizer_type": "AdamW",
+                    "learning_rate": 1e-4,
+                    "fp8_base": True,
+                    **target,
+                }
+                original = dict(raw)
+                gui = bootstrap_parameter_policy_editor(
+                    raw,
+                    train_type,
+                    resolve_backend=resolver,
+                )
+                self.assertEqual(raw, original)
+
+                component_raw = dict(raw)
+                component_raw.update(gui)
+                prepared = prepare(
+                    component_raw,
+                    train_type,
+                    launch=False,
+                )
+                self.assertTrue(prepared.config["fp8_base"])
+                self.assertTrue(
+                    any("fp8_base" in item for item in prepared.runtime_blockers),
+                    prepared.runtime_blockers,
+                )
 
 
 class ParameterPolicyEditorRequestContractTests(unittest.TestCase):
