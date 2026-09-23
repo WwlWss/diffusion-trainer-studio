@@ -259,45 +259,46 @@ class TrainingSemanticContractTests(unittest.TestCase):
         self.assertIn("custom=ok", rebuilt["network_args"])
         self.assertNotIn("train_t5xxl", rebuilt)
 
-    def test_rehydrate_preserves_lowercase_true_as_disabled_t5(self):
-        cases = (
-            (
-                "flux-lora",
-                {
-                    "optimizer_type": "AdamW",
-                    "network_module": "networks.lora_flux",
-                    "network_train_unet_only": False,
-                    "network_args": ["train_t5xxl=true", "custom=ok"],
-                },
-            ),
-            (
-                "sd3-lora",
-                {
-                    "optimizer_type": "AdamW",
-                    "network_module": "networks.lora_sd3",
-                    "network_train_unet_only": False,
-                    "network_train_text_encoder_only": False,
-                    "network_args": ["train_t5xxl=true", "custom=ok"],
-                },
-            ),
+    def test_rehydrate_preserves_inert_t5_wire_variants(self):
+        variants = (
+            "train_t5xxl=true",
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
         )
-        for train_type, effective in cases:
-            with self.subTest(train_type=train_type):
-                gui = rehydrate_trainer_config(effective, train_type)
-                if train_type == "sd3-lora":
-                    self.assertFalse(gui["train_t5xxl"])
-                else:
-                    self.assertEqual(gui["flux_lora_target"], "dit_clip_l")
-                rebuilt = prepare_training_config(
-                    gui,
-                    page_train_type=train_type,
-                    resolve_backend=_resolve,
-                ).config
-                self.assertNotIn(
-                    "train_t5xxl=True",
-                    rebuilt.get("network_args", []),
-                )
-                self.assertIn("custom=ok", rebuilt["network_args"])
+        for train_type in ("flux-lora", "sd3-lora"):
+            for variant in variants:
+                with self.subTest(train_type=train_type, variant=variant):
+                    effective = {
+                        "optimizer_type": "AdamW",
+                        "network_module": (
+                            "networks.lora_flux"
+                            if train_type == "flux-lora"
+                            else "networks.lora_sd3"
+                        ),
+                        "network_train_unet_only": False,
+                        "network_args": [variant, "custom=ok"],
+                    }
+                    if train_type == "sd3-lora":
+                        effective["network_train_text_encoder_only"] = False
+
+                    gui = rehydrate_trainer_config(effective, train_type)
+                    if train_type == "sd3-lora":
+                        self.assertFalse(gui["train_t5xxl"])
+                    else:
+                        self.assertEqual(gui["flux_lora_target"], "dit_clip_l")
+                    self.assertIn(variant, gui["network_args_custom"])
+
+                    rebuilt = prepare_training_config(
+                        gui,
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    ).config
+                    self.assertNotIn(
+                        "train_t5xxl=True",
+                        rebuilt.get("network_args", []),
+                    )
+                    self.assertIn(variant, rebuilt["network_args"])
+                    self.assertIn("custom=ok", rebuilt["network_args"])
 
     def test_lora_target_normalizers_are_idempotent(self):
         cases = (
@@ -531,22 +532,39 @@ class TrainingSemanticContractTests(unittest.TestCase):
                         resolve_backend=_resolve,
                     )
 
-    def test_lora_t5_network_arg_preserves_exact_true_wire_semantics(self):
+    def test_lora_t5_network_arg_preserves_exact_raw_key_and_value_semantics(self):
+        inert_variants = (
+            "train_t5xxl=true",
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
+        )
         for train_type in ("flux-lora", "sd3-lora"):
-            with self.subTest(train_type=train_type):
-                prepared = prepare_training_config(
-                    {
-                        "optimizer_type": "AdamW",
-                        "network_args_custom": ["train_t5xxl=true", "custom=ok"],
-                    },
-                    page_train_type=train_type,
-                    resolve_backend=_resolve,
-                )
-                self.assertNotIn(
-                    "train_t5xxl=True",
-                    prepared.config.get("network_args", []),
-                )
-                self.assertIn("custom=ok", prepared.config["network_args"])
+            for variant in inert_variants:
+                with self.subTest(train_type=train_type, variant=variant):
+                    prepared = prepare_training_config(
+                        {
+                            "optimizer_type": "AdamW",
+                            "network_args_custom": [variant, "custom=ok"],
+                        },
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    )
+                    self.assertNotIn(
+                        "train_t5xxl=True",
+                        prepared.config.get("network_args", []),
+                    )
+                    self.assertIn(variant, prepared.config["network_args"])
+                    self.assertIn("custom=ok", prepared.config["network_args"])
+
+            enabled = prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "network_args_custom": ["train_t5xxl=True"],
+                },
+                page_train_type=train_type,
+                resolve_backend=_resolve,
+            )
+            self.assertIn("train_t5xxl=True", enabled.config["network_args"])
 
     def test_flux_and_chroma_custom_false_clears_first_pass_t5_target(self):
         cases = (
