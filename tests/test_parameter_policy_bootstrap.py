@@ -308,15 +308,15 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
             "sdxl-lora": {"learning_rate": 1e-4},
             "flux-lora": {
                 "learning_rate": 1e-4,
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "chroma-lora": {
                 "learning_rate": 1e-4,
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "sd3-lora": {
                 "learning_rate": 1e-4,
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "anima-lora": {"learning_rate": 1e-4},
             "sd-dreambooth": {"learning_rate": 1e-6},
@@ -397,7 +397,7 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
                 "learning_rate": 1e-4,
                 "unet_lr": 3e-4,
                 "text_encoder_lr": [5e-5, 7e-5],
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "flux-lora",
         )
@@ -413,7 +413,7 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
             {
                 "learning_rate": 1e-4,
                 "text_encoder_lr": [5e-5, 7e-5],
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "chroma-lora",
         )
@@ -437,7 +437,7 @@ class ParameterPolicyBackendMappingTests(unittest.TestCase):
             {
                 "learning_rate": 1e-4,
                 "text_encoder_lr": [5e-5, 7e-5],
-                "network_args": ["train_t5xxl=true"],
+                "network_args": ["train_t5xxl=True"],
             },
             "sd3-lora",
         )
