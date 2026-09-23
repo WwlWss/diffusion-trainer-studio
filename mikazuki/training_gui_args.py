@@ -82,14 +82,31 @@ def _arg_key(value: str) -> str:
     return value.split("=", 1)[0].strip().lower()
 
 
+def _merge_arg_identity(value: str) -> tuple[str, str]:
+    """Return merge identity without changing train_t5xxl wire semantics.
+
+    Most legacy network-arg controls historically merge case-insensitively.
+    train_t5xxl is different: sd-scripts forwards its raw key verbatim and the
+    Flux/SD3 LoRA modules consume only the exact key "train_t5xxl". Preserve
+    malformed aliases as distinct kwargs instead of silently correcting them.
+    """
+
+    raw_key = value.split("=", 1)[0]
+    if raw_key == "train_t5xxl":
+        return ("t5-exact", raw_key)
+    if raw_key.strip().lower() == "train_t5xxl":
+        return ("t5-raw", raw_key)
+    return ("legacy", _arg_key(value))
+
+
 def _merge_args(existing: object, generated: Iterable[str] = (), custom: object = None) -> list[str]:
     result: list[str] = []
-    key_to_index: dict[str, int] = {}
+    key_to_index: dict[tuple[str, str], int] = {}
     for value in [*_items(existing), *[str(x) for x in generated], *_items(custom)]:
         value = value.strip()
         if not value:
             continue
-        key = _arg_key(value)
+        key = _merge_arg_identity(value)
         if key in key_to_index:
             result[key_to_index[key]] = value
         else:
