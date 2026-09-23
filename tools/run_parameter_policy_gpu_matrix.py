@@ -271,6 +271,52 @@ def _accelerator_device_audit() -> dict:
             accelerator.end_training()
 
 
+def _sd3_clip_pair_prepare() -> dict:
+    """Real-CUDA qualification for one-live/one-frozen SD3 CLIP pairing."""
+
+    accelerator = Accelerator()
+    try:
+        if accelerator.num_processes != 1:
+            raise AssertionError(
+                "SD3 CLIP co-residency case requires exactly one process."
+            )
+        device = torch.device(accelerator.device)
+        if device.type != "cuda":
+            raise AssertionError(
+                f"SD3 CLIP co-residency case requires CUDA; got {device}."
+            )
+
+        clip_l = torch.nn.Linear(4, 4).to(device)
+        clip_g = torch.nn.Linear(4, 4).to(device)
+        clip_g.requires_grad_(False)
+
+        # Mirrors trainer behavior: only the trainable encoder is handed to
+        # Accelerator.prepare(); the frozen sibling must remain co-resident.
+        clip_l = accelerator.prepare(clip_l)
+
+        l_device = next(clip_l.parameters()).device
+        g_device = next(clip_g.parameters()).device
+        if l_device != g_device:
+            raise AssertionError(
+                "SD3 CLIP pair split across devices after prepare: "
+                f"clip_l={l_device}, clip_g={g_device}."
+            )
+
+        value = torch.randn(2, 4, device=l_device)
+        l_out = clip_l(value)
+        g_out = clip_g(value.to(g_device))
+        combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
+        torch.cuda.synchronize()
+        return {
+            "accelerator_device": str(device),
+            "clip_l_device": str(l_device),
+            "clip_g_device": str(g_device),
+            "combined_shape": list(combined.shape),
+        }
+    finally:
+        accelerator.end_training()
+
+
 def _supported_optimizer_types() -> list[str]:
     return [
         capability.name
@@ -285,6 +331,7 @@ def _cases() -> list[tuple[str, list[str], str]]:
     cases.extend(
         [
             ("runtime:accelerator-device-audit", ["AdamW"], "fp32"),
+            ("runtime:sd3-clip-pair-prepare", ["AdamW"], "fp32"),
             ("precision:adamw-fp16", ["AdamW"], "fp16"),
             ("precision:adamw-bf16", ["AdamW"], "bf16"),
             ("mixed:adamw-schedulefree", ["AdamW", "AdamWScheduleFree"], "fp32"),
@@ -347,6 +394,8 @@ def main() -> int:
         try:
             if name == "runtime:accelerator-device-audit":
                 row["details"] = _accelerator_device_audit()
+            elif name == "runtime:sd3-clip-pair-prepare":
+                row["details"] = _sd3_clip_pair_prepare()
             else:
                 row["details"] = _one_step(optimizer_types, precision)
             row["status"] = "pass"
