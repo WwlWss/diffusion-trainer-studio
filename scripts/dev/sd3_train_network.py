@@ -247,6 +247,11 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
                     flags["clip_l.adapter"] or flags["clip_g.adapter"]
                 )
                 policy_t5_train = flags["t5xxl.adapter"]
+                if policy_t5_train:
+                    raise ValueError(
+                        "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
+                        "outputs cannot be used."
+                    )
 
             return strategy_sd3.Sd3TextEncoderOutputsCachingStrategy(
                 args.cache_text_encoder_outputs_to_disk,
@@ -256,7 +261,6 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
                     self.train_clip
                     or self.train_t5xxl
                     or policy_clip_train
-                    or policy_t5_train
                 ),
                 apply_lg_attn_mask=args.apply_lg_attn_mask,
                 apply_t5_attn_mask=args.apply_t5_attn_mask,
