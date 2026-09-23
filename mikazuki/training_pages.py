@@ -320,7 +320,7 @@ def patch_frontend_app_js(content: str) -> str:
         '"例如 muon / fallback":"\\xA0")),'
         'vt(K("input",{placeholder:e.prefix==="parameter_policy_profiles."?'
         '"例如 muon / fallback":void 0,'
-        '"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
+        '"onUpdate:modelValue":m=>{if(e.prefix==="parameter_policy_profiles."&&window.__dtsPolicyProfileHooks&&!window.__dtsPolicyProfileHooks.rename(c(t)[v][0],m))return;c(t)[v][0]=m}},null,8,vI),'
         '[[t0,c(t)[v][0]]])])'
     )
     profile_key_span_count = content.count(profile_key_span_anchor)
@@ -335,6 +335,25 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
+    profile_delete_anchor = 'onClick:m=>c(a)(v)'
+    profile_delete_replacement = (
+        'onClick:m=>{'
+        'if(e.prefix==="parameter_policy_profiles."&&window.__dtsPolicyProfileHooks&&'
+        '!window.__dtsPolicyProfileHooks.canDelete(h))return;'
+        'c(a)(v)}'
+    )
+    profile_delete_count = content.count(profile_delete_anchor)
+    if profile_delete_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery profile-delete anchor expected once, "
+            f"found {profile_delete_count}"
+        )
+    content = content.replace(
+        profile_delete_anchor,
+        profile_delete_replacement,
+        1,
+    )
+
     profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
     profile_type_replacement = (
         'prefix:G(()=>['
@@ -342,6 +361,28 @@ def patch_frontend_app_js(content: str) -> str:
         'K("span",{class:"dts-profile-type-label"},"Optimizer Type"):ye("",!0),'
         'r.value.length>1?'
     )
+    profile_type_switch_anchor = (
+        'set(d){a.value!==r.value[d]&&(l.value=o.value[d],a.value=r.value[d])}'
+    )
+    profile_type_switch_replacement = (
+        'set(d){if(a.value===r.value[d])return;'
+        'const f=l.value&&l.value.type,h=o.value[d]&&o.value[d].type;'
+        '__dtsOptimizerProfileUnion(t.schema,t.prefix)&&window.__dtsPolicyProfileHooks&&'
+        'window.__dtsPolicyProfileHooks.optimizerTypeChanged(t.prefix,f,h),'
+        'l.value=o.value[d],a.value=r.value[d]}'
+    )
+    profile_type_switch_count = content.count(profile_type_switch_anchor)
+    if profile_type_switch_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery optimizer-type switch anchor expected once, "
+            f"found {profile_type_switch_count}"
+        )
+    content = content.replace(
+        profile_type_switch_anchor,
+        profile_type_switch_replacement,
+        1,
+    )
+
     profile_type_count = content.count(profile_type_anchor)
     if profile_type_count != 1:
         raise RuntimeError(
