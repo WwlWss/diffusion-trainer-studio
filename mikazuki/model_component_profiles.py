@@ -194,9 +194,26 @@ def _network_bool(config: Mapping[str, Any], key: str) -> bool:
 
 
 def _network_exact_true(config: Mapping[str, Any], key: str) -> bool:
-    """Mirror LoRA module kwargs that enable a flag only for literal "True"."""
-    args = _network_args(config)
-    return args.get(key.lower()) == "True"
+    """Mirror LoRA kwargs: exact raw key and exact string value "True"."""
+    raw = config.get("network_args")
+    if raw in (None, ""):
+        return False
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError("network_args must be a string or list of strings in effective config.")
+
+    result = False
+    for raw_item in items:
+        item = str(raw_item).strip()
+        if "=" not in item:
+            continue
+        raw_key, raw_value = item.split("=", 1)
+        if raw_key == key:
+            result = raw_value == "True"
+    return result
 
 
 def _components(*items: tuple[str, str, str, tuple[str, ...]]) -> Mapping[str, ComponentDefinition]:
