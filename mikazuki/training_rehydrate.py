@@ -9,7 +9,13 @@ from pathlib import Path
 
 from mikazuki.multi_caption_config import rehydrate_multi_caption_policy
 from mikazuki.parameter_policy import validate_parameter_policy
-from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
+from mikazuki.training_gui_args import (
+    PRODIGY_TYPES,
+    _arg_key,
+    _as_bool,
+    _items,
+    _network_arg_items,
+)
 
 
 def _extract_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
@@ -166,7 +172,7 @@ def rehydrate_trainer_config(
         te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
         config["lora_target"] = "unet" if unet_only else "text_encoder" if te_only else "unet_text_encoder"
 
-    args = _items(config.pop("network_args", None))
+    args = _network_arg_items(config.pop("network_args", None))
     if page_train_type == "sd3-lora":
         train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
         config["train_t5xxl"] = train_t5_raw == "True" if train_t5_raw is not None else False
