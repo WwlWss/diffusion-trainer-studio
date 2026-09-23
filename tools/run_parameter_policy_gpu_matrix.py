@@ -6,8 +6,10 @@ shared Component optimizer facade, precision/autocast-scaler behavior,
 supported optimizer implementations, mixed optimizer children, and optimizer
 state_dict reload without requiring model checkpoints or datasets.
 
-It does not claim to qualify Accelerator.prepare, scheduler construction,
-gradient accumulation, trainer checkpoint hooks, or model-family integration.
+It also includes one minimal single-process Accelerator.prepare + Parameter
+Policy device-audit smoke. It does not claim to qualify scheduler construction,
+gradient accumulation, trainer checkpoint hooks, distributed execution, or
+model-family integration.
 
 Backend/model-family smoke is a separate release axis documented in
 docs/parameter-policy-step6f-plan.md.
@@ -22,11 +24,14 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import tempfile
 import sys
 import time
 import traceback
+from types import SimpleNamespace
 
 import torch
+from accelerate import Accelerator
 
 from mikazuki.optimizer_profiles import list_optimizer_capabilities
 from mikazuki.parameter_policy_runtime import (
@@ -36,6 +41,7 @@ from mikazuki.parameter_policy_runtime import (
     RuntimeParameterSpec,
 )
 from mikazuki.parameter_policy_torch import build_parameter_policy_optimizer
+from mikazuki.parameter_policy_trainer import create_parameter_policy_session
 
 
 def _git_sha() -> str | None:
@@ -171,6 +177,63 @@ def _one_step(types: list[str], precision: str) -> dict:
     }
 
 
+
+class _TinyFlux(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.double_blocks = torch.nn.ModuleList([torch.nn.Linear(4, 4)])
+
+    def forward(self, value):
+        return self.double_blocks[0](value)
+
+
+def _accelerator_device_audit() -> dict:
+    policy = {
+        "version": 1,
+        "optimizer_profiles": {
+            "main": {"type": "AdamW", "args": {}},
+        },
+        "components": {
+            "transformer.double_stream": {
+                "train": True,
+                "optimizer_profile": "main",
+                "learning_rate": 1e-3,
+            },
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        policy_path = Path(temp_dir) / "policy.json"
+        policy_path.write_text(
+            json.dumps(policy, sort_keys=True),
+            encoding="utf-8",
+        )
+        args = SimpleNamespace(parameter_policy_config=str(policy_path))
+        model = _TinyFlux()
+        session = create_parameter_policy_session(
+            args=args,
+            train_type="flux-finetune",
+            roots={"transformer": model},
+        )
+
+        accelerator = Accelerator()
+        model, optimizer = accelerator.prepare(model, session.optimizer)
+        try:
+            session.audit_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            parameter_devices = sorted(
+                {str(parameter.device) for parameter in session.trainable_parameters}
+            )
+            return {
+                "accelerator_device": str(accelerator.device),
+                "current_cuda_device": int(torch.cuda.current_device()),
+                "trainable_parameter_devices": parameter_devices,
+            }
+        finally:
+            accelerator.end_training()
+
 def _supported_optimizer_types() -> list[str]:
     return [
         capability.name
@@ -184,6 +247,7 @@ def _cases() -> list[tuple[str, list[str], str]]:
     cases = [(f"optimizer:{name}", [name], "fp32") for name in supported]
     cases.extend(
         [
+            ("runtime:accelerator-device-audit", ["AdamW"], "fp32"),
             ("precision:adamw-fp16", ["AdamW"], "fp16"),
             ("precision:adamw-bf16", ["AdamW"], "bf16"),
             ("mixed:adamw-schedulefree", ["AdamW", "AdamWScheduleFree"], "fp32"),
@@ -244,7 +308,10 @@ def main() -> int:
             "precision": precision,
         }
         try:
-            row["details"] = _one_step(optimizer_types, precision)
+            if name == "runtime:accelerator-device-audit":
+                row["details"] = _accelerator_device_audit()
+            else:
+                row["details"] = _one_step(optimizer_types, precision)
             row["status"] = "pass"
         except Exception as exc:
             failed = True
