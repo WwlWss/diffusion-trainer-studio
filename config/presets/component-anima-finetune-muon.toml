@@ -3,7 +3,7 @@ name = "Component：Anima Full — DiT Muon + AdamW fallback"
 version = "1.0"
 author = "Diffusion Trainer Studio"
 train_type = "anima-finetune"
-description = "示例：Anima DiT 组件使用 Muon + AdamW fallback；Qwen3 与 LLM Adapter 保持冻结。学习率仅用于演示。"
+description = "Anima Stage 1 示例：Self/Cross/MLP 使用 Muon + AdamW fallback；Modulation/Base/LLM Adapter 使用 AdamW；Qwen3 冻结。"
 
 [data]
 optimization_mode = "component"
@@ -27,48 +27,49 @@ ns_steps = 5
 ns_coeffs = "original"
 use_adjusted_lr = false
 
-[data.parameter_policy_profiles.fallback]
+[data.parameter_policy_profiles.adamw]
 type = "AdamW"
 
-[data.parameter_policy_profiles.fallback.args]
+[data.parameter_policy_profiles.adamw.args]
+betas = [0.9, 0.95]
+eps = 1e-8
+weight_decay = 0.0
 
 [data.parameter_policy_components."dit.self_attention"]
 train = true
 optimizer_profile = "muon"
 learning_rate = "1e-4"
-fallback_optimizer_profile = "fallback"
-fallback_learning_rate = "1e-4"
+fallback_optimizer_profile = "adamw"
+fallback_learning_rate = "2.5e-5"
 
 [data.parameter_policy_components."dit.cross_attention"]
 train = true
 optimizer_profile = "muon"
 learning_rate = "1e-4"
-fallback_optimizer_profile = "fallback"
-fallback_learning_rate = "1e-4"
+fallback_optimizer_profile = "adamw"
+fallback_learning_rate = "2.5e-5"
 
 [data.parameter_policy_components."dit.mlp"]
 train = true
 optimizer_profile = "muon"
 learning_rate = "1e-4"
-fallback_optimizer_profile = "fallback"
-fallback_learning_rate = "1e-4"
+fallback_optimizer_profile = "adamw"
+fallback_learning_rate = "2.5e-5"
 
 [data.parameter_policy_components."dit.modulation"]
 train = true
-optimizer_profile = "muon"
-learning_rate = "5e-5"
-fallback_optimizer_profile = "fallback"
-fallback_learning_rate = "5e-5"
+optimizer_profile = "adamw"
+learning_rate = "2.5e-5"
 
 [data.parameter_policy_components."dit.llm_adapter"]
-train = false
+train = true
+optimizer_profile = "adamw"
+learning_rate = "2e-6"
 
 [data.parameter_policy_components."dit.base_other"]
 train = true
-optimizer_profile = "muon"
-learning_rate = "5e-5"
-fallback_optimizer_profile = "fallback"
-fallback_learning_rate = "5e-5"
+optimizer_profile = "adamw"
+learning_rate = "2.5e-5"
 
 [data.parameter_policy_components.qwen3]
 train = false
