@@ -273,7 +273,7 @@ def _accelerator_device_audit() -> dict:
 
 
 def _sd3_clip_pair_prepare() -> dict:
-    """Real-CUDA qualification for one-live/one-frozen SD3 CLIP pairing."""
+    """Real-CUDA qualification for both one-live/one-frozen SD3 CLIP routes."""
 
     accelerator = Accelerator()
     try:
@@ -287,36 +287,45 @@ def _sd3_clip_pair_prepare() -> dict:
                 f"SD3 CLIP co-residency case requires CUDA; got {device}."
             )
 
-        clip_l = torch.nn.Linear(4, 4).to(device)
-        clip_g = torch.nn.Linear(4, 4).to(device)
-        clip_g.requires_grad_(False)
+        routes = []
+        for train_side in ("clip_l", "clip_g"):
+            clip_l = torch.nn.Linear(4, 4).to(device)
+            clip_g = torch.nn.Linear(4, 4).to(device)
+            if train_side == "clip_l":
+                clip_g.requires_grad_(False)
+                clip_l = accelerator.prepare(clip_l)
+            else:
+                clip_l.requires_grad_(False)
+                clip_g = accelerator.prepare(clip_g)
 
-        # Mirrors trainer behavior: only the trainable encoder is handed to
-        # Accelerator.prepare(); the frozen sibling must remain co-resident.
-        clip_l = accelerator.prepare(clip_l)
+            l_device = next(clip_l.parameters()).device
+            g_device = next(clip_g.parameters()).device
+            if l_device != g_device:
+                raise AssertionError(
+                    "SD3 CLIP pair split across devices after prepare: "
+                    f"route={train_side}, clip_l={l_device}, clip_g={g_device}."
+                )
 
-        l_device = next(clip_l.parameters()).device
-        g_device = next(clip_g.parameters()).device
-        if l_device != g_device:
-            raise AssertionError(
-                "SD3 CLIP pair split across devices after prepare: "
-                f"clip_l={l_device}, clip_g={g_device}."
+            value = torch.randn(2, 4, device=l_device)
+            l_out = clip_l(value)
+            g_out = clip_g(value.to(g_device))
+            combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
+            routes.append(
+                {
+                    "train_side": train_side,
+                    "clip_l_device": str(l_device),
+                    "clip_g_device": str(g_device),
+                    "combined_shape": list(combined.shape),
+                }
             )
 
-        value = torch.randn(2, 4, device=l_device)
-        l_out = clip_l(value)
-        g_out = clip_g(value.to(g_device))
-        combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
         torch.cuda.synchronize()
         return {
             "accelerator_device": str(device),
-            "clip_l_device": str(l_device),
-            "clip_g_device": str(g_device),
-            "combined_shape": list(combined.shape),
+            "routes": routes,
         }
     finally:
         accelerator.end_training()
-
 
 def _supported_optimizer_types() -> list[str]:
     return [
