@@ -1,7 +1,13 @@
 import unittest
+from copy import deepcopy
 
 from mikazuki.training_config import prepare_training_config
 from mikazuki.training_gui_args import apply_raw_gui_semantics
+from mikazuki.training_gui_semantics import (
+    normalize_flux_lora_target,
+    normalize_sd3_lora_target,
+    normalize_sd_lora_target,
+)
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 
 
@@ -252,6 +258,146 @@ class TrainingSemanticContractTests(unittest.TestCase):
         self.assertIn("train_t5xxl=True", rebuilt["network_args"])
         self.assertIn("custom=ok", rebuilt["network_args"])
         self.assertNotIn("train_t5xxl", rebuilt)
+
+    def test_lora_target_normalizers_are_idempotent(self):
+        cases = (
+            (
+                normalize_sd_lora_target,
+                {"lora_target": "unet_text_encoder"},
+                {},
+            ),
+            (
+                normalize_flux_lora_target,
+                {
+                    "flux_lora_target": "dit_clip_l_t5xxl",
+                    "network_args": ["custom=ok"],
+                },
+                {"chroma": False},
+            ),
+            (
+                normalize_flux_lora_target,
+                {
+                    "flux_lora_target": "dit_t5xxl",
+                    "network_args": ["custom=ok"],
+                },
+                {"chroma": True},
+            ),
+            (
+                normalize_sd3_lora_target,
+                {
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": True,
+                    "network_args": ["custom=ok"],
+                },
+                {},
+            ),
+        )
+        for normalizer, raw, kwargs in cases:
+            with self.subTest(normalizer=normalizer.__name__, raw=raw):
+                config = deepcopy(raw)
+                normalizer(config, **kwargs)
+                once = deepcopy(config)
+                normalizer(config, **kwargs)
+                self.assertEqual(config, once)
+
+    def test_flux_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "train_t5xxl"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="flux-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_chroma_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "train_t5xxl"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="chroma-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_sd3_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "Train T5XXL"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": False,
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="sd3-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_sd3_standard_target_t5_matrix_and_round_trip(self):
+        cases = (
+            ("mmdit", False, True, False, False),
+            ("text_encoder", False, False, True, False),
+            ("text_encoder", True, False, True, True),
+            ("mmdit_text_encoder", False, False, False, False),
+            ("mmdit_text_encoder", True, False, False, True),
+        )
+        for target, train_t5, unet_only, te_only, effective_t5 in cases:
+            with self.subTest(target=target, train_t5=train_t5):
+                prepared = prepare_training_config(
+                    {
+                        "optimizer_type": "AdamW",
+                        "sd3_lora_target": target,
+                        "train_t5xxl": train_t5,
+                    },
+                    page_train_type="sd3-lora",
+                    resolve_backend=_resolve,
+                )
+                effective = prepared.config
+                self.assertEqual(
+                    bool(effective.get("network_train_unet_only", False)),
+                    unet_only,
+                )
+                self.assertEqual(
+                    bool(effective.get("network_train_text_encoder_only", False)),
+                    te_only,
+                )
+                self.assertEqual(
+                    "train_t5xxl=True" in effective.get("network_args", []),
+                    effective_t5,
+                )
+
+                gui = rehydrate_trainer_config(effective, "sd3-lora")
+                rebuilt = prepare_training_config(
+                    gui,
+                    page_train_type="sd3-lora",
+                    resolve_backend=_resolve,
+                ).config
+                for key in (
+                    "network_train_unet_only",
+                    "network_train_text_encoder_only",
+                    "network_args",
+                ):
+                    self.assertEqual(
+                        effective.get(key),
+                        rebuilt.get(key),
+                        (target, train_t5, key),
+                    )
+
+    def test_sd3_mmdit_target_rejects_t5_training(self):
+        with self.assertRaisesRegex(ValueError, "Train T5XXL"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": True,
+                },
+                page_train_type="sd3-lora",
+                resolve_backend=_resolve,
+            )
 
     def test_dadapt_rewrites_active_lr_but_prodigy_does_not(self):
         dadapt = prepare_training_config(
