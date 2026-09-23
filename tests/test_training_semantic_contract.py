@@ -264,6 +264,8 @@ class TrainingSemanticContractTests(unittest.TestCase):
             ("train_t5xxl=true", False),
             ("TRAIN_T5XXL=True", True),
             ("train_t5xxl =True", True),
+            (" train_t5xxl=True", True),
+            ("train_t5xxl=True ", False),
         )
         for train_type in ("flux-lora", "sd3-lora"):
             for variant, preserve_raw in variants:
@@ -541,6 +543,8 @@ class TrainingSemanticContractTests(unittest.TestCase):
             ("train_t5xxl=true", False),
             ("TRAIN_T5XXL=True", True),
             ("train_t5xxl =True", True),
+            (" train_t5xxl=True", True),
+            ("train_t5xxl=True ", False),
         )
         for train_type in ("flux-lora", "sd3-lora"):
             for variant, preserve_raw in inert_variants:
