@@ -16,7 +16,7 @@ from mikazuki.app.config import app_config
 from mikazuki.app.api import load_schemas, load_presets
 from mikazuki.app.api_overlay import router as api_router
 from mikazuki.app.proxy import router as proxy_router
-from mikazuki.frontend_branding import patch_branding_index_html
+from mikazuki.frontend_branding import frontend_asset_media_type, patch_branding_index_html
 from mikazuki.training_pages import (
     patch_frontend_app_js,
     virtual_asset,
@@ -129,7 +129,8 @@ async def frontend_asset(asset_name: str):
     """Serve the pinned frontend plus runtime-injected backend training pages."""
     generated = virtual_asset(asset_name)
     if generated is not None:
-        return Response(content=generated, media_type="application/javascript")
+        media_type = frontend_asset_media_type(asset_name)
+        return Response(content=generated, media_type=media_type)
 
     asset_path = _safe_frontend_path(FRONTEND_ASSETS_DIR, asset_name)
     if not asset_path.is_file():

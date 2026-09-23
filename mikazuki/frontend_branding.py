@@ -8,6 +8,7 @@ pages without forking or modifying the minified upstream distribution.
 from __future__ import annotations
 
 import json
+import mimetypes
 from pathlib import Path
 
 import mikazuki.training_pages as training_pages
@@ -24,6 +25,22 @@ PROJECT_NAME = "Diffusion Trainer Studio"
 PROJECT_VERSION = "2.0.0"
 PROJECT_REPOSITORY = "https://github.com/WwlWss/diffusion-trainer-studio"
 PROJECT_ISSUES = f"{PROJECT_REPOSITORY}/issues"
+
+
+_GENERATED_ASSET_MEDIA_TYPES = {
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".css": "text/css",
+}
+
+
+def frontend_asset_media_type(asset_name: str) -> str:
+    """Return a deterministic HTTP media type for generated frontend assets."""
+    suffix = Path(asset_name).suffix.lower()
+    explicit = _GENERATED_ASSET_MEDIA_TYPES.get(suffix)
+    if explicit is not None:
+        return explicit
+    return mimetypes.guess_type(asset_name)[0] or "application/octet-stream"
 
 
 def _replace_once(content: str, old: str, new: str, label: str) -> str:

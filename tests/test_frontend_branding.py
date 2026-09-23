@@ -9,6 +9,24 @@ INDEX = Path("frontend/dist/index.html")
 
 
 class FrontendBrandingTests(unittest.TestCase):
+    def test_generated_frontend_asset_media_types(self):
+        self.assertEqual(
+            frontend_branding.frontend_asset_media_type(frontend_branding.STYLE_ASSET),
+            "text/css",
+        )
+        self.assertEqual(
+            frontend_branding.frontend_asset_media_type(frontend_branding.APP_ASSET),
+            "application/javascript",
+        )
+        self.assertEqual(
+            frontend_branding.frontend_asset_media_type("runtime.module.mjs"),
+            "application/javascript",
+        )
+        self.assertEqual(
+            frontend_branding.frontend_asset_media_type("runtime.asset.unknownext"),
+            "application/octet-stream",
+        )
+
     def test_app_branding_composes_after_training_page_patch(self):
         source = (ASSETS / frontend_branding.APP_ASSET).read_text(encoding="utf-8")
         training_patched = training_pages.patch_frontend_app_js(source)
