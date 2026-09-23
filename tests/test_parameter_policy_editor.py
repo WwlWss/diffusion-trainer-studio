@@ -265,6 +265,47 @@ class ParameterPolicyEditorNormalizationTests(unittest.TestCase):
             },
         )
 
+    def test_train_toggle_ignores_and_restores_route_fields_deterministically(self):
+        component_ids = sorted(get_model_component_profile("anima-finetune").components)
+        target = component_ids[0]
+        components = {
+            component_id: {"train": False}
+            for component_id in component_ids
+        }
+        components[target] = {
+            "train": False,
+            "optimizer_profile": "muon",
+            "learning_rate": "1e-4",
+            "fallback_optimizer_profile": "fallback",
+            "fallback_learning_rate": "2.5e-5",
+        }
+        profiles = {
+            "muon": {"type": "Muon", "args": {}},
+            "fallback": {"type": "AdamW", "args": {}},
+        }
+
+        frozen = canonicalize_parameter_policy(
+            {"optimizer_profiles": profiles, "components": components}
+        )
+        self.assertEqual(frozen["components"][target], {"train": False})
+
+        components[target]["train"] = True
+        active = canonicalize_parameter_policy(
+            {"optimizer_profiles": profiles, "components": components}
+        )
+        self.assertTrue(active["components"][target]["train"])
+        self.assertEqual(active["components"][target]["optimizer_profile"], "muon")
+        self.assertEqual(
+            active["components"][target]["fallback_optimizer_profile"],
+            "fallback",
+        )
+
+        components[target]["train"] = False
+        frozen_again = canonicalize_parameter_policy(
+            {"optimizer_profiles": profiles, "components": components}
+        )
+        self.assertEqual(frozen_again["components"][target], {"train": False})
+
     def test_canonical_editor_round_trip_is_lossless(self):
         component_ids = sorted(get_model_component_profile("sd-lora").components)
         canonical = canonicalize_parameter_policy(
