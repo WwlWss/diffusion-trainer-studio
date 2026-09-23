@@ -5,6 +5,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -35,6 +36,36 @@ def _load_method(path: Path, class_name: str, method_name: str, **globals_):
 class _CapturedCacheStrategy:
     def __init__(self, *args, is_partial=False, **kwargs):
         self.is_partial = is_partial
+
+
+def _write_policy(path: Path, components: dict[str, bool]) -> None:
+    payload = {
+        "version": 1,
+        "optimizer_profiles": {
+            "main": {"type": "AdamW", "args": {}},
+        },
+        "components": {
+            component_id: (
+                {
+                    "train": True,
+                    "optimizer_profile": "main",
+                    "learning_rate": 1e-4,
+                }
+                if train
+                else {"train": False}
+            )
+            for component_id, train in components.items()
+        },
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _bridge_module():
+    from mikazuki.parameter_policy_trainer import load_parameter_policy_train_flags
+
+    return SimpleNamespace(
+        load_parameter_policy_train_flags=load_parameter_policy_train_flags,
+    )
 
 
 _RUNTIME_DEPS_AVAILABLE = all(
@@ -80,7 +111,7 @@ else:
 
 
 class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
-    def test_flux_policy_cache_forces_partial_strategy_before_session_exists(self):
+    def test_flux_policy_cache_partial_hint_tracks_sidecar_train_flags(self):
         method = _load_method(
             ROOT / "scripts" / "dev" / "flux_train_network.py",
             "FluxNetworkTrainer",
@@ -89,27 +120,58 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
                 FluxTextEncoderOutputsCachingStrategy=_CapturedCacheStrategy,
             ),
         )
-        trainer = SimpleNamespace(train_clip_l=False, train_t5xxl=False)
-        args = SimpleNamespace(
-            cache_text_encoder_outputs=True,
-            parameter_policy_config="policy.json",
-            cache_text_encoder_outputs_to_disk=False,
-            text_encoder_batch_size=1,
-            skip_cache_check=False,
-            apply_t5_attn_mask=False,
-        )
-        strategy = method(trainer, args)
-        self.assertTrue(strategy.is_partial)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            args = SimpleNamespace(
+                cache_text_encoder_outputs=True,
+                parameter_policy_config=str(policy_path),
+                cache_text_encoder_outputs_to_disk=False,
+                text_encoder_batch_size=1,
+                skip_cache_check=False,
+                apply_t5_attn_mask=False,
+            )
+            library_module = SimpleNamespace(
+                dts_parameter_policy_bridge=_bridge_module(),
+            )
+            with mock.patch.dict(
+                "sys.modules",
+                {
+                    "library": library_module,
+                    "library.dts_parameter_policy_bridge": library_module.dts_parameter_policy_bridge,
+                },
+            ):
+                trainer = SimpleNamespace(
+                    train_clip_l=False,
+                    train_t5xxl=False,
+                    use_clip_l=True,
+                )
 
-        args.parameter_policy_config = ""
-        strategy = method(trainer, args)
-        self.assertFalse(strategy.is_partial)
+                _write_policy(
+                    policy_path,
+                    {
+                        "clip_l.adapter": False,
+                        "t5xxl.adapter": False,
+                    },
+                )
+                self.assertFalse(method(trainer, args).is_partial)
 
-        trainer.train_clip_l = True
-        strategy = method(trainer, args)
-        self.assertTrue(strategy.is_partial)
+                _write_policy(
+                    policy_path,
+                    {
+                        "clip_l.adapter": True,
+                        "t5xxl.adapter": False,
+                    },
+                )
+                self.assertTrue(method(trainer, args).is_partial)
 
-    def test_sd3_policy_cache_forces_partial_strategy_before_session_exists(self):
+                trainer.use_clip_l = False
+                _write_policy(
+                    policy_path,
+                    {"t5xxl.adapter": False},
+                )
+                self.assertFalse(method(trainer, args).is_partial)
+
+    def test_sd3_policy_cache_partial_hint_tracks_sidecar_train_flags(self):
         method = _load_method(
             ROOT / "scripts" / "dev" / "sd3_train_network.py",
             "Sd3NetworkTrainer",
@@ -118,29 +180,50 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
                 Sd3TextEncoderOutputsCachingStrategy=_CapturedCacheStrategy,
             ),
         )
-        trainer = SimpleNamespace(
-            train_clip=False,
-            train_t5xxl=False,
-        )
-        args = SimpleNamespace(
-            cache_text_encoder_outputs=True,
-            parameter_policy_config="policy.json",
-            cache_text_encoder_outputs_to_disk=False,
-            text_encoder_batch_size=1,
-            skip_cache_check=False,
-            apply_lg_attn_mask=False,
-            apply_t5_attn_mask=False,
-        )
-        strategy = method(trainer, args)
-        self.assertTrue(strategy.is_partial)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            args = SimpleNamespace(
+                cache_text_encoder_outputs=True,
+                parameter_policy_config=str(policy_path),
+                cache_text_encoder_outputs_to_disk=False,
+                text_encoder_batch_size=1,
+                skip_cache_check=False,
+                apply_lg_attn_mask=False,
+                apply_t5_attn_mask=False,
+            )
+            library_module = SimpleNamespace(
+                dts_parameter_policy_bridge=_bridge_module(),
+            )
+            with mock.patch.dict(
+                "sys.modules",
+                {
+                    "library": library_module,
+                    "library.dts_parameter_policy_bridge": library_module.dts_parameter_policy_bridge,
+                },
+            ):
+                trainer = SimpleNamespace(train_clip=False, train_t5xxl=False)
 
-        args.parameter_policy_config = ""
-        strategy = method(trainer, args)
-        self.assertFalse(strategy.is_partial)
+                _write_policy(
+                    policy_path,
+                    {
+                        "clip_l.adapter": False,
+                        "clip_g.adapter": False,
+                        "t5xxl.adapter": False,
+                    },
+                )
+                self.assertFalse(method(trainer, args).is_partial)
 
-        trainer.train_clip = True
-        strategy = method(trainer, args)
-        self.assertTrue(strategy.is_partial)
+                for trained_component in ("clip_l.adapter", "clip_g.adapter"):
+                    _write_policy(
+                        policy_path,
+                        {
+                            "clip_l.adapter": trained_component == "clip_l.adapter",
+                            "clip_g.adapter": trained_component == "clip_g.adapter",
+                            "t5xxl.adapter": False,
+                        },
+                    )
+                    self.assertTrue(method(trainer, args).is_partial)
+
 
     def test_partial_cache_keeps_dataset_tokenization_available(self):
         source = (
@@ -255,6 +338,29 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
 
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
 class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
+    def test_sd3_clip_pair_survives_real_accelerator_prepare(self):
+        accelerator = Accelerator(cpu=True)
+        try:
+            clip_l = torch.nn.Linear(4, 4)
+            clip_g = torch.nn.Linear(4, 4)
+            clip_g.requires_grad_(False)
+
+            # Mirrors SD3 partial-cache routing: only the trainable CLIP is
+            # handed to prepare(), while its frozen sibling remains co-resident.
+            clip_l = accelerator.prepare(clip_l)
+
+            l_device = next(clip_l.parameters()).device
+            g_device = next(clip_g.parameters()).device
+            self.assertEqual(l_device, g_device)
+
+            value = torch.randn(2, 4, device=l_device)
+            l_out = clip_l(value)
+            g_out = clip_g(value.to(g_device))
+            combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
+            self.assertEqual(tuple(combined.shape), (2, 8))
+        finally:
+            accelerator.end_training()
+
     def test_component_lr_logging_survives_accelerate_scheduler_wrapper(self):
         policy = {
             "version": 1,
