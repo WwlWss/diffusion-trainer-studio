@@ -18,6 +18,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import torch
+
 from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
 from mikazuki.parameter_policy_runtime import (
@@ -45,6 +47,66 @@ PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
     """Raised when trainer integration cannot honor Parameter Policy exactly."""
+
+
+def _current_cuda_device_index() -> int:
+    try:
+        return int(torch.cuda.current_device())
+    except Exception as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Parameter Policy device audit could not resolve the current CUDA device."
+        ) from exc
+
+
+def _resolve_runtime_device(
+    device: object,
+    *,
+    current_cuda_index: int | None = None,
+) -> torch.device:
+    try:
+        normalized = torch.device(device)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            f"Invalid runtime device for Parameter Policy audit: {device!r}."
+        ) from exc
+
+    if normalized.type != "cuda" or normalized.index is not None:
+        return normalized
+
+    if current_cuda_index is None:
+        current_cuda_index = _current_cuda_device_index()
+
+    return torch.device("cuda", current_cuda_index)
+
+
+def _same_runtime_device(
+    actual: object,
+    expected: object,
+    *,
+    current_cuda_index: int | None = None,
+) -> bool:
+    try:
+        actual_device = torch.device(actual)
+        expected_device = torch.device(expected)
+    except (TypeError, ValueError, RuntimeError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Parameter Policy device audit received an invalid device."
+        ) from exc
+
+    if actual_device == expected_device:
+        return True
+    if actual_device.type != expected_device.type:
+        return False
+    if actual_device.type != "cuda":
+        return False
+
+    return _resolve_runtime_device(
+        actual_device,
+        current_cuda_index=current_cuda_index,
+    ) == _resolve_runtime_device(
+        expected_device,
+        current_cuda_index=current_cuda_index,
+    )
 
 
 def _effective_config(args: object) -> dict[str, Any]:
@@ -677,22 +739,64 @@ class ParameterPolicyTrainerSession:
                 f"missing={missing[:8]!r}, unexpected={unexpected[:8]!r}."
             )
 
-        expected_device = getattr(accelerator, "device", None)
-        if expected_device is None:
+        raw_expected_device = getattr(accelerator, "device", None)
+        if raw_expected_device is None:
             raise ParameterPolicyTrainerRuntimeError(
                 "Accelerator does not expose a device for Parameter Policy device audit."
             )
+        try:
+            expected_device = torch.device(raw_expected_device)
+        except (TypeError, ValueError, RuntimeError) as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Accelerator exposes an invalid device for Parameter Policy audit: "
+                f"{raw_expected_device!r}."
+            ) from exc
+
+        current_cuda_index: int | None = None
+        if expected_device.type == "cuda" and expected_device.index is None:
+            current_cuda_index = _current_cuda_device_index()
+        resolved_expected_device = _resolve_runtime_device(
+            expected_device,
+            current_cuda_index=current_cuda_index,
+        )
+
         mismatches: list[str] = []
         for parameter in self.trainable_parameters:
-            device = getattr(parameter, "device", None)
-            if device != expected_device:
+            actual_device = getattr(parameter, "device", None)
+            if actual_device is None:
                 mismatches.append(
-                    f"{name_by_id.get(id(parameter), '<parameter>')}={device}"
+                    f"{name_by_id.get(id(parameter), '<parameter>')}=<no device>"
+                )
+                continue
+
+            try:
+                actual_device = torch.device(actual_device)
+            except (TypeError, ValueError, RuntimeError) as exc:
+                raise ParameterPolicyTrainerRuntimeError(
+                    "Parameter Policy device audit received an invalid "
+                    f"parameter device: {actual_device!r}."
+                ) from exc
+            if (
+                current_cuda_index is None
+                and actual_device.type == "cuda"
+                and actual_device.index is None
+            ):
+                current_cuda_index = _current_cuda_device_index()
+
+            if not _same_runtime_device(
+                actual_device,
+                expected_device,
+                current_cuda_index=current_cuda_index,
+            ):
+                mismatches.append(
+                    f"{name_by_id.get(id(parameter), '<parameter>')}={actual_device}"
                 )
         if mismatches:
             raise ParameterPolicyTrainerRuntimeError(
                 "Parameter Policy device audit failed; trainable optimizer parameters "
-                f"must be on {expected_device}: " + ", ".join(mismatches[:8])
+                f"must resolve to {resolved_expected_device} "
+                f"(accelerator.device={expected_device}): "
+                + ", ".join(mismatches[:8])
             )
 
     def assert_runtime_contract(

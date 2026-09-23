@@ -6,8 +6,10 @@ shared Component optimizer facade, precision/autocast-scaler behavior,
 supported optimizer implementations, mixed optimizer children, and optimizer
 state_dict reload without requiring model checkpoints or datasets.
 
-It does not claim to qualify Accelerator.prepare, scheduler construction,
-gradient accumulation, trainer checkpoint hooks, or model-family integration.
+It also includes one minimal single-process Accelerator.prepare + Parameter
+Policy device-audit smoke. It does not claim to qualify scheduler construction,
+gradient accumulation, trainer checkpoint hooks, distributed execution, or
+model-family integration.
 
 Backend/model-family smoke is a separate release axis documented in
 docs/parameter-policy-step6f-plan.md.
@@ -22,11 +24,19 @@ import os
 from pathlib import Path
 import platform
 import subprocess
+import tempfile
 import sys
 import time
 import traceback
+from types import SimpleNamespace
 
 import torch
+from accelerate import Accelerator
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
 from mikazuki.optimizer_profiles import list_optimizer_capabilities
 from mikazuki.parameter_policy_runtime import (
@@ -36,6 +46,7 @@ from mikazuki.parameter_policy_runtime import (
     RuntimeParameterSpec,
 )
 from mikazuki.parameter_policy_torch import build_parameter_policy_optimizer
+from mikazuki.parameter_policy_trainer import create_parameter_policy_session
 
 
 def _git_sha() -> str | None:
@@ -171,6 +182,95 @@ def _one_step(types: list[str], precision: str) -> dict:
     }
 
 
+
+class _TinyFlux(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.double_blocks = torch.nn.ModuleList([torch.nn.Linear(4, 4)])
+
+    def forward(self, value):
+        return self.double_blocks[0](value)
+
+
+def _accelerator_device_audit() -> dict:
+    policy = {
+        "version": 1,
+        "optimizer_profiles": {
+            "main": {"type": "AdamW", "args": {}},
+        },
+        "components": {
+            "transformer.double_stream": {
+                "train": True,
+                "optimizer_profile": "main",
+                "learning_rate": 1e-3,
+            },
+        },
+    }
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        policy_path = Path(temp_dir) / "policy.json"
+        policy_path.write_text(
+            json.dumps(policy, sort_keys=True),
+            encoding="utf-8",
+        )
+        args = SimpleNamespace(parameter_policy_config=str(policy_path))
+        model = _TinyFlux()
+        session = create_parameter_policy_session(
+            args=args,
+            train_type="flux-finetune",
+            roots={"transformer": model},
+        )
+
+        accelerator = Accelerator()
+        try:
+            accelerator_device = torch.device(accelerator.device)
+            if accelerator.num_processes != 1:
+                raise AssertionError(
+                    "Accelerator device-audit regression case requires exactly "
+                    "one process; "
+                    f"got num_processes={accelerator.num_processes}."
+                )
+            if (
+                accelerator_device.type != "cuda"
+                or accelerator_device.index is not None
+            ):
+                raise AssertionError(
+                    "Accelerator device-audit regression case requires an "
+                    "implicit CUDA device; "
+                    f"got accelerator.device={accelerator_device}."
+                )
+
+            model, optimizer = accelerator.prepare(model, session.optimizer)
+            current_cuda_device = int(torch.cuda.current_device())
+            parameter_devices = sorted(
+                {str(parameter.device) for parameter in session.trainable_parameters}
+            )
+            expected_parameter_devices = [f"cuda:{current_cuda_device}"]
+            if parameter_devices != expected_parameter_devices:
+                raise AssertionError(
+                    "Accelerator.prepare() did not produce the explicit logical "
+                    "CUDA parameter device required by this regression case; "
+                    f"expected={expected_parameter_devices!r}, "
+                    f"actual={parameter_devices!r}."
+                )
+
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=None,
+            )
+            return {
+                "accelerator_device": str(accelerator_device),
+                "accelerator_device_index": accelerator_device.index,
+                "accelerator_num_processes": int(accelerator.num_processes),
+                "accelerator_distributed_type": str(accelerator.distributed_type),
+                "current_cuda_device": current_cuda_device,
+                "trainable_parameter_devices": parameter_devices,
+            }
+        finally:
+            accelerator.end_training()
+
+
 def _supported_optimizer_types() -> list[str]:
     return [
         capability.name
@@ -184,6 +284,7 @@ def _cases() -> list[tuple[str, list[str], str]]:
     cases = [(f"optimizer:{name}", [name], "fp32") for name in supported]
     cases.extend(
         [
+            ("runtime:accelerator-device-audit", ["AdamW"], "fp32"),
             ("precision:adamw-fp16", ["AdamW"], "fp16"),
             ("precision:adamw-bf16", ["AdamW"], "bf16"),
             ("mixed:adamw-schedulefree", ["AdamW", "AdamWScheduleFree"], "fp32"),
@@ -244,7 +345,10 @@ def main() -> int:
             "precision": precision,
         }
         try:
-            row["details"] = _one_step(optimizer_types, precision)
+            if name == "runtime:accelerator-device-audit":
+                row["details"] = _accelerator_device_audit()
+            else:
+                row["details"] = _one_step(optimizer_types, precision)
             row["status"] = "pass"
         except Exception as exc:
             failed = True

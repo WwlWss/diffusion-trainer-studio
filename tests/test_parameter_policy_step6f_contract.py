@@ -76,6 +76,17 @@ class ParameterPolicyStep6FContractTests(unittest.TestCase):
         self.assertIn("regex_lr", PARAMETER_POLICY_SEMANTIC_BLOCKER_FEATURES)
         self.assertNotIn("lora_plus", PARAMETER_POLICY_QUALIFICATION_BLOCKER_FIELDS)
 
+    def test_gpu_matrix_covers_accelerate_device_audit(self):
+        source = (
+            ROOT / "tools" / "run_parameter_policy_gpu_matrix.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("runtime:accelerator-device-audit", source)
+        self.assertIn("Accelerator()", source)
+        self.assertIn("accelerator.num_processes != 1", source)
+        self.assertIn("accelerator_device.index is not None", source)
+        self.assertIn("expected_parameter_devices", source)
+        self.assertIn("finalize_after_prepare", source)
+
     def test_request_gate_is_matrix_owned_and_component_compile_stays_side_effect_free(self):
         source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
         self.assertIn("from mikazuki.parameter_policy_matrix import", source)

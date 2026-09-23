@@ -53,6 +53,14 @@ Frozen roots may remain on CPU when trainers use caching/offload-safe frozen
 paths. Requires-grad auditing covers all scanned parameters, including
 structural freezes.
 
+Single-process Accelerate may expose the CUDA target as an implicit `cuda` device
+while prepared tensors report an explicit logical ordinal such as `cuda:0`.
+The runtime audit resolves only an implicit CUDA ordinal against
+`torch.cuda.current_device()` before comparison. Explicit CUDA ordinals remain
+strict: `cuda:0` and `cuda:1` are never treated as equivalent. Device
+resolution is read-only and does not call `torch.cuda.set_device()`, move
+tensors, or alter optimizer ownership.
+
 The runtime smoke suite deliberately mutates frozen/trainable flags, optimizer
 ownership, and expected devices to verify fail-closed behavior.
 

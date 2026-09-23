@@ -5,6 +5,7 @@ import importlib.util
 import json
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -20,6 +21,7 @@ if _RUNTIME_DEPS_AVAILABLE:
         PARAMETER_POLICY_CHECKPOINT_MANIFEST,
         PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
         ParameterPolicyTrainerRuntimeError,
+        _same_runtime_device,
         create_parameter_policy_session,
         make_legacy_scheduler_factory,
     )
@@ -357,6 +359,78 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                     optimizer=optimizer,
                 )
             accelerator.end_training()
+
+    def test_runtime_device_comparison_resolves_only_implicit_cuda_alias(self):
+        cases = (
+            ("cuda", "cuda:0", 0, True),
+            ("cuda:0", "cuda", 0, True),
+            ("cuda", "cuda:1", 1, True),
+            ("cuda:1", "cuda", 1, True),
+            ("cuda", "cuda:1", 0, False),
+            ("cuda", "cuda:0", 1, False),
+            ("cuda:0", "cuda:1", 0, False),
+            ("cuda:1", "cuda:0", 1, False),
+            ("cpu", "cpu", 0, True),
+            ("cpu", "meta", 0, False),
+            ("cpu", "cuda", 0, False),
+        )
+        for actual, expected, current_index, matches in cases:
+            with self.subTest(
+                actual=actual,
+                expected=expected,
+                current_index=current_index,
+            ):
+                self.assertEqual(
+                    _same_runtime_device(
+                        torch.device(actual),
+                        torch.device(expected),
+                        current_cuda_index=current_index,
+                    ),
+                    matches,
+                )
+
+    def test_explicit_or_non_cuda_device_comparison_does_not_query_current_cuda(self):
+        with mock.patch(
+            "mikazuki.parameter_policy_trainer.torch.cuda.current_device",
+            side_effect=AssertionError("current_device must not be queried"),
+        ):
+            self.assertTrue(
+                _same_runtime_device(
+                    torch.device("cuda:0"),
+                    torch.device("cuda:0"),
+                )
+            )
+            self.assertTrue(
+                _same_runtime_device(
+                    torch.device("cpu"),
+                    torch.device("cpu"),
+                )
+            )
+            self.assertFalse(
+                _same_runtime_device(
+                    torch.device("cpu"),
+                    torch.device("meta"),
+                )
+            )
+
+    def test_implicit_cuda_device_uses_current_cuda_device(self):
+        with mock.patch(
+            "mikazuki.parameter_policy_trainer.torch.cuda.current_device",
+            return_value=0,
+        ) as current_device:
+            self.assertTrue(
+                _same_runtime_device(
+                    torch.device("cuda:0"),
+                    torch.device("cuda"),
+                )
+            )
+            self.assertFalse(
+                _same_runtime_device(
+                    torch.device("cuda:1"),
+                    torch.device("cuda"),
+                )
+            )
+            self.assertEqual(current_device.call_count, 2)
 
     def test_runtime_contract_detects_trainable_device_mismatch(self):
         with tempfile.TemporaryDirectory() as temp_dir:
