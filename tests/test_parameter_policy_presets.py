@@ -36,6 +36,16 @@ CURATED = {
 }
 
 
+STANDARD_PRESETS = {
+    "anima-2.9b-finetune.toml",
+    "anima-2.9b.toml",
+    "anima-finetune.toml",
+    "anima.toml",
+    "chroma.toml",
+    "example.toml",
+}
+
+
 class ParameterPolicyPresetTests(unittest.TestCase):
     def _load(self, filename: str) -> dict:
         with (PRESET_DIR / filename).open("rb") as handle:
@@ -51,6 +61,21 @@ class ParameterPolicyPresetTests(unittest.TestCase):
             }
         )
         return data, policy
+
+    def test_standard_presets_declare_standard_optimization_mode(self):
+        actual = {
+            path.name
+            for path in PRESET_DIR.glob("*.toml")
+            if not path.name.startswith("component-")
+        }
+        self.assertEqual(actual, STANDARD_PRESETS)
+        for filename in sorted(STANDARD_PRESETS):
+            with self.subTest(filename=filename):
+                preset = self._load(filename)
+                self.assertEqual(
+                    preset["data"].get("optimization_mode"),
+                    "standard",
+                )
 
     def test_curated_component_preset_set_is_exact(self):
         actual = {path.name for path in PRESET_DIR.glob("component-*.toml")}
