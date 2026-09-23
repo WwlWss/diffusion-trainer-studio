@@ -152,7 +152,12 @@ class TrainingPageRoutingTests(unittest.TestCase):
         self.assertIn('"dts-profile-entry"', patched)
         self.assertIn('"Profile \\u540D\\u79F0"', patched)
         self.assertIn('"例如 muon / fallback"', patched)
-        self.assertIn('"dts-profile-type-label"},"Optimizer Type"', patched)
+        self.assertIn("function __dtsOptimizerProfileUnion(e,t)", patched)
+        self.assertIn('__dtsOptimizerProfileUnion(e.schema,e.prefix)?', patched)
+        self.assertNotIn(
+            'String(e.prefix||"").startsWith("parameter_policy_profiles.")?',
+            patched,
+        )
 
     def test_frontend_patch_keeps_collapse_control_visible_after_expand(self):
         patched = patch_frontend_app_js(APP_BUNDLE)
