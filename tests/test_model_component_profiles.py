@@ -372,7 +372,12 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertIn("clip_l.adapter", flux_lowercase_true.available_components)
         self.assertNotIn("t5xxl.adapter", flux_lowercase_true.available_components)
 
-        for inert_arg in ("TRAIN_T5XXL=True", "train_t5xxl =True"):
+        for inert_arg in (
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
+            " train_t5xxl=True",
+            "train_t5xxl=True ",
+        ):
             with self.subTest(inert_arg=inert_arg):
                 flux_inert = resolve_training_target_profile(
                     "flux-lora",
@@ -515,7 +520,12 @@ class ModelComponentProfileTests(unittest.TestCase):
         )
         self.assertNotIn("t5xxl.adapter", sd3_lowercase_true.available_components)
 
-        for inert_arg in ("TRAIN_T5XXL=True", "train_t5xxl =True"):
+        for inert_arg in (
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
+            " train_t5xxl=True",
+            "train_t5xxl=True ",
+        ):
             with self.subTest(sd3_inert_arg=inert_arg):
                 sd3_inert = resolve_training_target_profile(
                     "sd3-lora",
