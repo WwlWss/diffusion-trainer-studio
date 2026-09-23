@@ -1,5 +1,9 @@
+import asyncio
 from pathlib import Path
 import unittest
+
+from mikazuki.app import application
+from mikazuki import frontend_branding
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +26,15 @@ class TrainingApiOverlayContractTests(unittest.TestCase):
         self.assertLess(training_import, branding_import)
         self.assertLess(branding_import, branding_install)
         self.assertIn('@app.get("/branding/logo.webp"', APPLICATION)
+
+    def test_generated_frontend_assets_preserve_mime_types(self):
+        style = asyncio.run(application.frontend_asset(frontend_branding.STYLE_ASSET))
+        self.assertEqual(style.media_type, "text/css")
+        self.assertIn(b"DTS profile editor two-row layout", style.body)
+
+        app_js = asyncio.run(application.frontend_asset(frontend_branding.APP_ASSET))
+        self.assertEqual(app_js.media_type, "application/javascript")
+        self.assertIn(b"Diffusion Trainer Studio", app_js.body)
 
     def test_application_serves_branded_shell_for_document_routes(self):
         self.assertIn("from mikazuki.frontend_branding import patch_branding_index_html", APPLICATION)
