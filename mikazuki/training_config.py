@@ -129,7 +129,13 @@ def _post_override_normalize(
 
     if effective_train_type in {"sd-lora", "sdxl-lora"}:
         normalize_sd_token_length(config, warnings)
-        normalize_sd_lora_target(config)
+        normalize_sd_lora_target(
+            config,
+            defer_component_text_encoder_cache=(
+                effective_train_type == "sdxl-lora"
+                and config.get("parameter_policy_config") not in (None, "")
+            ),
+        )
     elif effective_train_type == "sd-dreambooth":
         normalize_sd_token_length(config, warnings)
         if str(config.get("save_model_as") or "").lower() == "pt":
@@ -170,7 +176,13 @@ def prepare_training_config(
 
     if effective_train_type in {"sd-lora", "sdxl-lora"}:
         normalize_sd_token_length(config, warnings)
-        normalize_sd_lora_target(config)
+        normalize_sd_lora_target(
+            config,
+            defer_component_text_encoder_cache=(
+                effective_train_type == "sdxl-lora"
+                and config.get("parameter_policy_config") not in (None, "")
+            ),
+        )
         _normalize_legacy_optimizer_learning_rates(config, warnings)
     elif effective_train_type == "sd-dreambooth":
         normalize_sd_token_length(config, warnings)
