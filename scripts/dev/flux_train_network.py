@@ -77,7 +77,8 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
         ):
             # The cache is created before the LoRA network/session exists. Cache
             # every TE output up front; final policy train flags are applied
-            # later, and any actually-trained TE adapter rejects the cache.
+            # later. CLIP-L may be recomputed live, while T5XXL adapter training
+            # rejects the cached T5 output.
             self.train_clip_l = False
             self.train_t5xxl = False
 
