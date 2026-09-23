@@ -299,14 +299,17 @@ def normalize_parameter_policy_editor_state(config: dict) -> None:
     for raw_name, raw_profile in profiles.items():
         profile_name = str(raw_name or "").strip()
 
-        # The pinned Schemastery dict editor inserts ["", null].  If the user
-        # only names the row and leaves the visible first optimizer branch
-        # untouched, the browser can submit {"fallback": null} even though the
-        # selector displays AdamW.  Normalize only these two GUI-generated
-        # states; arbitrary scalar values remain invalid.
+        # The pinned Schemastery dict editor inserts ["", null].  A draft row
+        # can also become {"": {type: ...}} if the user chooses an optimizer
+        # before naming it.  Empty keys are editor-only incomplete rows, so
+        # ignore them here; canonical policy validation remains strict.
+        if not profile_name:
+            continue
+
+        # If the user only names the row and leaves the visible first optimizer
+        # branch untouched, the browser can submit {"fallback": null} even
+        # though the selector displays the registry-derived default optimizer.
         if raw_profile is None:
-            if not profile_name:
-                continue
             raw_profile = {
                 "type": _DEFAULT_EDITOR_OPTIMIZER_TYPE,
                 "args": {},
