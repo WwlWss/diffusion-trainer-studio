@@ -115,86 +115,185 @@ def normalize_dataset_source(config: dict) -> None:
 
 
 def _text_encoder_cache_enabled(config: dict) -> bool:
-    return _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(config.get("cache_text_encoder_outputs_to_disk"))
+    return _as_bool(config.get("cache_text_encoder_outputs")) or _as_bool(
+        config.get("cache_text_encoder_outputs_to_disk")
+    )
 
 
-def normalize_sd_lora_target(config: dict) -> None:
-    target = config.pop("lora_target", None)
-    if target in (None, ""):
-        unet_only = _as_bool(config.get("network_train_unet_only"))
-        te_only = _as_bool(config.get("network_train_text_encoder_only"))
-        if unet_only and te_only:
-            raise ValueError("LoRA 不能同时设置 network_train_unet_only 与 network_train_text_encoder_only。")
-        # Both false/absent means joint U-Net + TE training in sd-scripts.
-        if (te_only or not unet_only) and _text_encoder_cache_enabled(config):
-            raise ValueError("训练 Text Encoder LoRA 时不能启用 Text Encoder output cache。")
-        return
-
-    target = str(target)
-    if target == "unet":
-        config["network_train_unet_only"] = True
-        config.pop("network_train_text_encoder_only", None)
-    elif target == "text_encoder":
-        config.pop("network_train_unet_only", None)
-        config["network_train_text_encoder_only"] = True
-    elif target == "unet_text_encoder":
-        config.pop("network_train_unet_only", None)
-        config.pop("network_train_text_encoder_only", None)
-    else:
-        raise ValueError("lora_target 只能是 unet / text_encoder / unet_text_encoder。")
-
-    if target != "unet" and _text_encoder_cache_enabled(config):
-        raise ValueError("训练 Text Encoder LoRA 时不能启用 Text Encoder output cache。")
+def _component_policy_active(config: dict) -> bool:
+    return bool(str(config.get("parameter_policy_config") or "").strip())
 
 
-def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
-    target = config.pop("flux_lora_target", None)
-    legacy_train_t5 = _as_bool(config.pop("train_t5xxl", False))
-    if target in (None, ""):
-        target = "dit_t5xxl" if chroma and legacy_train_t5 else (
-            "dit_clip_l_t5xxl" if legacy_train_t5 else None
-        )
-    if target is None:
-        # Effective legacy/raw trainer state: false means at least CLIP-L is trainable.
-        if not _as_bool(config.get("network_train_unet_only")) and _text_encoder_cache_enabled(config):
-            raise ValueError("训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。")
-        return
+def _strict_bool(value: object, *, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in {0, 1}:
+        return bool(value)
+    text = str(value or "").strip().casefold()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{field} 必须是布尔值。")
 
-    target = str(target)
-    if chroma:
-        allowed = {"dit", "dit_t5xxl"}
-        if target not in allowed:
-            raise ValueError("Chroma LoRA target 只能是 dit / dit_t5xxl。")
-        train_t5 = target == "dit_t5xxl"
-        config["network_train_unet_only"] = not train_t5
-    else:
-        allowed = {"dit", "dit_clip_l", "dit_clip_l_t5xxl"}
-        if target not in allowed:
-            raise ValueError("Flux LoRA target 只能是 dit / dit_clip_l / dit_clip_l_t5xxl。")
-        train_t5 = target == "dit_clip_l_t5xxl"
-        config["network_train_unet_only"] = target == "dit"
 
-    if train_t5 and _text_encoder_cache_enabled(config):
-        raise ValueError("训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。")
+def _network_arg_bool(config: dict, key: str) -> bool | None:
+    """Return the final bool value for one network_args key.
 
-    args = [item for item in _items(config.get("network_args")) if _arg_key(item) != "train_t5xxl"]
-    if train_t5:
-        args.append("train_t5xxl=True")
+    sd-scripts treats later duplicate kwargs as authoritative. Mirror that
+    behavior for validation, then canonicalizers collapse the key to at most
+    one entry before the effective config leaves this module.
+    """
+
+    expected = str(key).strip().casefold()
+    result: bool | None = None
+    for item in _items(config.get("network_args")):
+        if _arg_key(item) != expected:
+            continue
+        if "=" not in item:
+            raise ValueError(f"network_args {key} 必须使用 {key}=true/false 形式。")
+        _raw_key, raw_value = item.split("=", 1)
+        result = _strict_bool(raw_value, field=f"network_args {key}")
+    return result
+
+
+def _set_network_arg_bool(config: dict, key: str, value: bool) -> None:
+    expected = str(key).strip().casefold()
+    args = [
+        item
+        for item in _items(config.get("network_args"))
+        if _arg_key(item) != expected
+    ]
+    if value:
+        args.append(f"{key}=True")
     if args:
         config["network_args"] = args
     else:
         config.pop("network_args", None)
 
 
-def normalize_sd3_lora_target(config: dict) -> None:
-    """Compile SD3 GUI target controls into the exact LoRA trainer contract.
+def _validate_lora_only_flags(config: dict, *, label: str) -> tuple[bool, bool]:
+    unet_only = _as_bool(config.get("network_train_unet_only"))
+    te_only = _as_bool(config.get("network_train_text_encoder_only"))
+    if unet_only and te_only:
+        raise ValueError(
+            f"{label} 不能同时设置 network_train_unet_only 与 "
+            "network_train_text_encoder_only。"
+        )
+    return unet_only, te_only
 
-    sd3_lora_target owns the mutually-exclusive MMDiT/Text Encoder target
-    choice. train_t5xxl is materialized into network_args because
-    networks.lora_sd3 reads it from network kwargs rather than argparse.
-    Existing effective/rehydrated configs without semantic GUI fields are left
-    intact apart from validating impossible legacy flag combinations.
+
+def normalize_sd_lora_target(
+    config: dict,
+    *,
+    defer_component_text_encoder_cache: bool = False,
+) -> None:
+    """Canonicalize SD/SDXL LoRA target semantics.
+
+    Standard mode preserves the historical cache restriction. SDXL Component
+    mode may defer that one decision because target availability and
+    Component Train ownership are intentionally separate concepts.
     """
+
+    target = config.pop("lora_target", None)
+    if target not in (None, ""):
+        target = str(target)
+        if target == "unet":
+            config["network_train_unet_only"] = True
+            config.pop("network_train_text_encoder_only", None)
+        elif target == "text_encoder":
+            config.pop("network_train_unet_only", None)
+            config["network_train_text_encoder_only"] = True
+        elif target == "unet_text_encoder":
+            config.pop("network_train_unet_only", None)
+            config.pop("network_train_text_encoder_only", None)
+        else:
+            raise ValueError(
+                "lora_target 只能是 unet / text_encoder / unet_text_encoder。"
+            )
+
+    unet_only, te_only = _validate_lora_only_flags(config, label="LoRA")
+    trains_text_encoder_target = te_only or not unet_only
+    if (
+        trains_text_encoder_target
+        and _text_encoder_cache_enabled(config)
+        and not defer_component_text_encoder_cache
+    ):
+        raise ValueError(
+            "训练 Text Encoder LoRA 时不能启用 Text Encoder output cache。"
+        )
+
+
+def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
+    """Canonicalize Flux/Chroma target + T5 semantics after every override pass."""
+
+    target = config.pop("flux_lora_target", None)
+    legacy_t5_present = "train_t5xxl" in config
+    legacy_train_t5 = (
+        _as_bool(config.pop("train_t5xxl"))
+        if legacy_t5_present
+        else None
+    )
+
+    semantic_target = target not in (None, "")
+    if not semantic_target and legacy_t5_present and legacy_train_t5:
+        target = "dit_t5xxl" if chroma else "dit_clip_l_t5xxl"
+        semantic_target = True
+
+    if semantic_target:
+        target = str(target)
+        if chroma:
+            allowed = {"dit", "dit_t5xxl"}
+            if target not in allowed:
+                raise ValueError("Chroma LoRA target 只能是 dit / dit_t5xxl。")
+            train_t5 = target == "dit_t5xxl"
+            config["network_train_unet_only"] = not train_t5
+        else:
+            allowed = {"dit", "dit_clip_l", "dit_clip_l_t5xxl"}
+            if target not in allowed:
+                raise ValueError(
+                    "Flux LoRA target 只能是 dit / dit_clip_l / "
+                    "dit_clip_l_t5xxl。"
+                )
+            train_t5 = target == "dit_clip_l_t5xxl"
+            config["network_train_unet_only"] = target == "dit"
+
+        # Flux/Chroma semantic targets always include the transformer, so an
+        # old text-encoder-only flag must not survive a GUI target selection.
+        config.pop("network_train_text_encoder_only", None)
+        _set_network_arg_bool(config, "train_t5xxl", train_t5)
+
+    unet_only, _te_only = _validate_lora_only_flags(
+        config,
+        label="Flux/Chroma LoRA",
+    )
+    train_t5 = _network_arg_bool(config, "train_t5xxl")
+    train_t5 = bool(train_t5) if train_t5 is not None else False
+
+    if unet_only and train_t5:
+        raise ValueError(
+            "Flux/Chroma LoRA target 不一致：network_train_unet_only=true "
+            "不能与 network_args train_t5xxl=true 同时使用。"
+        )
+
+    # Collapse duplicate/custom entries while preserving the same final value
+    # sd-scripts would observe.
+    _set_network_arg_bool(config, "train_t5xxl", train_t5)
+
+    if (
+        not _component_policy_active(config)
+        and not unet_only
+        and _text_encoder_cache_enabled(config)
+    ):
+        # Preserve the pre-existing Standard-mode DTS restriction. Component
+        # mode defers cache legality to policy-aware host preflight.
+        raise ValueError(
+            "训练 Flux/Chroma Text Encoder LoRA 时不能缓存 Text Encoder outputs。"
+        )
+
+
+def normalize_sd3_lora_target(config: dict) -> None:
+    """Canonicalize SD3 GUI target/T5 state into the real trainer contract."""
 
     target = config.pop("sd3_lora_target", None)
     semantic_t5_present = "train_t5xxl" in config
@@ -204,15 +303,7 @@ def normalize_sd3_lora_target(config: dict) -> None:
         else None
     )
 
-    if target in (None, ""):
-        unet_only = _as_bool(config.get("network_train_unet_only"))
-        te_only = _as_bool(config.get("network_train_text_encoder_only"))
-        if unet_only and te_only:
-            raise ValueError(
-                "SD3 LoRA 不能同时设置 network_train_unet_only 与 "
-                "network_train_text_encoder_only。"
-            )
-    else:
+    if target not in (None, ""):
         target = str(target)
         if target == "mmdit":
             config["network_train_unet_only"] = True
@@ -230,29 +321,32 @@ def normalize_sd3_lora_target(config: dict) -> None:
             )
 
     if semantic_t5_present:
-        args = [
-            item
-            for item in _items(config.get("network_args"))
-            if _arg_key(item) != "train_t5xxl"
-        ]
-        if semantic_train_t5:
-            args.append("train_t5xxl=True")
-        if args:
-            config["network_args"] = args
-        else:
-            config.pop("network_args", None)
+        _set_network_arg_bool(
+            config,
+            "train_t5xxl",
+            bool(semantic_train_t5),
+        )
 
-        # Standard mode follows the trainer's existing restriction. Component
-        # mode defers to policy-aware host preflight because a T5 adapter may
-        # exist for checkpoint/target purposes while remaining Train=false.
-        if (
-            semantic_train_t5
-            and _text_encoder_cache_enabled(config)
-            and config.get("parameter_policy_config") in (None, "")
-        ):
-            raise ValueError(
-                "训练 SD3 T5XXL LoRA 时不能缓存 Text Encoder outputs。"
-            )
+    unet_only, _te_only = _validate_lora_only_flags(config, label="SD3 LoRA")
+    train_t5 = _network_arg_bool(config, "train_t5xxl")
+    train_t5 = bool(train_t5) if train_t5 is not None else False
+
+    if unet_only and train_t5:
+        raise ValueError(
+            "SD3 LoRA: Train T5XXL 要求 target 包含 Text Encoder；"
+            "不能与 MMDiT-only target 同时使用。"
+        )
+
+    _set_network_arg_bool(config, "train_t5xxl", train_t5)
+
+    if (
+        train_t5
+        and _text_encoder_cache_enabled(config)
+        and not _component_policy_active(config)
+    ):
+        raise ValueError(
+            "训练 SD3 T5XXL LoRA 时不能缓存 Text Encoder outputs。"
+        )
 
 
 def validate_legacy_common_conflicts(config: dict, effective_train_type: str) -> None:
