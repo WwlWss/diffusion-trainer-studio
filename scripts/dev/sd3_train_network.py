@@ -60,8 +60,9 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
             and args.cache_text_encoder_outputs
         ):
             # Cache all CLIP/T5 outputs before the LoRA network/session exists.
-            # Routing later restores exact train flags and rejects caching if
-            # any policy-owned TE adapter is actually trainable.
+            # Routing later restores exact train flags. CLIP adapters may be
+            # recomputed live against cached T5; T5 adapter training itself is
+            # rejected after the policy session is resolved.
             self.train_clip = False
             self.train_clip_l = False
             self.train_clip_g = False
@@ -207,6 +208,13 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
                 "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
                 "outputs cannot be used."
             )
+        if args.cache_text_encoder_outputs and not self.train_clip:
+            # Both CLIP encoders were kept co-resident until policy routing was
+            # known. If neither adapter trains, release them together now. If
+            # either one trains, keep both on the same device because SD3 live
+            # encoding concatenates CLIP-L and CLIP-G outputs.
+            text_encoders[0].to("cpu")
+            text_encoders[1].to("cpu")
         return train_unet, train_text_encoder
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
@@ -296,14 +304,15 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
             accelerator.wait_for_everyone()
 
-            # move back to cpu. Parameter Policy routing is not known during
-            # cache creation, so never keep CLIP-L/G resident based on the
-            # legacy target alone; accelerator.prepare() will move trainable
-            # encoders back later after the policy session is resolved.
+            # SD3 live CLIP encoding concatenates CLIP-L and CLIP-G
+            # outputs, so a Component policy that later trains only one CLIP
+            # must not split the pair across CPU/GPU. Keep both co-resident
+            # until the policy session is resolved; configure_parameter_policy_training
+            # will offload both together when neither adapter trains.
             policy_cache = bool(
                 str(getattr(args, "parameter_policy_config", "") or "").strip()
             )
-            if policy_cache or not self.is_train_text_encoder(args):
+            if not policy_cache and not self.is_train_text_encoder(args):
                 logger.info("move CLIP-L back to cpu")
                 text_encoders[0].to("cpu")
                 logger.info("move CLIP-G back to cpu")
