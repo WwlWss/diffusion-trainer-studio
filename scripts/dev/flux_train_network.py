@@ -263,10 +263,14 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
                     else False
                 )
                 policy_t5_train = flags["t5xxl.adapter"]
+                if policy_t5_train:
+                    raise ValueError(
+                        "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
+                        "outputs cannot be used."
+                    )
 
-            # T5 training with cached T5 output is rejected later by the
-            # authoritative policy/session contract. Only live CLIP-L requires
-            # retaining token IDs for partial cache recomputation.
+            # Only live CLIP-L requires retaining token IDs for partial cache
+            # recomputation. Fully frozen Text Encoders remain a full cache.
             return strategy_flux.FluxTextEncoderOutputsCachingStrategy(
                 args.cache_text_encoder_outputs_to_disk,
                 args.text_encoder_batch_size,
@@ -275,7 +279,6 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
                     self.train_clip_l
                     or self.train_t5xxl
                     or policy_clip_train
-                    or policy_t5_train
                 ),
                 apply_t5_attn_mask=args.apply_t5_attn_mask,
             )
