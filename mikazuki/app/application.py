@@ -129,7 +129,8 @@ async def frontend_asset(asset_name: str):
     """Serve the pinned frontend plus runtime-injected backend training pages."""
     generated = virtual_asset(asset_name)
     if generated is not None:
-        return Response(content=generated, media_type="application/javascript")
+        media_type = mimetypes.guess_type(asset_name)[0] or "application/octet-stream"
+        return Response(content=generated, media_type=media_type)
 
     asset_path = _safe_frontend_path(FRONTEND_ASSETS_DIR, asset_name)
     if not asset_path.is_file():
