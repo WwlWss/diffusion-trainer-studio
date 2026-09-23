@@ -153,16 +153,84 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
         )
 
 
-    def test_policy_cache_releases_pre_session_clip_residency(self):
-        for relative in (
-            ("scripts", "dev", "flux_train_network.py"),
-            ("scripts", "dev", "sd3_train_network.py"),
-        ):
-            source = ROOT.joinpath(*relative).read_text(encoding="utf-8")
-            self.assertIn(
-                "if policy_cache or not self.is_train_text_encoder(args):",
-                source,
-            )
+    def test_policy_cache_residency_rules_match_backend_topology(self):
+        flux_source = (
+            ROOT / "scripts" / "dev" / "flux_train_network.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "if policy_cache or not self.is_train_text_encoder(args):",
+            flux_source,
+        )
+
+        sd3_source = (
+            ROOT / "scripts" / "dev" / "sd3_train_network.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "if not policy_cache and not self.is_train_text_encoder(args):",
+            sd3_source,
+        )
+
+    def test_sd3_policy_routing_keeps_clip_pair_co_resident_when_either_trains(self):
+        method = _load_method(
+            ROOT / "scripts" / "dev" / "sd3_train_network.py",
+            "Sd3NetworkTrainer",
+            "configure_parameter_policy_training",
+        )
+
+        class FakeEncoder:
+            def __init__(self, device="cuda"):
+                self.device = device
+
+            def to(self, device, *args, **kwargs):
+                self.device = str(device)
+                return self
+
+        class FakeSession:
+            def __init__(self, trained):
+                self.trained = set(trained)
+
+            def trains_component(self, component_id):
+                return component_id in self.trained
+
+            def trains_prefix(self, prefix):
+                return False
+
+        args = SimpleNamespace(cache_text_encoder_outputs=True)
+        cases = (
+            ({"clip_l.adapter"}, ("cuda", "cuda")),
+            ({"clip_g.adapter"}, ("cuda", "cuda")),
+            ({"clip_l.adapter", "clip_g.adapter"}, ("cuda", "cuda")),
+            (set(), ("cpu", "cpu")),
+        )
+        for trained, expected_devices in cases:
+            with self.subTest(trained=trained):
+                trainer = SimpleNamespace()
+                encoders = [
+                    FakeEncoder("cuda"),
+                    FakeEncoder("cuda"),
+                    FakeEncoder("cpu"),
+                ]
+                train_unet, train_text_encoder = method(
+                    trainer,
+                    args,
+                    FakeSession(trained),
+                    encoders,
+                )
+                self.assertFalse(train_unet)
+                self.assertEqual(
+                    train_text_encoder,
+                    bool(trained),
+                )
+                self.assertEqual(
+                    (encoders[0].device, encoders[1].device),
+                    expected_devices,
+                )
+                self.assertEqual(
+                    trainer.train_clip,
+                    bool(
+                        {"clip_l.adapter", "clip_g.adapter"}.intersection(trained)
+                    ),
+                )
 
 
 @unittest.skipUnless(_RUNTIME_DEPS_AVAILABLE, "runtime dependencies are not installed")
