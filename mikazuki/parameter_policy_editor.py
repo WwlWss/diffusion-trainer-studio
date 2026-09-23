@@ -30,6 +30,7 @@ from mikazuki.training_config import PAGE_BACKEND_MAP
 
 
 _COMPONENT_MODE_ALIASES = {"component", "component-wise", "componentwise"}
+_DEFAULT_EDITOR_OPTIMIZER_TYPE = "AdamW"
 _NUMERIC_LITERAL = re.compile(
     r"^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$"
 )
@@ -292,21 +293,37 @@ def normalize_parameter_policy_editor_state(config: dict) -> None:
 
     normalized_profiles: dict[Any, Any] = {}
     for raw_name, raw_profile in profiles.items():
+        profile_name = str(raw_name or "").strip()
+
+        # The pinned Schemastery dict editor inserts ["", null].  If the user
+        # only names the row and leaves the visible first optimizer branch
+        # untouched, the browser can submit {"fallback": null} even though the
+        # selector displays AdamW.  Normalize only these two GUI-generated
+        # states; arbitrary scalar values remain invalid.
+        if raw_profile is None:
+            if not profile_name:
+                continue
+            raw_profile = {
+                "type": _DEFAULT_EDITOR_OPTIMIZER_TYPE,
+                "args": {},
+            }
+
         if not isinstance(raw_profile, Mapping):
             raise ValueError(
                 f"Parameter Policy editor: Optimizer Profile {raw_name!r} must be an object."
             )
+
         profile = deepcopy(dict(raw_profile))
+        profile.setdefault("args", {})
         raw_args = profile.get("args")
-        if raw_args is not None:
-            if not isinstance(raw_args, Mapping):
-                raise ValueError(
-                    f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
-                )
-            profile["args"] = _normalize_editor_args(
-                raw_args,
-                profile_name=raw_name,
+        if not isinstance(raw_args, Mapping):
+            raise ValueError(
+                f"Parameter Policy editor: Optimizer Profile {raw_name!r}.args must be an object."
             )
+        profile["args"] = _normalize_editor_args(
+            raw_args,
+            profile_name=raw_name,
+        )
         normalized_profiles[raw_name] = profile
 
     config["parameter_policy_profiles"] = normalized_profiles
