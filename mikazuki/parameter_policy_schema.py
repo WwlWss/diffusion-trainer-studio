@@ -51,8 +51,8 @@ def _component_row(component: dict) -> str:
                 }}),
                 Schema.object({{
                     learning_rate: Schema.string().description("该组件的学习率，例如 1e-4。"),
-                    optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback", Schema.string().description("自定义 Profile 名称")]).description("主 Optimizer Profile；常用名称可直接选择，也可切换到自定义名称。"),
-                    fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main", Schema.string().description("自定义回退 Profile 名称")]).description("可选回退 Profile；常用名称可直接选择，也可使用自定义名称。"),
+                    optimizer_profile: Schema.string().description("主 Optimizer Profile；下拉选项动态来自当前 Optimizer Profiles，也可直接输入自定义名称。"),
+                    fallback_optimizer_profile: Schema.string().description("可选回退 Profile；下拉选项动态来自当前 Optimizer Profiles，也可直接输入自定义名称。"),
                     fallback_learning_rate: Schema.string().description("可选回退学习率；设置回退 Profile 时使用。")
                 }})
             ]),
