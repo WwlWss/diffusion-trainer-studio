@@ -231,12 +231,12 @@ def patch_frontend_app_js(content: str) -> str:
     # Keep free-form entry via Element Plus allow-create for imported/custom
     # profile names while surfacing all current Profile keys as suggestions.
     primitive_props_anchor = (
-        'const YA=se({__name:"primitive",'
+        'YA=se({__name:"primitive",'
         'props:{schema:{},modelValue:{},disabled:Boolean,minimal:Boolean},'
         'emits:["update:modelValue","focus","blur"]'
     )
     primitive_props_replacement = (
-        'const YA=se({__name:"primitive",'
+        'YA=se({__name:"primitive",'
         'props:{schema:{},modelValue:{},disabled:Boolean,minimal:Boolean,prefix:{}},'
         'emits:["update:modelValue","focus","blur"]'
     )
