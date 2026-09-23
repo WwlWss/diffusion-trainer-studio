@@ -399,8 +399,52 @@ class TrainingSemanticContractTests(unittest.TestCase):
                 resolve_backend=_resolve,
             )
 
-    def test_standard_text_encoder_cache_restrictions_remain_unchanged(self):
-        cases = (
+    def test_standard_text_encoder_cache_capability_matrix(self):
+        allowed = (
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_clip_l",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "chroma-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "sd3-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": False,
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+        )
+        for train_type, raw in allowed:
+            with self.subTest(train_type=train_type, raw=raw, expected="allowed"):
+                prepared = prepare_training_config(
+                    raw,
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                )
+                self.assertTrue(prepared.config["cache_text_encoder_outputs"])
+
+        blocked = (
             (
                 "sdxl-lora",
                 {
@@ -413,7 +457,7 @@ class TrainingSemanticContractTests(unittest.TestCase):
                 "flux-lora",
                 {
                     "optimizer_type": "AdamW",
-                    "flux_lora_target": "dit_clip_l",
+                    "flux_lora_target": "dit_clip_l_t5xxl",
                     "cache_text_encoder_outputs": True,
                 },
             ),
@@ -435,17 +479,57 @@ class TrainingSemanticContractTests(unittest.TestCase):
                 },
             ),
         )
-        for train_type, raw in cases:
-            with self.subTest(train_type=train_type):
+        for train_type, raw in blocked:
+            with self.subTest(train_type=train_type, raw=raw, expected="blocked"):
                 with self.assertRaisesRegex(
                     ValueError,
-                    "Text Encoder|文本编码器|缓存",
+                    "Text Encoder|T5XXL|文本编码器|缓存",
                 ):
                     prepare_training_config(
                         raw,
                         page_train_type=train_type,
                         resolve_backend=_resolve,
                     )
+
+    def test_lora_t5_network_arg_preserves_exact_true_wire_semantics(self):
+        for train_type in ("flux-lora", "sd3-lora"):
+            with self.subTest(train_type=train_type):
+                prepared = prepare_training_config(
+                    {
+                        "optimizer_type": "AdamW",
+                        "network_args_custom": ["train_t5xxl=true", "custom=ok"],
+                    },
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                )
+                self.assertNotIn(
+                    "train_t5xxl=True",
+                    prepared.config.get("network_args", []),
+                )
+                self.assertIn("custom=ok", prepared.config["network_args"])
+
+    def test_flux_and_chroma_custom_false_clears_first_pass_t5_target(self):
+        cases = (
+            ("flux-lora", "dit_clip_l_t5xxl"),
+            ("chroma-lora", "dit_t5xxl"),
+        )
+        for train_type, target in cases:
+            with self.subTest(train_type=train_type):
+                prepared = prepare_training_config(
+                    {
+                        "optimizer_type": "AdamW",
+                        "flux_lora_target": target,
+                        "ui_custom_params": "train_t5xxl = false",
+                    },
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                )
+                self.assertNotIn(
+                    "train_t5xxl=True",
+                    prepared.config.get("network_args", []),
+                )
+                if train_type == "chroma-lora":
+                    self.assertTrue(prepared.config["network_train_unet_only"])
 
     def test_dadapt_rewrites_active_lr_but_prodigy_does_not(self):
         dadapt = prepare_training_config(
