@@ -400,27 +400,30 @@ class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
                 )
 
     def test_sd3_clip_pair_survives_real_accelerator_prepare(self):
-        accelerator = Accelerator(cpu=True)
-        try:
-            clip_l = torch.nn.Linear(4, 4)
-            clip_g = torch.nn.Linear(4, 4)
-            clip_g.requires_grad_(False)
+        for train_side in ("clip_l", "clip_g"):
+            with self.subTest(train_side=train_side):
+                accelerator = Accelerator(cpu=True)
+                try:
+                    clip_l = torch.nn.Linear(4, 4)
+                    clip_g = torch.nn.Linear(4, 4)
+                    if train_side == "clip_l":
+                        clip_g.requires_grad_(False)
+                        clip_l = accelerator.prepare(clip_l)
+                    else:
+                        clip_l.requires_grad_(False)
+                        clip_g = accelerator.prepare(clip_g)
 
-            # Mirrors SD3 partial-cache routing: only the trainable CLIP is
-            # handed to prepare(), while its frozen sibling remains co-resident.
-            clip_l = accelerator.prepare(clip_l)
+                    l_device = next(clip_l.parameters()).device
+                    g_device = next(clip_g.parameters()).device
+                    self.assertEqual(l_device, g_device)
 
-            l_device = next(clip_l.parameters()).device
-            g_device = next(clip_g.parameters()).device
-            self.assertEqual(l_device, g_device)
-
-            value = torch.randn(2, 4, device=l_device)
-            l_out = clip_l(value)
-            g_out = clip_g(value.to(g_device))
-            combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
-            self.assertEqual(tuple(combined.shape), (2, 8))
-        finally:
-            accelerator.end_training()
+                    value = torch.randn(2, 4, device=l_device)
+                    l_out = clip_l(value)
+                    g_out = clip_g(value.to(g_device))
+                    combined = torch.cat((l_out, g_out.to(l_device)), dim=-1)
+                    self.assertEqual(tuple(combined.shape), (2, 8))
+                finally:
+                    accelerator.end_training()
 
     def test_component_lr_logging_survives_accelerate_scheduler_wrapper(self):
         policy = {
