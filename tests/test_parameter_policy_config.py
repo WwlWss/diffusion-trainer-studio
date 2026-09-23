@@ -13,7 +13,10 @@ from mikazuki.parameter_policy import (
     validate_parameter_policy,
 )
 from mikazuki.parameter_policy_bootstrap import bootstrap_parameter_policy_optimizer_profile
-from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
+from mikazuki.parameter_policy_editor import (
+    bootstrap_parameter_policy_editor,
+    normalize_parameter_policy_editor_state,
+)
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 from mikazuki.training_request import prepare_request_config
 
@@ -363,6 +366,61 @@ class ParameterPolicyRequestIntegrationTests(unittest.TestCase):
             ),
             trained_t5.runtime_blockers,
         )
+
+
+class ParameterPolicyFp8BootstrapIntegrationTests(unittest.TestCase):
+    def test_flux_chroma_sd3_fp8_survives_bootstrap_but_blocks_runtime(self):
+        cases = (
+            ("flux-lora", {"flux_lora_target": "dit"}),
+            ("chroma-lora", {"flux_lora_target": "dit"}),
+            (
+                "sd3-lora",
+                {
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": False,
+                },
+            ),
+        )
+        for train_type, target_fields in cases:
+            with self.subTest(train_type=train_type):
+                raw = {
+                    "optimizer_type": "AdamW",
+                    "learning_rate": 1e-4,
+                    "fp8_base": True,
+                    **target_fields,
+                }
+                original = deepcopy(raw)
+                gui = bootstrap_parameter_policy_editor(
+                    raw,
+                    train_type,
+                    resolve_backend=lambda config, requested: (
+                        requested,
+                        f"trainer/{requested}.py",
+                    ),
+                )
+                self.assertEqual(raw, original)
+                self.assertEqual(gui["optimization_mode"], "component")
+
+                component_raw = dict(raw)
+                component_raw.update(gui)
+                with mock.patch(
+                    "mikazuki.training_request.legacy_api.resolve_training_backend",
+                    side_effect=lambda config, requested: (
+                        requested,
+                        f"trainer/{requested}.py",
+                    ),
+                ):
+                    prepared = prepare_request_config(
+                        component_raw,
+                        train_type,
+                        launch=False,
+                        materialize=False,
+                    )
+                self.assertTrue(prepared.config["fp8_base"])
+                self.assertTrue(
+                    any("fp8_base" in item for item in prepared.runtime_blockers),
+                    prepared.runtime_blockers,
+                )
 
 
 class ParameterPolicyConfigTests(unittest.TestCase):
