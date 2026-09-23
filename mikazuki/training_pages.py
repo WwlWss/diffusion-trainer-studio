@@ -294,37 +294,51 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
-    profile_key_anchor = (
-        'Je(" [\\\' "),K("span",pI,['
-        'c(t)[v][0]?(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
-        '(x(),U("span",hI,"\\\\xA0")),'
+    profile_key_span_anchor = (
+        'K("span",pI,[c(t)[v][0]?'
+        '(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
+        '(x(),U("span",hI,"\\xA0")),'
         'vt(K("input",{"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
-        '[[t0,c(t)[v][0]]])]),Je(" \\\'] ")'
+        '[[t0,c(t)[v][0]]])])'
     )
-    profile_key_replacement = (
-        'Je(e.prefix==="parameter_policy_profiles."?" ":" [\\\' "),'
-        'K("span",pI,['
-        'c(t)[v][0]?(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
+    profile_key_span_replacement = (
+        'K("span",pI,[c(t)[v][0]?'
+        '(x(),U("span",mI,Ee(c(t)[v][0]),1)):'
         '(x(),U("span",hI,e.prefix==="parameter_policy_profiles."?'
-        '"\\\\u4F8B\\\\u5982 muon / fallback":"\\\\xA0",1)),'
+        '"例如 muon / fallback":"\\xA0")),'
         'vt(K("input",{placeholder:e.prefix==="parameter_policy_profiles."?'
-        '"\\\\u4F8B\\\\u5982 muon / fallback":void 0,'
+        '"例如 muon / fallback":void 0,'
         '"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
-        '[[t0,c(t)[v][0]]])]),'
-        'Je(e.prefix==="parameter_policy_profiles."?"":" \\\'] ")'
+        '[[t0,c(t)[v][0]]])])'
     )
-    profile_key_count = content.count(profile_key_anchor)
-    if profile_key_count != 1:
+    profile_key_span_count = content.count(profile_key_span_anchor)
+    if profile_key_span_count != 1:
         raise RuntimeError(
-            "Frontend Schemastery profile-key editor anchor expected once, "
-            f"found {profile_key_count}"
+            "Frontend Schemastery profile-key span anchor expected once, "
+            f"found {profile_key_span_count}"
         )
     content = content.replace(
-        profile_key_anchor,
-        profile_key_replacement,
+        profile_key_span_anchor,
+        profile_key_span_replacement,
         1,
     )
 
+    profile_key_open_anchor = 'Je(" [\\\' "),K("span",pI,['
+    profile_key_open_replacement = (
+        'Je(e.prefix==="parameter_policy_profiles."?" ":" [\\\' "),'
+        'K("span",pI,['
+    )
+    if content.count(profile_key_open_anchor) != 1:
+        raise RuntimeError("Frontend Schemastery profile-key open anchor expected once")
+    content = content.replace(profile_key_open_anchor, profile_key_open_replacement, 1)
+
+    profile_key_close_anchor = ']),Je(" \\\'] ")],64))])'
+    profile_key_close_replacement = (
+        ']),Je(e.prefix==="parameter_policy_profiles."?"":" \\\'] ")],64))])'
+    )
+    if content.count(profile_key_close_anchor) != 1:
+        raise RuntimeError("Frontend Schemastery profile-key close anchor expected once")
+    content = content.replace(profile_key_close_anchor, profile_key_close_replacement, 1)
     profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
     profile_type_replacement = (
         'prefix:G(()=>['
