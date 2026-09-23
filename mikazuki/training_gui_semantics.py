@@ -186,6 +186,75 @@ def normalize_flux_lora_target(config: dict, *, chroma: bool = False) -> None:
         config.pop("network_args", None)
 
 
+def normalize_sd3_lora_target(config: dict) -> None:
+    """Compile SD3 GUI target controls into the exact LoRA trainer contract.
+
+    sd3_lora_target owns the mutually-exclusive MMDiT/Text Encoder target
+    choice. train_t5xxl is materialized into network_args because
+    networks.lora_sd3 reads it from network kwargs rather than argparse.
+    Existing effective/rehydrated configs without semantic GUI fields are left
+    intact apart from validating impossible legacy flag combinations.
+    """
+
+    target = config.pop("sd3_lora_target", None)
+    semantic_t5_present = "train_t5xxl" in config
+    semantic_train_t5 = (
+        _as_bool(config.pop("train_t5xxl"))
+        if semantic_t5_present
+        else None
+    )
+
+    if target in (None, ""):
+        unet_only = _as_bool(config.get("network_train_unet_only"))
+        te_only = _as_bool(config.get("network_train_text_encoder_only"))
+        if unet_only and te_only:
+            raise ValueError(
+                "SD3 LoRA 不能同时设置 network_train_unet_only 与 "
+                "network_train_text_encoder_only。"
+            )
+    else:
+        target = str(target)
+        if target == "mmdit":
+            config["network_train_unet_only"] = True
+            config.pop("network_train_text_encoder_only", None)
+        elif target == "text_encoder":
+            config.pop("network_train_unet_only", None)
+            config["network_train_text_encoder_only"] = True
+        elif target == "mmdit_text_encoder":
+            config.pop("network_train_unet_only", None)
+            config.pop("network_train_text_encoder_only", None)
+        else:
+            raise ValueError(
+                "sd3_lora_target 只能是 mmdit / text_encoder / "
+                "mmdit_text_encoder。"
+            )
+
+    if semantic_t5_present:
+        args = [
+            item
+            for item in _items(config.get("network_args"))
+            if _arg_key(item) != "train_t5xxl"
+        ]
+        if semantic_train_t5:
+            args.append("train_t5xxl=True")
+        if args:
+            config["network_args"] = args
+        else:
+            config.pop("network_args", None)
+
+        # Standard mode follows the trainer's existing restriction. Component
+        # mode defers to policy-aware host preflight because a T5 adapter may
+        # exist for checkpoint/target purposes while remaining Train=false.
+        if (
+            semantic_train_t5
+            and _text_encoder_cache_enabled(config)
+            and config.get("parameter_policy_config") in (None, "")
+        ):
+            raise ValueError(
+                "训练 SD3 T5XXL LoRA 时不能缓存 Text Encoder outputs。"
+            )
+
+
 def validate_legacy_common_conflicts(config: dict, effective_train_type: str) -> None:
     """Preserve checkParams() invariants after removing frontend validation."""
     if config.get("noise_offset") not in (None, "", 0, 0.0) and config.get("multires_noise_iterations") not in (None, "", 0, 0.0):
