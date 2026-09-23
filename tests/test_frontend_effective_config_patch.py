@@ -203,9 +203,36 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             sync,
         )
 
+    def test_profile_lifecycle_hooks_update_references_and_guard_delete(self):
+        self.assertIn('__renamePolicyProfile=(O,N)=>', self.patched)
+        self.assertIn('R.optimizer_profile===O&&(R.optimizer_profile=N)', self.patched)
+        self.assertIn(
+            'R.fallback_optimizer_profile===O&&(R.fallback_optimizer_profile=N)',
+            self.patched,
+        )
+        self.assertIn('__canDeletePolicyProfile=N=>', self.patched)
+        self.assertIn('仍被 "+R.length+" 个 Component 引用', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks={rename:__renamePolicyProfile,canDelete:__canDeletePolicyProfile,optimizerTypeChanged:__onPolicyOptimizerTypeChanged}',
+            self.patched,
+        )
+
+    def test_optimizer_type_change_reconciles_fallback_semantics(self):
+        start = self.patched.index('__onPolicyOptimizerTypeChanged=')
+        end = self.patched.index(',__installPolicyProfileHooks=', start)
+        block = self.patched[start:end]
+        self.assertIn(
+            'OM&&!NM&&R.optimizer_profile===K&&(delete R.fallback_optimizer_profile,delete R.fallback_learning_rate)',
+            block,
+        )
+        self.assertIn(
+            '!OM&&NM&&R.fallback_optimizer_profile===K&&(delete R.fallback_optimizer_profile,delete R.fallback_learning_rate)',
+            block,
+        )
+
     def test_parameter_policy_initial_mount_and_import_use_mode_sync(self):
         self.assertIn(
-            'onMounted(async()=>{I(),y(),await nextTick(),await __syncPolicyMode()})',
+            'onMounted(async()=>{__installPolicyProfileHooks(),I(),y(),await nextTick(),await __syncPolicyMode()})',
             self.patched,
         )
         self.assertIn(
