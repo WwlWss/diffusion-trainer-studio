@@ -243,18 +243,40 @@ class FluxNetworkTrainer(train_network.NetworkTrainer):
 
     def get_text_encoder_outputs_caching_strategy(self, args):
         if args.cache_text_encoder_outputs:
-            # Parameter Policy routing is resolved only after the cache is
-            # created. Keep token IDs for every policy-owned cache so a later
-            # CLIP-L Train=true route can recompute CLIP while reusing cached
-            # T5 outputs.
-            policy_cache_requires_tokens = bool(
-                str(getattr(args, "parameter_policy_config", "") or "").strip()
-            )
+            policy_path = str(
+                getattr(args, "parameter_policy_config", "") or ""
+            ).strip()
+            policy_clip_train = False
+            policy_t5_train = False
+            if policy_path:
+                from library import dts_parameter_policy_bridge
+
+                flags = dts_parameter_policy_bridge.load_parameter_policy_train_flags(
+                    policy_path,
+                    ("clip_l.adapter", "t5xxl.adapter")
+                    if self.use_clip_l
+                    else ("t5xxl.adapter",),
+                )
+                policy_clip_train = (
+                    flags.get("clip_l.adapter", False)
+                    if self.use_clip_l
+                    else False
+                )
+                policy_t5_train = flags["t5xxl.adapter"]
+
+            # T5 training with cached T5 output is rejected later by the
+            # authoritative policy/session contract. Only live CLIP-L requires
+            # retaining token IDs for partial cache recomputation.
             return strategy_flux.FluxTextEncoderOutputsCachingStrategy(
                 args.cache_text_encoder_outputs_to_disk,
                 args.text_encoder_batch_size,
                 args.skip_cache_check,
-                is_partial=self.train_clip_l or self.train_t5xxl or policy_cache_requires_tokens,
+                is_partial=(
+                    self.train_clip_l
+                    or self.train_t5xxl
+                    or policy_clip_train
+                    or policy_t5_train
+                ),
                 apply_t5_attn_mask=args.apply_t5_attn_mask,
             )
         else:
