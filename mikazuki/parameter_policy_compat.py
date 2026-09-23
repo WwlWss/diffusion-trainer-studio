@@ -1,13 +1,16 @@
-"""Fail-closed compatibility checks for Standard -> Component bootstrap.
+"""Fail-closed host compatibility checks for Parameter Policy v1.
 
-This module answers one narrow question: can Parameter Policy v1 represent the
-optimizer/LR/grouping semantics of an already-compiled Standard effective
-configuration exactly?
+Two layers intentionally live here:
 
-It deliberately does not inspect model parameters, import torch, construct
-optimizers/schedulers, decide optimizer runtime support, or alter request and
-launch behavior. Optimizer capability/runtime support remains owned by
-parameter_policy.py.
+* bootstrap semantics: whether an already-compiled Standard configuration can
+  be represented losslessly by the Component Policy schema;
+* runtime semantics: whether an existing Component policy is qualified for the
+  requested trainer/runtime mode.
+
+Neither layer inspects model parameters, imports torch, constructs optimizers
+or schedulers, or mutates request/launch state. Non-Anima editor bootstrap uses
+only representability blockers; Anima keeps its existing stricter bootstrap
+gate. Runtime Preview/Start always uses the full v1 semantic blocker set.
 """
 
 from __future__ import annotations
@@ -201,7 +204,7 @@ def parameter_policy_v1_semantic_blockers(
     effective_config: Mapping[str, Any],
     train_type: str,
 ) -> list[str]:
-    """Return v1 blockers shared by bootstrap and trainer runtime preflight."""
+    """Return the full v1 runtime-qualification blocker set."""
 
     if not isinstance(effective_config, Mapping):
         raise ValueError(
@@ -392,6 +395,7 @@ def parameter_policy_v1_semantic_blockers(
     for message in parameter_policy_bootstrap_semantic_blockers(
         effective_config,
         train_type,
+        _network_args=network_args,
     ):
         _append_once(blockers, seen, message)
 
@@ -401,6 +405,8 @@ def parameter_policy_v1_semantic_blockers(
 def parameter_policy_bootstrap_semantic_blockers(
     effective_config: Mapping[str, Any],
     train_type: str,
+    *,
+    _network_args: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Return only Standard semantics that Component Policy v1 cannot encode.
 
@@ -420,7 +426,11 @@ def parameter_policy_bootstrap_semantic_blockers(
     # Keep the same registry validation as runtime preflight.
     get_model_component_profile(train_type)
 
-    network_args = _parse_network_args(effective_config.get("network_args"))
+    network_args = (
+        dict(_network_args)
+        if _network_args is not None
+        else _parse_network_args(effective_config.get("network_args"))
+    )
     blockers: list[str] = []
     seen: set[str] = set()
 
