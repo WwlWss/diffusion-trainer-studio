@@ -6,6 +6,7 @@ train_type = "anima-finetune"
 description = "使用 sd-scripts/anima_train.py 对标准 28-block Anima DiT 做全参微调；默认冻结 Qwen3 文本编码器。"
 
 [data]
+optimization_mode = "standard"
 anima_model_variant = "base"
 anima_finetune_learning_rate = "1e-5"
 optimizer_type = "AdamW8bit"

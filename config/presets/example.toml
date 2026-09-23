@@ -9,6 +9,7 @@ description = "这是一个样例模板，提高训练分辨率。如果你想�
 
 # 模板配置内容。请只填写修改了的内容，未修改无需填写。
 [data]
+optimization_mode = "standard"
 resolution = "768,768"
 enable_bucket = true
 min_bucket_reso = 256

@@ -203,6 +203,15 @@ def patch_frontend_app_js(content: str) -> str:
         '}'
         'return!0'
         '}'
+        'function __dtsPolicyProfileField(e){'
+        'const t=String(e||"");'
+        'return t.startsWith("parameter_policy_components.")&&'
+        '(t.endsWith(".optimizer_profile.")||t.endsWith(".fallback_optimizer_profile."))'
+        '}'
+        'function __dtsPolicyProfileNames(){'
+        'const e=window.__dtsPolicyProfileHooks;'
+        'return e&&typeof e.profileNames==="function"?e.profileNames():[]'
+        '}'
         'function md(e,t){'
     )
     discriminator_count = content.count(discriminator_anchor)
@@ -214,6 +223,84 @@ def patch_frontend_app_js(content: str) -> str:
     content = content.replace(
         discriminator_anchor,
         discriminator_replacement,
+        1,
+    )
+
+    # Component Profile fields are plain strings at the schema layer so the
+    # renderer can populate them from the live parameter_policy_profiles keys.
+    # Keep free-form entry via Element Plus allow-create for imported/custom
+    # profile names while surfacing all current Profile keys as suggestions.
+    primitive_props_anchor = (
+        'YA=se({__name:"primitive",'
+        'props:{schema:{},modelValue:{},disabled:Boolean,minimal:Boolean},'
+        'emits:["update:modelValue","focus","blur"]'
+    )
+    primitive_props_replacement = (
+        'YA=se({__name:"primitive",'
+        'props:{schema:{},modelValue:{},disabled:Boolean,minimal:Boolean,prefix:{}},'
+        'emits:["update:modelValue","focus","blur"]'
+    )
+    primitive_props_count = content.count(primitive_props_anchor)
+    if primitive_props_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery primitive-prefix anchor expected once, "
+            f"found {primitive_props_count}"
+        )
+    content = content.replace(
+        primitive_props_anchor,
+        primitive_props_replacement,
+        1,
+    )
+
+    primitive_call_anchor = (
+        'ce(Uf,{key:0,schema:e.schema,disabled:r.value,'
+        'modelValue:e.modelValue,"onUpdate:modelValue":u[2]||'
+        '(u[2]=y=>i.$emit("update:modelValue",y))},null,8,'
+        '["schema","disabled","modelValue"])'
+    )
+    primitive_call_replacement = (
+        'ce(Uf,{key:0,schema:e.schema,disabled:r.value,prefix:e.prefix,'
+        'modelValue:e.modelValue,"onUpdate:modelValue":u[2]||'
+        '(u[2]=y=>i.$emit("update:modelValue",y))},null,8,'
+        '["schema","disabled","prefix","modelValue"])'
+    )
+    primitive_call_count = content.count(primitive_call_anchor)
+    if primitive_call_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery primitive-call prefix anchor expected once, "
+            f"found {primitive_call_count}"
+        )
+    content = content.replace(
+        primitive_call_anchor,
+        primitive_call_replacement,
+        1,
+    )
+
+    profile_string_anchor = (
+        'e.schema.type==="string"?(x(),U(Pe,{key:2},['
+        'e.schema.meta.role==="color"?'
+    )
+    profile_string_replacement = (
+        'e.schema.type==="string"?(x(),U(Pe,{key:2},['
+        '__dtsPolicyProfileField(e.prefix)?'
+        '(x(),ce(M,{key:0,modelValue:c(o),'
+        '"onUpdate:modelValue":H=>mt(o)?o.value=H:null,'
+        'filterable:"","allow-create":"","default-first-option":"",'
+        'disabled:e.disabled},{default:G(()=>['
+        '(x(!0),U(Pe,null,it(__dtsPolicyProfileNames(),H=>'
+        '(x(),ce(A,{key:H,value:H},{default:G(()=>[Je(Ee(H),1)]),'
+        '_:2},1032,["value"]))),128))]),_:1},8,["modelValue","disabled"])):'
+        'e.schema.meta.role==="color"?'
+    )
+    profile_string_count = content.count(profile_string_anchor)
+    if profile_string_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery dynamic Profile selector anchor expected once, "
+            f"found {profile_string_count}"
+        )
+    content = content.replace(
+        profile_string_anchor,
+        profile_string_replacement,
         1,
     )
 
@@ -320,7 +407,7 @@ def patch_frontend_app_js(content: str) -> str:
         '"例如 muon / fallback":"\\xA0")),'
         'vt(K("input",{placeholder:e.prefix==="parameter_policy_profiles."?'
         '"例如 muon / fallback":void 0,'
-        '"onUpdate:modelValue":m=>c(t)[v][0]=m},null,8,vI),'
+        '"onUpdate:modelValue":m=>{if(e.prefix==="parameter_policy_profiles."&&window.__dtsPolicyProfileHooks&&!window.__dtsPolicyProfileHooks.rename(c(t)[v][0],m))return;c(t)[v][0]=m}},null,8,vI),'
         '[[t0,c(t)[v][0]]])])'
     )
     profile_key_span_count = content.count(profile_key_span_anchor)
@@ -335,6 +422,25 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
+    profile_delete_anchor = 'onClick:m=>c(a)(v)'
+    profile_delete_replacement = (
+        'onClick:m=>{'
+        'if(e.prefix==="parameter_policy_profiles."&&window.__dtsPolicyProfileHooks&&'
+        '!window.__dtsPolicyProfileHooks.canDelete(h))return;'
+        'c(a)(v)}'
+    )
+    profile_delete_count = content.count(profile_delete_anchor)
+    if profile_delete_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery profile-delete anchor expected once, "
+            f"found {profile_delete_count}"
+        )
+    content = content.replace(
+        profile_delete_anchor,
+        profile_delete_replacement,
+        1,
+    )
+
     profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
     profile_type_replacement = (
         'prefix:G(()=>['
@@ -342,6 +448,28 @@ def patch_frontend_app_js(content: str) -> str:
         'K("span",{class:"dts-profile-type-label"},"Optimizer Type"):ye("",!0),'
         'r.value.length>1?'
     )
+    profile_type_switch_anchor = (
+        'set(d){a.value!==r.value[d]&&(l.value=o.value[d],a.value=r.value[d])}'
+    )
+    profile_type_switch_replacement = (
+        'set(d){if(a.value===r.value[d])return;'
+        'const f=l.value&&l.value.type,h=o.value[d]&&o.value[d].type;'
+        '__dtsOptimizerProfileUnion(t.schema,t.prefix)&&window.__dtsPolicyProfileHooks&&'
+        'window.__dtsPolicyProfileHooks.optimizerTypeChanged(t.prefix,f,h),'
+        'l.value=o.value[d],a.value=r.value[d]}'
+    )
+    profile_type_switch_count = content.count(profile_type_switch_anchor)
+    if profile_type_switch_count != 1:
+        raise RuntimeError(
+            "Frontend Schemastery optimizer-type switch anchor expected once, "
+            f"found {profile_type_switch_count}"
+        )
+    content = content.replace(
+        profile_type_switch_anchor,
+        profile_type_switch_replacement,
+        1,
+    )
+
     profile_type_count = content.count(profile_type_anchor)
     if profile_type_count != 1:
         raise RuntimeError(

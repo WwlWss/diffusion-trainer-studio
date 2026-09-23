@@ -6,6 +6,7 @@ train_type = "anima-lora"
 description = "使用 sd-scripts/anima_train_network.py 训练标准 28-block Anima LoRA。"
 
 [data]
+optimization_mode = "standard"
 anima_model_variant = "base"
 network_module = "networks.lora_anima"
 network_dim = 8

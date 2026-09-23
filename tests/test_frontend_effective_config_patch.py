@@ -49,13 +49,23 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
         self.assertGreaterEqual(self.patched.count('if(__generation!==__previewGeneration.value)return'), 2)
         self.assertIn('return D.data||{}', self.patched)
 
-    def test_component_preset_exact_merge_preserves_explicit_defaults(self):
+    def test_preset_policy_mode_is_explicit_and_component_shape_is_validated(self):
         self.assertIn(
-            '__isComponentPreset=_=>{let P=_&&_.parameter_policy_profiles,Cc=_&&_.parameter_policy_components;',
+            '__presetPolicyMode=_=>{let P=_&&_.parameter_policy_profiles,Cc=_&&_.parameter_policy_components,',
             self.patched,
         )
         self.assertIn(
-            'let m=Pc?clone(_):findChangedDataBySchema(_,n.value)',
+            '?"component":"invalid-component";return"standard"',
+            self.patched,
+        )
+        self.assertIn(
+            '__isComponentPreset=_=>__presetPolicyMode(_)=="component"',
+            self.patched,
+        )
+
+    def test_component_preset_exact_merge_preserves_explicit_defaults(self):
+        self.assertIn(
+            'const Pc=Pm=="component";let m=Pc?clone(_):findChangedDataBySchema(_,n.value)',
             self.patched,
         )
         self.assertIn(
@@ -63,21 +73,38 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             self.patched,
         )
 
-    def test_component_preset_cancels_stale_bootstrap_and_refreshes_preview(self):
+    def test_preset_apply_cancels_stale_bootstrap_and_syncs_mode(self):
         self.assertIn(
-            'Pc&&(++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1)',
+            '$=async _=>{const Pm=__presetPolicyMode(_);',
             self.patched,
         )
         self.assertIn(
-            'Pc&&(__runtimeReady.value=!1,__runtimeBlockers.value=[],__refreshPreview())',
+            '++__policyBootstrapGeneration.value,__policyBootstrapPending.value=!1',
             self.patched,
         )
+        self.assertIn(
+            'a.value.optimization_mode=Pm,__runtimeReady.value=!Pc,__runtimeBlockers.value=[]',
+            self.patched,
+        )
+        self.assertIn('await nextTick(),await __syncPolicyMode()', self.patched)
 
-    def test_standard_preset_path_still_uses_legacy_schema_diff(self):
+    def test_standard_preset_path_keeps_schema_diff_but_forces_standard_mode(self):
         self.assertIn(
             'Pc?clone(_):findChangedDataBySchema(_,n.value)',
             self.patched,
         )
+        self.assertIn('a.value.optimization_mode=Pm', self.patched)
+        self.assertIn('return"standard"', self.patched)
+
+    def test_history_apply_cancels_stale_bootstrap_and_syncs_mode(self):
+        start = self.patched.index('Y=async(_,m)=>')
+        end = self.patched.index(',Z=async(_,m)=>', start)
+        block = self.patched[start:end]
+        self.assertIn('++__policyBootstrapGeneration.value', block)
+        self.assertIn('__policyBootstrapPending.value=!1', block)
+        self.assertIn('a.value=clone(m.value)', block)
+        self.assertIn('__runtimeReady.value=!__isComponentMode()', block)
+        self.assertIn('await nextTick(),await __syncPolicyMode()', block)
 
     def test_preset_and_history_preview_use_effective_backend(self):
         self.assertIn('q=async _=>', self.patched)
@@ -176,9 +203,62 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
             sync,
         )
 
+    def test_profile_lifecycle_hooks_update_references_and_guard_delete(self):
+        self.assertIn('__renamePolicyProfile=(O,N)=>', self.patched)
+        self.assertIn('R.optimizer_profile===O&&(R.optimizer_profile=N)', self.patched)
+        self.assertIn(
+            'R.fallback_optimizer_profile===O&&(R.fallback_optimizer_profile=N)',
+            self.patched,
+        )
+        self.assertIn('__canDeletePolicyProfile=N=>', self.patched)
+        self.assertIn('仍被 "+R.length+" 个 Component 引用', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks=H,H',
+            self.patched,
+        )
+        self.assertIn('profileNames:__profileNames', self.patched)
+
+    def test_optimizer_type_change_reconciles_fallback_semantics(self):
+        start = self.patched.index('__onPolicyOptimizerTypeChanged=')
+        end = self.patched.index(',__installPolicyProfileHooks=', start)
+        block = self.patched[start:end]
+        self.assertIn('OM=__optimizerRequiresEligibility(O)', block)
+        self.assertIn('NM=__optimizerRequiresEligibility(N)', block)
+        self.assertIn(
+            'OM&&!NM&&R.optimizer_profile===K&&(delete R.fallback_optimizer_profile,delete R.fallback_learning_rate)',
+            block,
+        )
+        self.assertIn(
+            '!OM&&NM&&R.fallback_optimizer_profile===K&&(delete R.fallback_optimizer_profile,delete R.fallback_learning_rate)',
+            block,
+        )
+
+    def test_profile_rename_rejects_empty_existing_name(self):
+        start = self.patched.index('__renamePolicyProfile=')
+        end = self.patched.index(',__canDeletePolicyProfile=', start)
+        block = self.patched[start:end]
+        self.assertIn('String(O||"").trim()&&!F', block)
+        self.assertIn('Optimizer Profile 名称不能为空', block)
+
+    def test_profile_eligibility_logic_is_registry_driven(self):
+        self.assertIn('__optimizerRequiresEligibility=T=>', self.patched)
+        self.assertNotIn('toLowerCase()=="muon"', self.patched)
+
+    def test_profile_hook_cleanup_is_owner_guarded(self):
+        self.assertIn('__policyProfileHookOwner=__installPolicyProfileHooks()', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks===__policyProfileHookOwner&&delete window.__dtsPolicyProfileHooks',
+            self.patched,
+        )
+
     def test_parameter_policy_initial_mount_and_import_use_mode_sync(self):
         self.assertIn(
             'onMounted(async()=>{I(),y(),await nextTick(),await __syncPolicyMode()})',
+            self.patched,
+        )
+        self.assertIn('__policyProfileHookOwner=__installPolicyProfileHooks()', self.patched)
+        self.assertIn(
+            'window.__dtsPolicyProfileHooks===__policyProfileHookOwner&&delete window.__dtsPolicyProfileHooks',
             self.patched,
         )
         self.assertIn(

@@ -89,12 +89,13 @@ class ParameterPolicySchemaTests(unittest.TestCase):
                 )
                 self.assertEqual(declared, set(profile.components))
 
-    def test_component_rows_keep_train_guard_and_offer_profile_choices(self):
+    def test_component_rows_keep_train_guard_and_dynamic_profile_strings(self):
         fragment = parameter_policy_schema_fragment("flux-finetune")
         self.assertIn("train: Schema.boolean().default(false)", fragment)
         self.assertIn("train: Schema.const(true).required()", fragment)
-        self.assertIn('optimizer_profile: Schema.union(["main", "legacy_main", "muon", "fallback"', fragment)
-        self.assertIn('fallback_optimizer_profile: Schema.union(["fallback", "main", "legacy_main"', fragment)
+        self.assertIn("optimizer_profile: Schema.string()", fragment)
+        self.assertIn("fallback_optimizer_profile: Schema.string()", fragment)
+        self.assertIn("下拉选项动态来自当前 Optimizer Profiles", fragment)
         self.assertIn("learning_rate: Schema.string()", fragment)
         self.assertIn("fallback_learning_rate: Schema.string()", fragment)
         self.assertNotIn("]).collapse()", fragment)
