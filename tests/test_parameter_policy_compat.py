@@ -4,6 +4,7 @@ import unittest
 from mikazuki.parameter_policy_compat import (
     _parse_network_args,
     parameter_policy_compatibility_blockers,
+    parameter_policy_v1_semantic_blockers,
 )
 
 
@@ -58,7 +59,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
         parameter_policy_compatibility_blockers(config, "flux-lora")
         self.assertEqual(config, before)
 
-    def test_blocker_order_and_dedup_are_deterministic(self):
+    def test_bootstrap_blocker_order_and_dedup_are_deterministic(self):
         config = {
             "network_module": "custom.network",
             "network_args": [
@@ -73,12 +74,19 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
         second = parameter_policy_compatibility_blockers(config, "flux-lora")
         self.assertEqual(first, second)
         self.assertEqual(len(first), len(set(first)))
-        self.assertEqual(len(first), 5)
-        self.assertIn("fused_backward_pass", first[0])
-        self.assertIn("DeepSpeed", first[1])
-        self.assertIn("LoRA+", first[2])
-        self.assertIn("network_reg_lrs", first[3])
-        self.assertIn("network_module", first[4])
+        self.assertEqual(len(first), 3)
+        self.assertIn("LoRA+", first[0])
+        self.assertIn("network_reg_lrs", first[1])
+        self.assertIn("network_module", first[2])
+
+        runtime = parameter_policy_v1_semantic_blockers(config, "flux-lora")
+        self.assertEqual(len(runtime), len(set(runtime)))
+        self.assertEqual(len(runtime), 5)
+        self.assertIn("fused_backward_pass", runtime[0])
+        self.assertIn("DeepSpeed", runtime[1])
+        self.assertIn("LoRA+", runtime[2])
+        self.assertIn("network_reg_lrs", runtime[3])
+        self.assertIn("network_module", runtime[4])
 
     def test_network_args_use_exact_keys_not_substring_matching(self):
         config = {
@@ -244,7 +252,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                     [],
                 )
 
-    def test_unqualified_full_precision_and_fp8_modes_are_blocked(self):
+    def test_non_anima_bootstrap_defers_unqualified_precision_modes_to_runtime(self):
         cases = (
             ("full_fp16", True, "full_fp16"),
             ("full_bf16", True, "full_bf16"),
@@ -253,12 +261,27 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
         )
         for field, value, marker in cases:
             with self.subTest(field=field):
-                blockers = parameter_policy_compatibility_blockers(
+                self.assertEqual(
+                    parameter_policy_compatibility_blockers(
+                        {field: value},
+                        "flux-finetune",
+                    ),
+                    [],
+                )
+                blockers = parameter_policy_v1_semantic_blockers(
                     {field: value},
                     "flux-finetune",
                 )
                 self.assertEqual(len(blockers), 1)
                 self.assertIn(marker, blockers[0])
+
+    def test_anima_bootstrap_behavior_is_unchanged_for_unqualified_precision(self):
+        blockers = parameter_policy_compatibility_blockers(
+            {"full_bf16": True},
+            "anima-finetune",
+        )
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("full_bf16", blockers[0])
 
     def test_ordinary_mixed_precision_remains_allowed(self):
         for precision in ("no", "fp16", "bf16"):
@@ -277,7 +300,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                     [],
                 )
 
-    def test_global_optimizer_runtime_semantics_are_blocked(self):
+    def test_non_anima_bootstrap_defers_runtime_optimizer_modes(self):
         cases = (
             ("fused_backward_pass", True, "fused_backward_pass"),
             ("fused_optimizer_groups", 2, "fused_optimizer_groups"),
@@ -286,7 +309,14 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
         )
         for field, value, marker in cases:
             with self.subTest(field=field):
-                blockers = parameter_policy_compatibility_blockers(
+                self.assertEqual(
+                    parameter_policy_compatibility_blockers(
+                        {field: value},
+                        "flux-finetune",
+                    ),
+                    [],
+                )
+                blockers = parameter_policy_v1_semantic_blockers(
                     {field: value},
                     "flux-finetune",
                 )
@@ -327,7 +357,7 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                 ValueError,
                 field,
             ):
-                parameter_policy_compatibility_blockers(
+                parameter_policy_v1_semantic_blockers(
                     {field: value},
                     "flux-finetune",
                 )
