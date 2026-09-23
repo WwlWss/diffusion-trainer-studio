@@ -18,6 +18,7 @@ HOME_CONTENT_ASSET = "index.html.c6ef684b.js"
 HOME_DATA_ASSET = "index.html.ec4ace46.js"
 ABOUT_CONTENT_ASSET = "about.html.b4807002.js"
 ABOUT_DATA_ASSET = "about.html.5b0c0de9.js"
+STYLE_ASSET = "style.874872ce.css"
 
 PROJECT_NAME = "Diffusion Trainer Studio"
 PROJECT_VERSION = "2.0.0"
@@ -61,6 +62,58 @@ def patch_branding_app_js(content: str) -> str:
         "home route title",
     )
     return content
+
+
+def patch_profile_editor_css(content: str) -> str:
+    """Give Parameter Policy profile name/type distinct vertical rows."""
+
+    marker = "/* DTS profile editor two-row layout */"
+    if marker in content:
+        return content
+    return content + """
+/* DTS profile editor two-row layout */
+.dts-profile-entry>.k-schema-main{
+  grid-template-columns:minmax(0,1fr) 2rem;
+  grid-template-rows:auto auto;
+  align-items:start;
+  row-gap:.75rem;
+}
+.dts-profile-entry>.k-schema-main>.k-schema-left{
+  grid-column:1;
+  grid-row:1;
+}
+.dts-profile-entry>.k-schema-main>.k-schema-right{
+  grid-column:1;
+  grid-row:2;
+  justify-content:flex-start;
+  align-items:center;
+}
+.dts-profile-entry>.k-schema-main>.k-schema-menu{
+  grid-column:2;
+  grid-row:1 / 3;
+}
+.dts-profile-entry .entry-input{
+  display:inline-block;
+  min-width:16rem;
+  margin-left:.75rem;
+  padding:.3rem .65rem;
+  border:1px solid var(--el-border-color);
+  border-radius:4px;
+  background:var(--el-fill-color-blank);
+}
+.dts-profile-entry .entry-input input{
+  left:0;
+  right:0;
+  padding:0 .65rem;
+}
+.dts-profile-entry .dts-profile-type-label{
+  min-width:8.5rem;
+  font-weight:600;
+}
+.dts-profile-entry .k-schema-right .el-select{
+  min-width:16rem;
+}
+"""
 
 
 def patch_branding_layout_js(content: str) -> str:
@@ -246,6 +299,10 @@ def install_frontend_branding_patch() -> None:
                 path = Path("frontend/dist/assets") / LAYOUT_ASSET
                 content = path.read_text(encoding="utf-8")
             return patch_branding_layout_js(content)
+
+        if asset_name == STYLE_ASSET:
+            path = Path("frontend/dist/assets") / STYLE_ASSET
+            return patch_profile_editor_css(path.read_text(encoding="utf-8"))
 
         if asset_name == HOME_CONTENT_ASSET:
             return home_content_js()
