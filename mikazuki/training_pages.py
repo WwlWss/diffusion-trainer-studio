@@ -323,22 +323,6 @@ def patch_frontend_app_js(content: str) -> str:
         1,
     )
 
-    profile_key_open_anchor = 'Je(" [\\\' "),K("span",pI,['
-    profile_key_open_replacement = (
-        'Je(e.prefix==="parameter_policy_profiles."?" ":" [\\\' "),'
-        'K("span",pI,['
-    )
-    if content.count(profile_key_open_anchor) != 1:
-        raise RuntimeError("Frontend Schemastery profile-key open anchor expected once")
-    content = content.replace(profile_key_open_anchor, profile_key_open_replacement, 1)
-
-    profile_key_close_anchor = ']),Je(" \\\'] ")],64))])'
-    profile_key_close_replacement = (
-        ']),Je(e.prefix==="parameter_policy_profiles."?"":" \\\'] ")],64))])'
-    )
-    if content.count(profile_key_close_anchor) != 1:
-        raise RuntimeError("Frontend Schemastery profile-key close anchor expected once")
-    content = content.replace(profile_key_close_anchor, profile_key_close_replacement, 1)
     profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
     profile_type_replacement = (
         'prefix:G(()=>['
