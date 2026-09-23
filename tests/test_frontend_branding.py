@@ -44,7 +44,20 @@ class FrontendBrandingTests(unittest.TestCase):
         self.assertIn("grid-template-rows:auto auto", patched)
         self.assertIn("grid-row:1", patched)
         self.assertIn("grid-row:2", patched)
-        self.assertIn(".dts-profile-entry .dts-profile-type-label", patched)
+        self.assertIn(
+            ".dts-profile-entry>.k-schema-main>.k-schema-right>.dts-profile-type-label",
+            patched,
+        )
+        self.assertIn(
+            ".dts-profile-entry>.k-schema-main>.k-schema-left .entry-input",
+            patched,
+        )
+        self.assertIn(
+            ".dts-profile-entry>.k-schema-main>.k-schema-right>.el-select",
+            patched,
+        )
+        self.assertNotIn(".dts-profile-entry .entry-input{", patched)
+        self.assertNotIn(".dts-profile-entry .k-schema-right .el-select{", patched)
 
     def test_pre_rendered_shell_is_branded_before_hydration(self):
         source = INDEX.read_text(encoding="utf-8")
