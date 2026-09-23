@@ -253,13 +253,13 @@ def patch_frontend_app_js(content: str) -> str:
     )
 
     primitive_call_anchor = (
-        'Q(Uf,{key:0,schema:e.schema,disabled:r.value,'
+        'ce(Uf,{key:0,schema:e.schema,disabled:r.value,'
         'modelValue:e.modelValue,"onUpdate:modelValue":u[2]||'
         '(u[2]=y=>i.$emit("update:modelValue",y))},null,8,'
         '["schema","disabled","modelValue"])'
     )
     primitive_call_replacement = (
-        'Q(Uf,{key:0,schema:e.schema,disabled:r.value,prefix:e.prefix,'
+        'ce(Uf,{key:0,schema:e.schema,disabled:r.value,prefix:e.prefix,'
         'modelValue:e.modelValue,"onUpdate:modelValue":u[2]||'
         '(u[2]=y=>i.$emit("update:modelValue",y))},null,8,'
         '["schema","disabled","prefix","modelValue"])'
