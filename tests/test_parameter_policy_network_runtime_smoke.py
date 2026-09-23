@@ -164,6 +164,16 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
                 )
                 self.assertTrue(method(trainer, args).is_partial)
 
+                _write_policy(
+                    policy_path,
+                    {
+                        "clip_l.adapter": False,
+                        "t5xxl.adapter": True,
+                    },
+                )
+                with self.assertRaisesRegex(ValueError, "T5XXL"):
+                    method(trainer, args)
+
                 trainer.use_clip_l = False
                 _write_policy(
                     policy_path,
@@ -223,6 +233,17 @@ class ParameterPolicyCacheLifecycleContractTests(unittest.TestCase):
                         },
                     )
                     self.assertTrue(method(trainer, args).is_partial)
+
+                _write_policy(
+                    policy_path,
+                    {
+                        "clip_l.adapter": False,
+                        "clip_g.adapter": False,
+                        "t5xxl.adapter": True,
+                    },
+                )
+                with self.assertRaisesRegex(ValueError, "T5XXL"):
+                    method(trainer, args)
 
 
     def test_partial_cache_keeps_dataset_tokenization_available(self):
