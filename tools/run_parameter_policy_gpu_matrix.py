@@ -217,18 +217,49 @@ def _accelerator_device_audit() -> dict:
         )
 
         accelerator = Accelerator()
-        model, optimizer = accelerator.prepare(model, session.optimizer)
         try:
-            session.audit_after_prepare(
-                accelerator=accelerator,
-                optimizer=optimizer,
-            )
+            accelerator_device = torch.device(accelerator.device)
+            if accelerator.num_processes != 1:
+                raise AssertionError(
+                    "Accelerator device-audit regression case requires exactly "
+                    "one process; "
+                    f"got num_processes={accelerator.num_processes}."
+                )
+            if (
+                accelerator_device.type != "cuda"
+                or accelerator_device.index is not None
+            ):
+                raise AssertionError(
+                    "Accelerator device-audit regression case requires an "
+                    "implicit CUDA device; "
+                    f"got accelerator.device={accelerator_device}."
+                )
+
+            model, optimizer = accelerator.prepare(model, session.optimizer)
+            current_cuda_device = int(torch.cuda.current_device())
             parameter_devices = sorted(
                 {str(parameter.device) for parameter in session.trainable_parameters}
             )
+            expected_parameter_devices = [f"cuda:{current_cuda_device}"]
+            if parameter_devices != expected_parameter_devices:
+                raise AssertionError(
+                    "Accelerator.prepare() did not produce the explicit logical "
+                    "CUDA parameter device required by this regression case; "
+                    f"expected={expected_parameter_devices!r}, "
+                    f"actual={parameter_devices!r}."
+                )
+
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=None,
+            )
             return {
-                "accelerator_device": str(accelerator.device),
-                "current_cuda_device": int(torch.cuda.current_device()),
+                "accelerator_device": str(accelerator_device),
+                "accelerator_device_index": accelerator_device.index,
+                "accelerator_num_processes": int(accelerator.num_processes),
+                "accelerator_distributed_type": str(accelerator.distributed_type),
+                "current_cuda_device": current_cuda_device,
                 "trainable_parameter_devices": parameter_devices,
             }
         finally:
