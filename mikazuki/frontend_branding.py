@@ -92,7 +92,7 @@ def patch_profile_editor_css(content: str) -> str:
   grid-column:2;
   grid-row:1 / 3;
 }
-.dts-profile-entry .entry-input{
+.dts-profile-entry>.k-schema-main>.k-schema-left .entry-input{
   display:inline-block;
   min-width:16rem;
   margin-left:.75rem;
@@ -101,16 +101,16 @@ def patch_profile_editor_css(content: str) -> str:
   border-radius:4px;
   background:var(--el-fill-color-blank);
 }
-.dts-profile-entry .entry-input input{
+.dts-profile-entry>.k-schema-main>.k-schema-left .entry-input input{
   left:0;
   right:0;
   padding:0 .65rem;
 }
-.dts-profile-entry .dts-profile-type-label{
+.dts-profile-entry>.k-schema-main>.k-schema-right>.dts-profile-type-label{
   min-width:8.5rem;
   font-weight:600;
 }
-.dts-profile-entry .k-schema-right .el-select{
+.dts-profile-entry>.k-schema-main>.k-schema-right>.el-select{
   min-width:16rem;
 }
 """
