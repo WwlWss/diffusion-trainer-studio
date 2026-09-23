@@ -82,7 +82,10 @@ class ParameterPolicyStep6FContractTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("runtime:accelerator-device-audit", source)
         self.assertIn("Accelerator()", source)
-        self.assertIn("audit_after_prepare", source)
+        self.assertIn("accelerator.num_processes != 1", source)
+        self.assertIn("accelerator_device.index is not None", source)
+        self.assertIn("expected_parameter_devices", source)
+        self.assertIn("finalize_after_prepare", source)
 
     def test_request_gate_is_matrix_owned_and_component_compile_stays_side_effect_free(self):
         source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
