@@ -191,6 +191,18 @@ def patch_frontend_app_js(content: str) -> str:
         'return r(e),n.length>0&&n.every(([o,a])=>'
         'Object.prototype.hasOwnProperty.call(t,o)&&t[o]===a)'
         '}'
+        'function __dtsOptimizerProfileUnion(e,t){'
+        'if(!String(t||"").startsWith("parameter_policy_profiles."))return!1;'
+        'if(!e||!Array.isArray(e.list)||!e.list.length)return!1;'
+        'for(const n of e.list){'
+        'let r=n;for(;r&&r.type==="transform";)r=r.inner;'
+        'if(!r||r.type!=="object")return!1;'
+        'let o=r.dict&&r.dict.type;'
+        'for(;o&&o.type==="transform";)o=o.inner;'
+        'if(!o||o.type!=="const")return!1'
+        '}'
+        'return!0'
+        '}'
         'function md(e,t){'
     )
     discriminator_count = content.count(discriminator_anchor)
@@ -326,7 +338,7 @@ def patch_frontend_app_js(content: str) -> str:
     profile_type_anchor = 'prefix:G(()=>[r.value.length>1?'
     profile_type_replacement = (
         'prefix:G(()=>['
-        'String(e.prefix||"").startsWith("parameter_policy_profiles.")?'
+        '__dtsOptimizerProfileUnion(e.schema,e.prefix)?'
         'K("span",{class:"dts-profile-type-label"},"Optimizer Type"):ye("",!0),'
         'r.value.length>1?'
     )
