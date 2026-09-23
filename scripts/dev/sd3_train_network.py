@@ -296,8 +296,14 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
             accelerator.wait_for_everyone()
 
-            # move back to cpu
-            if not self.is_train_text_encoder(args):
+            # move back to cpu. Parameter Policy routing is not known during
+            # cache creation, so never keep CLIP-L/G resident based on the
+            # legacy target alone; accelerator.prepare() will move trainable
+            # encoders back later after the policy session is resolved.
+            policy_cache = bool(
+                str(getattr(args, "parameter_policy_config", "") or "").strip()
+            )
+            if policy_cache or not self.is_train_text_encoder(args):
                 logger.info("move CLIP-L back to cpu")
                 text_encoders[0].to("cpu")
                 logger.info("move CLIP-G back to cpu")
