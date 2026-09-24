@@ -21,6 +21,10 @@ from mikazuki.optimizer_profiles import (
     get_optimizer_capability,
     normalize_optimizer_profile,
 )
+from mikazuki.model_component_profiles import (
+    get_model_component_profile,
+    resolve_training_target_profile,
+)
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
 from mikazuki.training_gui_args import parse_ui_custom_params
 
@@ -407,6 +411,135 @@ def serialize_parameter_policy(policy: Mapping[str, Any]) -> tuple[str, str]:
     return (PARAMETER_POLICY_DIR / f"{digest}.json").as_posix(), content
 
 
+def _append_blocker(blockers: list[str], seen: set[str], message: str) -> None:
+    if message in seen:
+        return
+    seen.add(message)
+    blockers.append(message)
+
+
+def _non_anima_policy_structure_and_target_blockers(
+    canonical: Mapping[str, Any],
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+) -> list[str]:
+    """Model-free host preflight for non-Anima Component targets.
+
+    The real parameter router remains authoritative after model load.  This
+    check only rejects states that can already be proven impossible from the
+    registered Component Profile and the compiled trainer target.
+    """
+
+    profile = get_model_component_profile(train_type)
+    expected = set(profile.components)
+    actual = set(canonical["components"])
+
+    blockers: list[str] = []
+    seen: set[str] = set()
+    missing = sorted(expected.difference(actual))
+    extra = sorted(actual.difference(expected))
+    if missing or extra:
+        details: list[str] = []
+        if missing:
+            details.append("missing=" + ", ".join(missing))
+        if extra:
+            details.append("extra=" + ", ".join(extra))
+        _append_blocker(
+            blockers,
+            seen,
+            "Parameter Policy Component 集合与 "
+            f"backend={train_type!r} 不匹配: " + "; ".join(details) + "。",
+        )
+        # Do not derive target availability from a structurally incomplete
+        # policy; the runtime router still retains its independent fail-closed
+        # validation if such a sidecar reaches the trainer.
+        return blockers
+
+    trainable_components = [
+        component_id
+        for component_id, route in canonical["components"].items()
+        if bool(route.get("train"))
+    ]
+    if not trainable_components:
+        _append_blocker(
+            blockers,
+            seen,
+            "Component-wise 至少需要一个 Train=true Component；"
+            "如需完全冻结请切回 Standard 或选择至少一个训练组件。",
+        )
+        return blockers
+
+    target = resolve_training_target_profile(train_type, effective_config)
+    for component_id in sorted(trainable_components):
+        if target.is_available(component_id):
+            continue
+        reason = target.unavailable_reasons.get(
+            component_id,
+            "Disabled by the current trainer target/effective configuration.",
+        )
+        _append_blocker(
+            blockers,
+            seen,
+            f"Component {component_id!r} 设置为 Train=true，但当前 "
+            f"backend={train_type!r} target 不会创建/提供该组件：{reason}",
+        )
+
+    return blockers
+
+
+def _non_anima_text_encoder_cache_blockers(
+    canonical: Mapping[str, Any],
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+) -> list[str]:
+    """Mirror only cache/train conflicts already enforced by real trainers."""
+
+    cache_enabled = _as_bool(
+        effective_config.get("cache_text_encoder_outputs")
+    ) or _as_bool(
+        effective_config.get("cache_text_encoder_outputs_to_disk")
+    )
+    if not cache_enabled:
+        return []
+
+    trained = {
+        component_id
+        for component_id, route in canonical["components"].items()
+        if bool(route.get("train"))
+    }
+
+    # Stable SDXL network/full trainers cannot consume cached conditioning
+    # while their CLIP/OpenCLIP parameters are actively trained.
+    if train_type == "sdxl-lora":
+        conflict = sorted(
+            trained.intersection(
+                {"text_encoder_1.adapter", "text_encoder_2.adapter"}
+            )
+        )
+    elif train_type == "sdxl-finetune":
+        conflict = sorted(
+            trained.intersection({"text_encoder_1", "text_encoder_2"})
+        )
+    # Flux/SD3 trainer integrations support partial cache with CLIP training,
+    # but T5XXL training explicitly rejects Text Encoder output cache.
+    elif train_type in {"flux-lora", "chroma-lora", "sd3-lora"}:
+        conflict = ["t5xxl.adapter"] if "t5xxl.adapter" in trained else []
+    else:
+        conflict = []
+
+    if not conflict:
+        return []
+    return [
+        "Component-wise 当前训练 "
+        + ", ".join(conflict)
+        + "，不能同时启用 cache_text_encoder_outputs/"
+        "cache_text_encoder_outputs_to_disk；请冻结这些 Text Encoder "
+        "Component 或关闭对应缓存。"
+    ]
+
+
 def parameter_policy_runtime_blockers(
     policy: Mapping[str, Any],
     *,
@@ -444,6 +577,21 @@ def parameter_policy_runtime_blockers(
                 normalized_train_type,
             )
         )
+        if normalized_train_type not in {"anima-lora", "anima-finetune"}:
+            blockers.extend(
+                _non_anima_policy_structure_and_target_blockers(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                )
+            )
+            blockers.extend(
+                _non_anima_text_encoder_cache_blockers(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                )
+            )
 
     if normalized_train_type == "anima-finetune" and effective_config is not None:
         qwen_route = canonical["components"].get("qwen3", {"train": False})
@@ -478,6 +626,9 @@ def parameter_policy_runtime_blockers(
         if fallback:
             referenced_profiles.add(fallback)
 
+    # Preserve deterministic first occurrence when semantic/target checks
+    # independently describe the same unsupported state.
+    blockers = list(dict.fromkeys(blockers))
     seen = set(blockers)
     for profile_name in sorted(referenced_profiles, key=str.casefold):
         profile = canonical["optimizer_profiles"][profile_name]

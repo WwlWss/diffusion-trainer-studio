@@ -1,7 +1,13 @@
 import unittest
+from copy import deepcopy
 
 from mikazuki.training_config import prepare_training_config
 from mikazuki.training_gui_args import apply_raw_gui_semantics
+from mikazuki.training_gui_semantics import (
+    normalize_flux_lora_target,
+    normalize_sd3_lora_target,
+    normalize_sd_lora_target,
+)
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 
 
@@ -180,6 +186,417 @@ class TrainingSemanticContractTests(unittest.TestCase):
         )
         self.assertFalse(prepared.config["network_train_unet_only"])
         self.assertIn("train_t5xxl=True", prepared.config["network_args"])
+
+    def test_sd3_target_materializes_real_trainer_flags_and_t5_network_arg(self):
+        prepared = prepare_training_config(
+            {
+                "optimizer_type": "AdamW",
+                "sd3_lora_target": "mmdit_text_encoder",
+                "train_t5xxl": True,
+                "cache_text_encoder_outputs": False,
+            },
+            page_train_type="sd3-lora",
+            resolve_backend=_resolve,
+        )
+        self.assertFalse(prepared.config.get("network_train_unet_only", False))
+        self.assertFalse(prepared.config.get("network_train_text_encoder_only", False))
+        self.assertNotIn("train_t5xxl", prepared.config)
+        self.assertIn("train_t5xxl=True", prepared.config["network_args"])
+
+    def test_sd3_semantic_target_is_reasserted_after_custom_overrides(self):
+        with self.assertRaisesRegex(ValueError, "不能同时"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": False,
+                    "ui_custom_params": (
+                        "network_train_unet_only = true\n"
+                        "network_train_text_encoder_only = true\n"
+                    ),
+                },
+                page_train_type="sd3-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_sd3_t5_custom_override_rewrites_existing_network_arg(self):
+        prepared = prepare_training_config(
+            {
+                "optimizer_type": "AdamW",
+                "sd3_lora_target": "mmdit_text_encoder",
+                "train_t5xxl": False,
+                "network_args_custom": ["train_t5xxl=True", "custom=ok"],
+                "ui_custom_params": "train_t5xxl = true",
+            },
+            page_train_type="sd3-lora",
+            resolve_backend=_resolve,
+        )
+        self.assertEqual(
+            [item for item in prepared.config["network_args"] if item.startswith("train_t5xxl=")],
+            ["train_t5xxl=True"],
+        )
+        self.assertIn("custom=ok", prepared.config["network_args"])
+
+    def test_sd3_rehydrate_round_trip_preserves_target_and_t5(self):
+        effective = {
+            "optimizer_type": "AdamW",
+            "network_module": "networks.lora_sd3",
+            "network_train_unet_only": False,
+            "network_train_text_encoder_only": False,
+            "network_args": ["train_t5xxl=True", "custom=ok"],
+        }
+        gui = rehydrate_trainer_config(effective, "sd3-lora")
+        self.assertEqual(gui["sd3_lora_target"], "mmdit_text_encoder")
+        self.assertTrue(gui["train_t5xxl"])
+        self.assertIn("custom=ok", gui["network_args_custom"])
+
+        rebuilt = prepare_training_config(
+            gui,
+            page_train_type="sd3-lora",
+            resolve_backend=_resolve,
+        ).config
+        self.assertIn("train_t5xxl=True", rebuilt["network_args"])
+        self.assertIn("custom=ok", rebuilt["network_args"])
+        self.assertNotIn("train_t5xxl", rebuilt)
+
+    def test_rehydrate_preserves_inert_t5_training_semantics(self):
+        variants = (
+            ("train_t5xxl=true", False),
+            ("TRAIN_T5XXL=True", True),
+            ("train_t5xxl =True", True),
+            (" train_t5xxl=True", True),
+            ("train_t5xxl=True ", False),
+        )
+        for train_type in ("flux-lora", "sd3-lora"):
+            for variant, preserve_raw in variants:
+                with self.subTest(train_type=train_type, variant=variant):
+                    effective = {
+                        "optimizer_type": "AdamW",
+                        "network_module": (
+                            "networks.lora_flux"
+                            if train_type == "flux-lora"
+                            else "networks.lora_sd3"
+                        ),
+                        "network_train_unet_only": False,
+                        "network_args": [variant, "custom=ok"],
+                    }
+                    if train_type == "sd3-lora":
+                        effective["network_train_text_encoder_only"] = False
+
+                    gui = rehydrate_trainer_config(effective, train_type)
+                    if train_type == "sd3-lora":
+                        self.assertFalse(gui["train_t5xxl"])
+                    else:
+                        self.assertEqual(gui["flux_lora_target"], "dit_clip_l")
+                    if preserve_raw:
+                        self.assertIn(variant, gui["network_args_custom"])
+                    else:
+                        self.assertNotIn(variant, gui["network_args_custom"])
+
+                    rebuilt = prepare_training_config(
+                        gui,
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    ).config
+                    self.assertNotIn(
+                        "train_t5xxl=True",
+                        rebuilt.get("network_args", []),
+                    )
+                    if preserve_raw:
+                        self.assertIn(variant, rebuilt["network_args"])
+                    self.assertIn("custom=ok", rebuilt["network_args"])
+
+    def test_lora_target_normalizers_are_idempotent(self):
+        cases = (
+            (
+                normalize_sd_lora_target,
+                {"lora_target": "unet_text_encoder"},
+                {},
+            ),
+            (
+                normalize_flux_lora_target,
+                {
+                    "flux_lora_target": "dit_clip_l_t5xxl",
+                    "network_args": ["custom=ok"],
+                },
+                {"chroma": False},
+            ),
+            (
+                normalize_flux_lora_target,
+                {
+                    "flux_lora_target": "dit_t5xxl",
+                    "network_args": ["custom=ok"],
+                },
+                {"chroma": True},
+            ),
+            (
+                normalize_sd3_lora_target,
+                {
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": True,
+                    "network_args": ["custom=ok"],
+                },
+                {},
+            ),
+        )
+        for normalizer, raw, kwargs in cases:
+            with self.subTest(normalizer=normalizer.__name__, raw=raw):
+                config = deepcopy(raw)
+                normalizer(config, **kwargs)
+                once = deepcopy(config)
+                normalizer(config, **kwargs)
+                self.assertEqual(config, once)
+
+    def test_flux_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "train_t5xxl"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="flux-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_chroma_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "train_t5xxl"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="chroma-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_sd3_custom_network_args_cannot_bypass_target_invariant(self):
+        with self.assertRaisesRegex(ValueError, "Train T5XXL"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": False,
+                    "ui_custom_params": 'network_args = ["train_t5xxl=True"]',
+                },
+                page_train_type="sd3-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_sd3_standard_target_t5_matrix_and_round_trip(self):
+        cases = (
+            ("mmdit", False, True, False, False),
+            ("text_encoder", False, False, True, False),
+            ("text_encoder", True, False, True, True),
+            ("mmdit_text_encoder", False, False, False, False),
+            ("mmdit_text_encoder", True, False, False, True),
+        )
+        for target, train_t5, unet_only, te_only, effective_t5 in cases:
+            with self.subTest(target=target, train_t5=train_t5):
+                prepared = prepare_training_config(
+                    {
+                        "optimizer_type": "AdamW",
+                        "sd3_lora_target": target,
+                        "train_t5xxl": train_t5,
+                    },
+                    page_train_type="sd3-lora",
+                    resolve_backend=_resolve,
+                )
+                effective = prepared.config
+                self.assertEqual(
+                    bool(effective.get("network_train_unet_only", False)),
+                    unet_only,
+                )
+                self.assertEqual(
+                    bool(effective.get("network_train_text_encoder_only", False)),
+                    te_only,
+                )
+                self.assertEqual(
+                    "train_t5xxl=True" in effective.get("network_args", []),
+                    effective_t5,
+                )
+
+                gui = rehydrate_trainer_config(effective, "sd3-lora")
+                rebuilt = prepare_training_config(
+                    gui,
+                    page_train_type="sd3-lora",
+                    resolve_backend=_resolve,
+                ).config
+                for key in (
+                    "network_train_unet_only",
+                    "network_train_text_encoder_only",
+                    "network_args",
+                ):
+                    self.assertEqual(
+                        effective.get(key),
+                        rebuilt.get(key),
+                        (target, train_t5, key),
+                    )
+
+    def test_sd3_mmdit_target_rejects_t5_training(self):
+        with self.assertRaisesRegex(ValueError, "Train T5XXL"):
+            prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit",
+                    "train_t5xxl": True,
+                },
+                page_train_type="sd3-lora",
+                resolve_backend=_resolve,
+            )
+
+    def test_standard_text_encoder_cache_capability_matrix(self):
+        allowed = (
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_clip_l",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "chroma-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "sd3-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": False,
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+        )
+        for train_type, raw in allowed:
+            with self.subTest(train_type=train_type, raw=raw, expected="allowed"):
+                prepared = prepare_training_config(
+                    raw,
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                )
+                self.assertTrue(prepared.config["cache_text_encoder_outputs"])
+
+        blocked = (
+            (
+                "sdxl-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "lora_target": "unet_text_encoder",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "flux-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_clip_l_t5xxl",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "chroma-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "flux_lora_target": "dit_t5xxl",
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+            (
+                "sd3-lora",
+                {
+                    "optimizer_type": "AdamW",
+                    "sd3_lora_target": "mmdit_text_encoder",
+                    "train_t5xxl": True,
+                    "cache_text_encoder_outputs": True,
+                },
+            ),
+        )
+        for train_type, raw in blocked:
+            with self.subTest(train_type=train_type, raw=raw, expected="blocked"):
+                with self.assertRaisesRegex(
+                    ValueError,
+                    "Text Encoder|T5XXL|文本编码器|缓存",
+                ):
+                    prepare_training_config(
+                        raw,
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    )
+
+    def test_lora_t5_network_arg_preserves_exact_raw_key_and_value_semantics(self):
+        inert_variants = (
+            ("train_t5xxl=true", False),
+            ("TRAIN_T5XXL=True", True),
+            ("train_t5xxl =True", True),
+            (" train_t5xxl=True", True),
+            ("train_t5xxl=True ", False),
+        )
+        for train_type in ("flux-lora", "sd3-lora"):
+            for variant, preserve_raw in inert_variants:
+                with self.subTest(train_type=train_type, variant=variant):
+                    prepared = prepare_training_config(
+                        {
+                            "optimizer_type": "AdamW",
+                            "network_args_custom": [variant, "custom=ok"],
+                        },
+                        page_train_type=train_type,
+                        resolve_backend=_resolve,
+                    )
+                    self.assertNotIn(
+                        "train_t5xxl=True",
+                        prepared.config.get("network_args", []),
+                    )
+                    if preserve_raw:
+                        self.assertIn(variant, prepared.config["network_args"])
+                    self.assertIn("custom=ok", prepared.config["network_args"])
+
+            enabled = prepare_training_config(
+                {
+                    "optimizer_type": "AdamW",
+                    "network_args_custom": ["train_t5xxl=True"],
+                },
+                page_train_type=train_type,
+                resolve_backend=_resolve,
+            )
+            self.assertIn("train_t5xxl=True", enabled.config["network_args"])
+
+    def test_flux_and_chroma_custom_false_clears_first_pass_t5_target(self):
+        cases = (
+            ("flux-lora", "dit_clip_l_t5xxl"),
+            ("chroma-lora", "dit_t5xxl"),
+        )
+        for train_type, target in cases:
+            with self.subTest(train_type=train_type):
+                prepared = prepare_training_config(
+                    {
+                        "optimizer_type": "AdamW",
+                        "flux_lora_target": target,
+                        "ui_custom_params": "train_t5xxl = false",
+                    },
+                    page_train_type=train_type,
+                    resolve_backend=_resolve,
+                )
+                self.assertNotIn(
+                    "train_t5xxl=True",
+                    prepared.config.get("network_args", []),
+                )
+                if train_type == "chroma-lora":
+                    self.assertTrue(prepared.config["network_train_unet_only"])
 
     def test_dadapt_rewrites_active_lr_but_prodigy_does_not(self):
         dadapt = prepare_training_config(

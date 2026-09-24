@@ -60,8 +60,9 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
             and args.cache_text_encoder_outputs
         ):
             # Cache all CLIP/T5 outputs before the LoRA network/session exists.
-            # Routing later restores exact train flags and rejects caching if
-            # any policy-owned TE adapter is actually trainable.
+            # Routing later restores exact train flags. CLIP adapters may be
+            # recomputed live against cached T5; T5 adapter training itself is
+            # rejected after the policy session is resolved.
             self.train_clip = False
             self.train_clip_l = False
             self.train_clip_g = False
@@ -207,6 +208,13 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
                 "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
                 "outputs cannot be used."
             )
+        if args.cache_text_encoder_outputs and not self.train_clip:
+            # Both CLIP encoders were kept co-resident until policy routing was
+            # known. If neither adapter trains, release them together now. If
+            # either one trains, keep both on the same device because SD3 live
+            # encoding concatenates CLIP-L and CLIP-G outputs.
+            text_encoders[0].to("cpu")
+            text_encoders[1].to("cpu")
         return train_unet, train_text_encoder
 
     def get_models_for_text_encoding(self, args, accelerator, text_encoders):
@@ -223,12 +231,37 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
     def get_text_encoder_outputs_caching_strategy(self, args):
         if args.cache_text_encoder_outputs:
-            # if the text encoders is trained, we need tokenization, so is_partial is True
+            policy_path = str(
+                getattr(args, "parameter_policy_config", "") or ""
+            ).strip()
+            policy_clip_train = False
+            policy_t5_train = False
+            if policy_path:
+                from library import dts_parameter_policy_bridge
+
+                flags = dts_parameter_policy_bridge.load_parameter_policy_train_flags(
+                    policy_path,
+                    ("clip_l.adapter", "clip_g.adapter", "t5xxl.adapter"),
+                )
+                policy_clip_train = (
+                    flags["clip_l.adapter"] or flags["clip_g.adapter"]
+                )
+                policy_t5_train = flags["t5xxl.adapter"]
+                if policy_t5_train:
+                    raise ValueError(
+                        "Parameter Policy trains T5XXL adapters, so cached Text Encoder "
+                        "outputs cannot be used."
+                    )
+
             return strategy_sd3.Sd3TextEncoderOutputsCachingStrategy(
                 args.cache_text_encoder_outputs_to_disk,
                 args.text_encoder_batch_size,
                 args.skip_cache_check,
-                is_partial=self.train_clip or self.train_t5xxl,
+                is_partial=(
+                    self.train_clip
+                    or self.train_t5xxl
+                    or policy_clip_train
+                ),
                 apply_lg_attn_mask=args.apply_lg_attn_mask,
                 apply_t5_attn_mask=args.apply_t5_attn_mask,
             )
@@ -290,8 +323,15 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
 
             accelerator.wait_for_everyone()
 
-            # move back to cpu
-            if not self.is_train_text_encoder(args):
+            # SD3 live CLIP encoding concatenates CLIP-L and CLIP-G
+            # outputs, so a Component policy that later trains only one CLIP
+            # must not split the pair across CPU/GPU. Keep both co-resident
+            # until the policy session is resolved; configure_parameter_policy_training
+            # will offload both together when neither adapter trains.
+            policy_cache = bool(
+                str(getattr(args, "parameter_policy_config", "") or "").strip()
+            )
+            if not policy_cache and not self.is_train_text_encoder(args):
                 logger.info("move CLIP-L back to cpu")
                 text_encoders[0].to("cpu")
                 logger.info("move CLIP-G back to cpu")

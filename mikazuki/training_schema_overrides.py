@@ -75,6 +75,13 @@ def override_raw_schema(name: str, content: str) -> str:
             'wandb_api_key: Schema.string().required().description("wandb 的 api 密钥")',
             'wandb_api_key: Schema.string().description("可选：WandB API key；留空使用现有 wandb login / 环境变量")',
         )
+    if name == "sd3-lora":
+        content = content.replace(
+            '        network_train_unet_only: Schema.boolean().default(true).description("仅训练 U-Net"),\n'
+            '        network_train_text_encoder_only: Schema.boolean().default(false).description("仅训练文本编码器"),',
+            '        sd3_lora_target: Schema.union(["mmdit", "text_encoder", "mmdit_text_encoder"]).default("mmdit").description("SD3 LoRA 训练目标；MMDiT / Text Encoder / 两者"),',
+            1,
+        )
     if name == "sdxl-full":
         content = content.replace('        v_parameterization: Schema.boolean().default(false).description("v-parameterization training"),\n', "")
         content = content.replace('        scale_v_pred_loss_like_noise_pred: Schema.boolean().default(false).description("缩放 v-pred loss"),\n', "")

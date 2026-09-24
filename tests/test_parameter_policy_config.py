@@ -1,6 +1,7 @@
 import json
 import unittest
 
+from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.parameter_policy import (
     build_parameter_policy_sidecar,
     canonicalize_parameter_policy,
@@ -13,6 +14,27 @@ from mikazuki.parameter_policy import (
 from mikazuki.parameter_policy_bootstrap import bootstrap_parameter_policy_optimizer_profile
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.training_rehydrate import rehydrate_trainer_config
+
+
+def _complete_policy(train_type, *, train_component=None, profile_type="AdamW"):
+    profile = get_model_component_profile(train_type)
+    components = {
+        component_id: {"train": False}
+        for component_id in profile.components
+    }
+    if train_component is not None:
+        components[train_component] = {
+            "train": True,
+            "optimizer_profile": "main",
+            "learning_rate": 1e-4,
+        }
+    return {
+        "version": 1,
+        "optimizer_profiles": {
+            "main": {"type": profile_type, "args": {}},
+        },
+        "components": components,
+    }
 
 
 def _component_config():
@@ -48,6 +70,153 @@ def _component_config():
             },
         },
     }
+
+
+class ParameterPolicyHostPreflightTests(unittest.TestCase):
+    def test_all_frozen_policy_is_blocked_before_runtime_scan(self):
+        policy = _complete_policy("sd-lora")
+        blockers = parameter_policy_runtime_blockers(
+            policy,
+            train_type="sd-lora",
+            effective_config={
+                "network_train_unet_only": False,
+                "network_train_text_encoder_only": False,
+            },
+            integrated_train_types={"sd-lora"},
+        )
+        self.assertTrue(
+            any("至少需要一个 Train=true Component" in item for item in blockers),
+            blockers,
+        )
+
+    def test_unavailable_flux_component_is_blocked_before_model_load(self):
+        policy = _complete_policy(
+            "flux-lora",
+            train_component="clip_l.adapter",
+        )
+        blockers = parameter_policy_runtime_blockers(
+            policy,
+            train_type="flux-lora",
+            effective_config={
+                "network_train_unet_only": True,
+                "network_train_text_encoder_only": False,
+                "network_args": [],
+            },
+            integrated_train_types={"flux-lora"},
+        )
+        self.assertTrue(
+            any(
+                "clip_l.adapter" in item and "target" in item
+                for item in blockers
+            ),
+            blockers,
+        )
+
+    def test_incomplete_component_schema_is_blocked_host_side(self):
+        policy = _complete_policy(
+            "flux-lora",
+            train_component="transformer.double_stream.adapter",
+        )
+        del policy["components"]["transformer.single_stream.adapter"]
+        blockers = parameter_policy_runtime_blockers(
+            policy,
+            train_type="flux-lora",
+            effective_config={
+                "network_train_unet_only": True,
+                "network_train_text_encoder_only": False,
+                "network_args": [],
+            },
+            integrated_train_types={"flux-lora"},
+        )
+        self.assertTrue(
+            any(
+                "Component 集合" in item
+                and "transformer.single_stream.adapter" in item
+                for item in blockers
+            ),
+            blockers,
+        )
+
+    def test_sdxl_lora_text_encoder_cache_follows_component_train_state(self):
+        frozen_policy = _complete_policy(
+            "sdxl-lora",
+            train_component="unet.attention.adapter",
+        )
+        effective = {
+            "network_train_unet_only": False,
+            "network_train_text_encoder_only": False,
+            "cache_text_encoder_outputs": True,
+        }
+        frozen_blockers = parameter_policy_runtime_blockers(
+            frozen_policy,
+            train_type="sdxl-lora",
+            effective_config=effective,
+            integrated_train_types={"sdxl-lora"},
+        )
+        self.assertFalse(
+            any("cache_text_encoder_outputs" in item for item in frozen_blockers),
+            frozen_blockers,
+        )
+
+        train_te_policy = _complete_policy(
+            "sdxl-lora",
+            train_component="text_encoder_1.adapter",
+        )
+        train_te_blockers = parameter_policy_runtime_blockers(
+            train_te_policy,
+            train_type="sdxl-lora",
+            effective_config=effective,
+            integrated_train_types={"sdxl-lora"},
+        )
+        self.assertTrue(
+            any(
+                "text_encoder_1.adapter" in item
+                and "cache_text_encoder_outputs" in item
+                for item in train_te_blockers
+            ),
+            train_te_blockers,
+        )
+
+    def test_flux_partial_clip_cache_remains_allowed_but_t5_cache_is_blocked(self):
+        effective = {
+            "network_train_unet_only": False,
+            "network_train_text_encoder_only": False,
+            "network_args": ["train_t5xxl=True"],
+            "cache_text_encoder_outputs": True,
+        }
+        clip_policy = _complete_policy(
+            "flux-lora",
+            train_component="clip_l.adapter",
+        )
+        clip_blockers = parameter_policy_runtime_blockers(
+            clip_policy,
+            train_type="flux-lora",
+            effective_config=effective,
+            integrated_train_types={"flux-lora"},
+        )
+        self.assertFalse(
+            any("cache_text_encoder_outputs" in item for item in clip_blockers),
+            clip_blockers,
+        )
+
+        t5_policy = _complete_policy(
+            "flux-lora",
+            train_component="t5xxl.adapter",
+        )
+        t5_blockers = parameter_policy_runtime_blockers(
+            t5_policy,
+            train_type="flux-lora",
+            effective_config=effective,
+            integrated_train_types={"flux-lora"},
+        )
+        self.assertTrue(
+            any(
+                "t5xxl.adapter" in item
+                and "cache_text_encoder_outputs" in item
+                for item in t5_blockers
+            ),
+            t5_blockers,
+        )
 
 
 class ParameterPolicyConfigTests(unittest.TestCase):

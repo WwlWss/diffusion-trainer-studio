@@ -9,7 +9,13 @@ from pathlib import Path
 
 from mikazuki.multi_caption_config import rehydrate_multi_caption_policy
 from mikazuki.parameter_policy import validate_parameter_policy
-from mikazuki.training_gui_args import PRODIGY_TYPES, _arg_key, _as_bool, _items
+from mikazuki.training_gui_args import (
+    PRODIGY_TYPES,
+    _arg_key,
+    _as_bool,
+    _items,
+    _network_arg_items,
+)
 
 
 def _extract_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
@@ -19,6 +25,18 @@ def _extract_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
     for item in args:
         if _arg_key(item) == key_lower:
             found = item.split("=", 1)[1] if "=" in item else ""
+        else:
+            remaining.append(item)
+    return found, remaining
+
+
+def _extract_exact_arg(args: list[str], key: str) -> tuple[object | None, list[str]]:
+    """Extract only the exact raw kwarg consumed by sd-scripts network modules."""
+    found = None
+    remaining: list[str] = []
+    for item in args:
+        if "=" in item and item.split("=", 1)[0] == key:
+            found = item.split("=", 1)[1]
         else:
             remaining.append(item)
     return found, remaining
@@ -154,7 +172,25 @@ def rehydrate_trainer_config(
         te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
         config["lora_target"] = "unet" if unet_only else "text_encoder" if te_only else "unet_text_encoder"
 
-    args = _items(config.pop("network_args", None))
+    args = _network_arg_items(config.pop("network_args", None))
+    if page_train_type == "sd3-lora":
+        train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
+        config["train_t5xxl"] = train_t5_raw == "True" if train_t5_raw is not None else False
+        unet_only = _as_bool(config.pop("network_train_unet_only", False))
+        te_only = _as_bool(config.pop("network_train_text_encoder_only", False))
+        if unet_only and te_only:
+            raise ValueError(
+                "SD3 LoRA effective config 同时启用了 network_train_unet_only "
+                "与 network_train_text_encoder_only，无法安全 rehydrate。"
+            )
+        config["sd3_lora_target"] = (
+            "mmdit"
+            if unet_only
+            else "text_encoder"
+            if te_only
+            else "mmdit_text_encoder"
+        )
+
     if page_train_type == "anima-lora":
         value, args = _extract_arg(args, "train_llm_adapter")
         if value is not None:
@@ -186,8 +222,8 @@ def rehydrate_trainer_config(
             config["anima_lora_network_verbose"] = _as_bool(value)
 
     if page_train_type in {"flux-lora", "chroma-lora"}:
-        train_t5_raw, args = _extract_arg(args, "train_t5xxl")
-        train_t5 = _as_bool(train_t5_raw)
+        train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
+        train_t5 = train_t5_raw == "True"
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
         if page_train_type == "chroma-lora":
             config["flux_lora_target"] = "dit_t5xxl" if train_t5 else "dit"

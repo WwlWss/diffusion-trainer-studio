@@ -362,6 +362,33 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertIn("clip_l.adapter", flux.available_components)
         self.assertIn("t5xxl.adapter", flux.available_components)
 
+        flux_lowercase_true = resolve_training_target_profile(
+            "flux-lora",
+            {
+                "network_train_unet_only": False,
+                "network_args": ["train_t5xxl=true"],
+            },
+        )
+        self.assertIn("clip_l.adapter", flux_lowercase_true.available_components)
+        self.assertNotIn("t5xxl.adapter", flux_lowercase_true.available_components)
+
+        for inert_arg in (
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
+            " train_t5xxl=True",
+            "train_t5xxl=True ",
+        ):
+            with self.subTest(inert_arg=inert_arg):
+                flux_inert = resolve_training_target_profile(
+                    "flux-lora",
+                    {
+                        "network_train_unet_only": False,
+                        "network_args": [inert_arg],
+                    },
+                )
+                self.assertIn("clip_l.adapter", flux_inert.available_components)
+                self.assertNotIn("t5xxl.adapter", flux_inert.available_components)
+
         flux_dit = resolve_training_target_profile(
             "flux-lora",
             {"network_train_unet_only": True},
@@ -483,6 +510,32 @@ class ModelComponentProfileTests(unittest.TestCase):
         self.assertIn("clip_l.adapter", sd3.available_components)
         self.assertIn("clip_g.adapter", sd3.available_components)
         self.assertIn("t5xxl.adapter", sd3.available_components)
+        sd3_lowercase_true = resolve_training_target_profile(
+            "sd3-lora",
+            {
+                "network_train_unet_only": False,
+                "network_train_text_encoder_only": False,
+                "network_args": ["train_t5xxl=true"],
+            },
+        )
+        self.assertNotIn("t5xxl.adapter", sd3_lowercase_true.available_components)
+
+        for inert_arg in (
+            "TRAIN_T5XXL=True",
+            "train_t5xxl =True",
+            " train_t5xxl=True",
+            "train_t5xxl=True ",
+        ):
+            with self.subTest(sd3_inert_arg=inert_arg):
+                sd3_inert = resolve_training_target_profile(
+                    "sd3-lora",
+                    {
+                        "network_train_unet_only": False,
+                        "network_train_text_encoder_only": False,
+                        "network_args": [inert_arg],
+                    },
+                )
+                self.assertNotIn("t5xxl.adapter", sd3_inert.available_components)
 
         sd3_unet = resolve_training_target_profile(
             "sd3-lora",

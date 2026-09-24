@@ -620,19 +620,21 @@ class ParameterPolicyEditorBootstrapTests(unittest.TestCase):
                 resolve_backend=_resolver,
             )
 
-    def test_standard_bootstrap_keeps_compatibility_blockers_authoritative(self):
+    def test_standard_bootstrap_defers_runtime_only_qualification_blockers(self):
         raw = {
             "optimizer_type": "AdamW",
             "learning_rate": 1e-4,
             "lora_target": "unet",
             "fused_backward_pass": True,
         }
-        with self.assertRaisesRegex(ValueError, "fused_backward_pass"):
-            bootstrap_parameter_policy_editor(
-                raw,
-                "lora-master",
-                resolve_backend=_resolver,
-            )
+        gui = bootstrap_parameter_policy_editor(
+            raw,
+            "lora-master",
+            resolve_backend=_resolver,
+        )
+        self.assertEqual(gui["optimization_mode"], "component")
+        self.assertTrue(gui["parameter_policy_profiles"])
+        self.assertTrue(gui["parameter_policy_components"])
 
 
 class ParameterPolicyEditorPreviewTests(unittest.TestCase):

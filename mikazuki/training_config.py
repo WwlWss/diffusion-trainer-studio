@@ -15,6 +15,7 @@ from mikazuki.training_gui_semantics import (
     normalize_common_dataloader,
     normalize_dataset_source,
     normalize_flux_lora_target,
+    normalize_sd3_lora_target,
     normalize_sd_lora_target,
     normalize_sd_token_length,
     validate_legacy_common_conflicts,
@@ -128,13 +129,21 @@ def _post_override_normalize(
 
     if effective_train_type in {"sd-lora", "sdxl-lora"}:
         normalize_sd_token_length(config, warnings)
-        normalize_sd_lora_target(config)
+        normalize_sd_lora_target(
+            config,
+            defer_component_text_encoder_cache=(
+                effective_train_type == "sdxl-lora"
+                and config.get("parameter_policy_config") not in (None, "")
+            ),
+        )
     elif effective_train_type == "sd-dreambooth":
         normalize_sd_token_length(config, warnings)
         if str(config.get("save_model_as") or "").lower() == "pt":
             raise ValueError("SD DreamBooth: 当前 trainer 不支持 save_model_as=pt。")
     elif effective_train_type in {"flux-lora", "chroma-lora"}:
         normalize_flux_lora_target(config, chroma=effective_train_type == "chroma-lora")
+    elif effective_train_type == "sd3-lora":
+        normalize_sd3_lora_target(config)
     elif effective_train_type == "sdxl-finetune":
         _strip_network_training_keys(config)
         normalize_validate_sdxl_full(config)
@@ -167,7 +176,13 @@ def prepare_training_config(
 
     if effective_train_type in {"sd-lora", "sdxl-lora"}:
         normalize_sd_token_length(config, warnings)
-        normalize_sd_lora_target(config)
+        normalize_sd_lora_target(
+            config,
+            defer_component_text_encoder_cache=(
+                effective_train_type == "sdxl-lora"
+                and config.get("parameter_policy_config") not in (None, "")
+            ),
+        )
         _normalize_legacy_optimizer_learning_rates(config, warnings)
     elif effective_train_type == "sd-dreambooth":
         normalize_sd_token_length(config, warnings)
@@ -176,6 +191,9 @@ def prepare_training_config(
             raise ValueError("SD DreamBooth: 当前 trainer 不支持 save_model_as=pt。")
     elif effective_train_type in {"flux-lora", "chroma-lora"}:
         normalize_flux_lora_target(config, chroma=effective_train_type == "chroma-lora")
+        _normalize_legacy_optimizer_learning_rates(config, warnings)
+    elif effective_train_type == "sd3-lora":
+        normalize_sd3_lora_target(config)
         _normalize_legacy_optimizer_learning_rates(config, warnings)
     elif effective_train_type == "sdxl-finetune":
         if config.get("max_train_steps") not in (None, "", 0, "0") and config.get("max_train_epochs") not in (None, "", 0, "0"):

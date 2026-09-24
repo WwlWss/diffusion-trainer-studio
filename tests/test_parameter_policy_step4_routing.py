@@ -229,7 +229,7 @@ class Step4EndToEndRoutingTests(unittest.TestCase):
             target_root="t5xxl",
             target_path="encoder.block.0.layer.0.SelfAttention.q",
             expected_route="primary",
-            effective_config={"network_args": ["train_t5xxl=true"]},
+            effective_config={"network_args": ["train_t5xxl=True"]},
         )
 
     def test_sd3_attention_marker_routes_to_primary(self):

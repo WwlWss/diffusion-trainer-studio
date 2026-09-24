@@ -82,14 +82,65 @@ def _arg_key(value: str) -> str:
     return value.split("=", 1)[0].strip().lower()
 
 
+def _network_arg_items(value: object) -> list[str]:
+    """Normalize network_args without changing train_t5xxl wire semantics.
+
+    Historical DTS behavior strips whitespace from ordinary network args.
+    Flux/SD3 train_t5xxl is special because sd-scripts forwards the raw key
+    and value around "=" verbatim. Preserve whitespace for train_t5xxl-like
+    kwargs so malformed aliases cannot be silently corrected into an active
+    T5XXL training flag.
+    """
+
+    if _is_empty(value):
+        return []
+    if isinstance(value, str):
+        raw_items = value.splitlines()
+    elif isinstance(value, (list, tuple)):
+        raw_items = [str(item) for item in value]
+    else:
+        raw_items = [str(value)]
+
+    result: list[str] = []
+    for raw in raw_items:
+        if not raw.strip():
+            continue
+        raw_key = raw.split("=", 1)[0] if "=" in raw else raw
+        if raw_key.strip().lower() == "train_t5xxl":
+            result.append(raw)
+        else:
+            result.append(raw.strip())
+    return result
+
+
+def _merge_arg_identity(value: str) -> tuple[str, str]:
+    """Return merge identity without changing train_t5xxl wire semantics.
+
+    Most legacy network-arg controls historically merge case-insensitively.
+    train_t5xxl is different: sd-scripts forwards its raw key verbatim and the
+    Flux/SD3 LoRA modules consume only the exact key "train_t5xxl". Preserve
+    malformed aliases as distinct kwargs instead of silently correcting them.
+    """
+
+    raw_key = value.split("=", 1)[0]
+    if raw_key == "train_t5xxl":
+        return ("t5-exact", raw_key)
+    if raw_key.strip().lower() == "train_t5xxl":
+        return ("t5-raw", raw_key)
+    return ("legacy", _arg_key(value))
+
+
 def _merge_args(existing: object, generated: Iterable[str] = (), custom: object = None) -> list[str]:
     result: list[str] = []
-    key_to_index: dict[str, int] = {}
-    for value in [*_items(existing), *[str(x) for x in generated], *_items(custom)]:
-        value = value.strip()
-        if not value:
+    key_to_index: dict[tuple[str, str], int] = {}
+    for value in [
+        *_network_arg_items(existing),
+        *[str(x) for x in generated],
+        *_network_arg_items(custom),
+    ]:
+        if not value.strip():
             continue
-        key = _arg_key(value)
+        key = _merge_arg_identity(value)
         if key in key_to_index:
             result[key_to_index[key]] = value
         else:

@@ -193,6 +193,29 @@ def _network_bool(config: Mapping[str, Any], key: str) -> bool:
     return True if value is None else _bool(value, field=f"network_args[{key}]")
 
 
+def _network_exact_true(config: Mapping[str, Any], key: str) -> bool:
+    """Mirror LoRA kwargs: exact raw key and exact string value "True"."""
+    raw = config.get("network_args")
+    if raw in (None, ""):
+        return False
+    if isinstance(raw, str):
+        items = [raw]
+    elif isinstance(raw, (list, tuple)):
+        items = list(raw)
+    else:
+        raise ValueError("network_args must be a string or list of strings in effective config.")
+
+    result = False
+    for raw_item in items:
+        item = str(raw_item)
+        if "=" not in item:
+            continue
+        raw_key, raw_value = item.split("=", 1)
+        if raw_key == key:
+            result = raw_value == "True"
+    return result
+
+
 def _components(*items: tuple[str, str, str, tuple[str, ...]]) -> Mapping[str, ComponentDefinition]:
     result: dict[str, ComponentDefinition] = {}
     for component_id, display_name, description, roots in items:
@@ -764,7 +787,7 @@ def _resolve_flux_lora_target(
             "Flux/Chroma LoRA target cannot enable both unet-only and text-encoder-only modes."
         )
 
-    train_t5xxl = _network_bool(config, "train_t5xxl")
+    train_t5xxl = _network_exact_true(config, "train_t5xxl")
     if unet_only and train_t5xxl:
         raise ValueError(
             "Flux/Chroma LoRA target is inconsistent: network_train_unet_only=true "
@@ -824,7 +847,7 @@ def _resolve_sd3_lora_target(
             "SD3 LoRA target cannot enable both unet-only and text-encoder-only modes."
         )
 
-    train_t5xxl = _network_bool(config, "train_t5xxl")
+    train_t5xxl = _network_exact_true(config, "train_t5xxl")
     if unet_only and train_t5xxl:
         raise ValueError(
             "SD3 LoRA target is inconsistent: network_train_unet_only=true "

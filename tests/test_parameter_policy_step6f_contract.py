@@ -87,6 +87,16 @@ class ParameterPolicyStep6FContractTests(unittest.TestCase):
         self.assertIn("expected_parameter_devices", source)
         self.assertIn("finalize_after_prepare", source)
 
+    def test_gpu_matrix_covers_sd3_clip_pair_prepare(self):
+        source = (
+            ROOT / "tools" / "run_parameter_policy_gpu_matrix.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("runtime:sd3-clip-pair-prepare", source)
+        self.assertIn("def _sd3_clip_pair_prepare()", source)
+        self.assertIn("clip_l = accelerator.prepare(clip_l)", source)
+        self.assertIn("clip_l_device", source)
+        self.assertIn("clip_g_device", source)
+
     def test_request_gate_is_matrix_owned_and_component_compile_stays_side_effect_free(self):
         source = (ROOT / "mikazuki" / "training_request.py").read_text(encoding="utf-8")
         self.assertIn("from mikazuki.parameter_policy_matrix import", source)
