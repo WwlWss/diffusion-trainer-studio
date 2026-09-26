@@ -1402,3 +1402,747 @@ Standard
 - 让两个 optimizer 同时拥有同一参数；
 - 用一次成功训练替代 save/resume / device / ownership qualification；
 - 为了 GUI 方便而改变 Standard legacy semantics。
+
+
+---
+
+# 22. 当前参考训练需求：Anima 2.9B 多组件训练工作负载
+
+前面的章节说明了 Parameter Policy 已经实现了什么。本节开始记录它**实际需要服务的参考工作负载**。
+
+这里的目的不是把某一套训练 recipe 固化成 DTS 的唯一用法，而是给后续开发和 qualification 一个足够具体的 acceptance target：如果一个功能声称支持 Component-wise training，它至少不能破坏下面这类真实需求。
+
+## 22.1 当前八阶段数据 / 分辨率计划
+
+当前训练计划使用 8 个阶段：
+
+| 阶段 | 数据规模 | Epoch | 分辨率 |
+| --- | ---: | ---: | ---: |
+| Stage 1 | 1.2M | 2 | 1024 |
+| Stage 2 | 3.0M | 6 | 1024 |
+| Stage 3 | 1.5M | 3 | 1024 |
+| Stage 4 | 1.0M | 2 | 1536 |
+| Stage 5 | 1.2M | 3 | 1536 |
+| Stage 6 | 1.5M | 4 | 1536 |
+| Stage 7 | 1.0M | 3 | 1536 |
+| Stage 8 | 0.5M | 2 | 1536 |
+
+当前计划的全局 batch 目标为 256。
+
+需要特别区分两件事：
+
+- **数据量 / epoch / 分辨率阶段计划已经形成明确工作基线；**
+- **只有 Stage 1 的 Component optimizer/LR routing 已经被确认并写成仓库 preset。**
+
+Stage 2–8 曾经讨论过若干 optimizer/LR 数值，但这些数值尚不应作为 DTS 工程 contract 写死。后续如果训练策略再次调整，Parameter Policy 应允许用户通过 policy/preset 表达，而不是要求改 runtime 代码。
+
+## 22.2 已确认的 Stage 1 Component Policy
+
+仓库中的：
+
+`config/presets/component-anima-finetune-muon.toml`
+
+就是当前 Stage 1 的可执行参考配置。
+
+### Optimizer Profiles
+
+`muon`：
+
+- Type: `Muon`
+- `momentum = 0.95`
+- `weight_decay = 0.01`
+- `weight_decouple = true`
+- `nesterov = true`
+- `ns_steps = 5`
+- `ns_coeffs = "original"`
+- `use_adjusted_lr = false`
+
+`adamw`：
+
+- Type: `AdamW`
+- `betas = [0.9, 0.95]`
+- `eps = 1e-8`
+- `weight_decay = 0.0`
+
+### Component routing
+
+| Component | Train | Primary Optimizer | Primary LR | Fallback | Fallback LR |
+| --- | --- | --- | ---: | --- | ---: |
+| `dit.self_attention` | Yes | Muon | 1e-4 | AdamW | 2.5e-5 |
+| `dit.cross_attention` | Yes | Muon | 1e-4 | AdamW | 2.5e-5 |
+| `dit.mlp` | Yes | Muon | 1e-4 | AdamW | 2.5e-5 |
+| `dit.modulation` | Yes | AdamW | 2.5e-5 | — | — |
+| `dit.base_other` | Yes | AdamW | 2.5e-5 | — | — |
+| `dit.llm_adapter` | Yes | AdamW | 2e-6 | — | — |
+| `qwen3` | No | — | — | — | — |
+
+这张表体现了 Parameter Policy 最初真正需要解决的核心问题：
+
+> 同一次 full-model training 中，不同 architectural component 需要不同 optimizer、不同 LR，并且 Muon 只拥有它真正 eligible 的参数；其余参数必须由显式 AdamW fallback 接管。
+
+## 22.3 Stage 1 不是“多个 LR group”这么简单
+
+如果只把需求描述成“分层学习率”，会遗漏至少四个关键语义：
+
+1. Self/Cross Attention 和 MLP 的**主 optimizer 是 Muon**；
+2. 同一个 component 内并不是所有参数都满足 Muon eligibility；
+3. ineligible 参数必须进入**另一个真实 child optimizer**；
+4. Modulation / Base Other / LLM Adapter 从一开始就直接归 AdamW，而不是先进入 Muon 再由 Muon 内部偷偷处理。
+
+因此 Stage 1 的真正 runtime topology 是：
+
+```text
+CompositeOptimizer
+├─ Muon
+│  ├─ dit.self_attention eligible params @ 1e-4
+│  ├─ dit.cross_attention eligible params @ 1e-4
+│  └─ dit.mlp eligible params @ 1e-4
+│
+└─ AdamW
+   ├─ dit.self_attention fallback params @ 2.5e-5
+   ├─ dit.cross_attention fallback params @ 2.5e-5
+   ├─ dit.mlp fallback params @ 2.5e-5
+   ├─ dit.modulation @ 2.5e-5
+   ├─ dit.base_other @ 2.5e-5
+   └─ dit.llm_adapter @ 2e-6
+
+qwen3
+└─ frozen
+```
+
+这也是为什么 Parameter Policy 不能用“一个 optimizer + 参数组”完全替代：这里存在真正的 multi-optimizer ownership。
+
+---
+
+# 23. 从当前训练需求反推的工程硬性要求
+
+下面这些不是可选 UX polish，而是当前训练方案对 runtime 的硬要求。
+
+## 23.1 Component 必须成为 optimizer/LR authority
+
+进入 Component 模式后：
+
+- legacy `optimizer_type` 不能重新接管；
+- legacy global LR 不能覆盖 component LR；
+- legacy optimizer args 不能偷偷改变 child optimizer；
+- scheduler 只能按照 Parameter Policy runtime contract 与 child optimizer capability 构造。
+
+因此 Component 模式下保留 legacy 字段只能有两种意义：
+
+1. Standard → Component bootstrap source；
+2. 与 Parameter Policy 无关、且仍由 trainer 拥有的合法公共配置。
+
+它们不能同时成为第二套 optimizer/LR authority。
+
+## 23.2 Qwen3 与 LLM Adapter 必须是独立 ownership domain
+
+Stage 1 明确要求：
+
+- `dit.llm_adapter` Train；
+- `qwen3` Freeze。
+
+所以：
+
+```text
+LLM Adapter != Qwen3
+```
+
+不能因为两者都与语言条件相关，就把它们合并为一个“Text Encoder”开关或共享 LR。
+
+这也是 Anima component profile 中必须保留独立 `dit.llm_adapter` 与 `qwen3` component 的原因。
+
+## 23.3 Muon eligibility 必须发生在真实 parameter routing 层
+
+Muon 的 eligibility 不能通过 component 名称粗略判断。
+
+即使：
+
+```text
+component = dit.self_attention
+```
+
+其中仍可能存在：
+
+- 非二维参数；
+- bias；
+- normalization 参数；
+- 其它不符合 `model_hidden_2d_weight` 的参数。
+
+所以 eligibility 必须发生在 Parameter identity scan / routing 层，而不是 GUI 或 preset 层。
+
+## 23.4 Fallback 是 ownership，不是 error recovery
+
+Fallback 的语义不是：
+
+```text
+Muon.step() 失败
+→ 再试 AdamW
+```
+
+而是：
+
+```text
+routing time
+→ 参数 A 属于 Muon
+→ 参数 B 不符合 Muon eligibility
+→ 参数 B 从一开始就属于 AdamW
+```
+
+因此 fallback 必须参与：
+
+- Runtime Spec；
+- topology fingerprint；
+- checkpoint state；
+- LR logging；
+- save/resume identity；
+- ownership audit。
+
+## 23.5 阶段切换允许改变 policy，但不能伪装成同一 optimizer topology
+
+八阶段训练天然可能改变：
+
+- Train/Freeze；
+- optimizer type；
+- LR；
+- fallback；
+- Adapter 是否继续训练。
+
+如果这些变化改变 Runtime Spec，则 checkpoint topology fingerprint 也会改变。
+
+因此必须区分：
+
+### 同阶段 resume
+
+要求：
+
+- policy identity 一致；
+- optimizer topology 一致；
+- scheduler identity 一致；
+- 可以恢复 optimizer/scheduler state。
+
+### 跨阶段 transition
+
+如果新阶段改变 optimizer topology，则不能把旧 optimizer state 当作“同一训练状态”强行加载。
+
+正确语义应是：
+
+```text
+previous stage model checkpoint
+→ new stage policy
+→ new Runtime Spec
+→ new optimizer/scheduler state
+```
+
+除非未来专门设计并验证 optimizer-state migration contract。
+
+## 23.6 mixed BF16 与 full BF16 必须被当成不同 execution mode
+
+当前 Stage 1 preset 使用：
+
+`anima_precision_mode = "mixed_bf16"`
+
+这与 `full_bf16` 不是一回事。
+
+普通 mixed BF16 可以是：
+
+```text
+model parameters: FP32
+forward/autocast: BF16
+optimizer state: implementation-defined / typically FP32-oriented
+```
+
+而 full BF16 会改变参数和梯度本身的 dtype ownership。
+
+因此：
+
+> mixed BF16 跑通不能作为 full BF16 qualification evidence。
+
+这条边界必须持续保持。
+
+---
+
+# 24. 当前 qualification 证据应该怎样理解
+
+当前仓库已经有两类真实 CUDA harness，但它们验证的是不同维度。
+
+## 24.1 Shared optimizer/runtime GPU matrix
+
+`tools/run_parameter_policy_gpu_matrix.py`
+
+当前负责验证：
+
+- registry 中所有 `supported` optimizer 的 synthetic CUDA step；
+- optimizer state_dict reload；
+- `AdamW + AdamWScheduleFree` mixed child；
+- `Muon + AdamW` mixed child；
+- AdamW FP16 autocast；
+- AdamW BF16 autocast；
+- single-process `Accelerator.prepare()` device audit；
+- SD3 CLIP-L / CLIP-G co-residency seam。
+
+这是 **shared runtime evidence**。
+
+它能证明：
+
+> CompositeOptimizer / constructor / state reload / 某些 precision wrapper 在真实 CUDA 上基本工作。
+
+但它不能证明：
+
+> 某个真实 backend 的完整 trainer lifecycle 已经支持该 optimizer / feature。
+
+## 24.2 Backend GPU matrix
+
+`tools/run_parameter_policy_backend_gpu_matrix.py`
+
+要求对 10 个已开放 backend：
+
+- fresh Component training；
+- 生成 checkpoint manifest v2；
+- resume；
+- resume 后 manifest identity 不变。
+
+这是 **backend/trainer evidence**。
+
+它覆盖的重点是：
+
+- trainer integration；
+- ownership/device contract；
+- save/resume；
+- checkpoint identity。
+
+## 24.3 两类 matrix 不能互相替代
+
+必须维持：
+
+```text
+shared optimizer CUDA evidence
++
+backend trainer evidence
++
+feature-specific qualification
+=
+release claim
+```
+
+例如：
+
+- Muon synthetic CUDA step 成功，不等于 Anima full BF16 + Muon 已支持；
+- Anima baseline fresh/resume 成功，不等于 Lion8bit 在 Anima 上已经完成 release qualification；
+- BF16 autocast case 成功，不等于 full BF16 参数训练已支持。
+
+## 24.4 当前 `precision:adamw-bf16` 明确不是 full BF16 test
+
+现有 GPU matrix 的参数创建方式仍是：
+
+```python
+torch.nn.Parameter(... dtype=torch.float32)
+```
+
+随后只在：
+
+```python
+torch.autocast(device_type="cuda", dtype=torch.bfloat16)
+```
+
+中执行 forward。
+
+因此该 case 测的是：
+
+> FP32 parameters + BF16 autocast
+
+而不是：
+
+> BF16 parameters + BF16 gradients + Component optimizer state + Accelerate + save/resume
+
+所以它不能用于删除 `full_bf16` blocker。
+
+---
+
+# 25. 当前能力与参考训练需求的对应表
+
+| 需求 | 当前状态 | 说明 |
+| --- | --- | --- |
+| Anima Full Component Start | 已实现 baseline | `anima-finetune` 在 10-backend matrix 内 |
+| Self/Cross/MLP 独立 component | 已实现 | backend-owned component profile |
+| Modulation / Base Other 独立 LR | 已实现 | Component policy owns LR |
+| LLM Adapter 独立 LR | 已实现 | 与 Qwen3 分离 |
+| Qwen3 Freeze | 已实现 | Stage 1 preset 明确 `train=false` |
+| Muon primary | 已实现 | supported capability + runtime constructor |
+| AdamW explicit fallback | 已实现 | router-owned fallback child |
+| Muon + AdamW 同时存在 | 已实现 shared runtime | GPU matrix 有 `mixed:muon-adamw` |
+| save/resume topology identity | 已实现 | checkpoint manifest v2 + topology fingerprint |
+| ordinary mixed BF16 | 当前 baseline 路径 | Stage 1 preset 使用 mixed BF16 |
+| full BF16 | **仍 blocked** | 缺真实 full-BF16 Component qualification |
+| full FP16 | **仍 blocked** | 还涉及 GradScaler 等额外 contract |
+| FP8 | **仍 blocked** | dtype / identity / backend path 未 qualification |
+| explicit multi-GPU/DDP | **仍 blocked** | distributed ownership 未 qualification |
+| DeepSpeed | **仍 blocked** | optimizer ownership 会被重新接管 |
+| fused optimizer paths | **仍 blocked** | step ownership 语义不同 |
+| block swap/offload | **仍 blocked** | parameter residency 动态变化 |
+| AdamW/Muon 之外 supported optimizer | constructor + shared CUDA matrix 可覆盖 | 仍需持续 backend/dependency evidence |
+| restricted optimizer | **语义未开放** | 不能只靠 GPU smoke 解锁 |
+| Standard 原生 Muon + explicit fallback | **产品语义未实现** | 当前应优先通过 Standard → Component 表达 |
+
+---
+
+# 26. Next-1 应细化为 full BF16 qualification 项目
+
+现有路线图把 full BF16 放在第一优先级是正确的，但实现时不能直接“删除 blocker 然后跑一次”。
+
+建议拆成以下独立 gate。
+
+## 26.1 Gate A — synthetic true-BF16 parameter runtime
+
+新增专门 case，参数本身必须：
+
+```python
+dtype=torch.bfloat16
+```
+
+而不是只用 autocast。
+
+至少覆盖：
+
+- AdamW；
+- Muon；
+- Muon + AdamW fallback；
+- `step()`；
+- `zero_grad()`；
+- state_dict；
+- load_state_dict；
+- resume 后再次 step。
+
+需要显式记录：
+
+- parameter dtype；
+- gradient dtype；
+- child optimizer state dtype；
+- loss/output dtype；
+- device。
+
+## 26.2 Gate B — Accelerate prepare
+
+使用真正 BF16 parameters 验证：
+
+```text
+model
++
+CompositeOptimizer
+→ Accelerator.prepare()
+→ finalize_after_prepare()
+```
+
+然后重新执行：
+
+- parameter ownership audit；
+- device audit；
+- requires-grad audit。
+
+不能假设 mixed-BF16 下的 prepare 行为与 full BF16 相同。
+
+## 26.3 Gate C — one LoRA + one Full backend
+
+至少选择：
+
+- 一个 LoRA backend；
+- 一个 Full backend。
+
+原因是二者的 trainable parameter ownership 不同：
+
+- LoRA 主要训练 adapter；
+- Full training 直接训练 base-model parameters。
+
+full BF16 对这两类路径的影响不能由同一个 synthetic test 替代。
+
+## 26.4 Gate D — Anima Stage 1 reference workload
+
+必须使用与 Stage 1 相同的 ownership topology：
+
+- Self/Cross/MLP → Muon + AdamW fallback；
+- Mod/Base → AdamW；
+- LLM Adapter → AdamW；
+- Qwen3 frozen。
+
+至少完成：
+
+```text
+fresh
+→ real forward/backward
+→ optimizer step
+→ save
+→ checkpoint manifest
+→ resume
+→ another step
+```
+
+并验证：
+
+- Qwen3 没有获得梯度；
+- fallback 参数确实归 AdamW；
+- Muon child 只拥有 eligible 参数；
+- LR logging 与 policy 一致；
+- resume 后 topology 不漂移。
+
+## 26.5 Gate E — blocker removal policy
+
+当前 `full_bf16` blocker 是全局语义检查。
+
+解除时不能出现：
+
+```text
+只验证 Anima
+→ 全部 10 backend 一起自动解锁 full_bf16
+```
+
+有两种安全做法：
+
+### 方案 1：10 backend 全量 qualification 后再删除全局 blocker
+
+优点：
+
+- 逻辑简单；
+- 不新增 feature matrix。
+
+缺点：
+
+- 首次解锁成本高。
+
+### 方案 2：引入 backend × execution-feature qualification registry
+
+例如：
+
+```text
+anima-finetune:
+  full_bf16: qualified
+
+sdxl-finetune:
+  full_bf16: qualified
+
+flux-finetune:
+  full_bf16: blocked
+```
+
+然后 Preview/Start 根据：
+
+```text
+train_type + feature
+```
+
+判断，而不是只看全局字段名。
+
+如果后续 FP8、compile、block swap、multi-GPU 都会逐 backend 分批开放，那么长期看方案 2 更可扩展。
+
+---
+
+# 27. Next-2 应细化为 Optimizer qualification expansion
+
+当前文档已经正确区分：
+
+```text
+registry supported
+!=
+release-qualified everywhere
+```
+
+后续应把这个差异变成显式工程矩阵。
+
+## 27.1 Shared runtime 层
+
+当前 GPU matrix 已经会枚举所有 `component_support == "supported"` optimizer。
+
+继续要求每个 supported optimizer 至少具备：
+
+- real CUDA construction；
+- one step；
+- state_dict；
+- reload；
+- resumed step；
+- dependency/version metadata。
+
+## 27.2 Mixed child 层
+
+不能只测单 optimizer。
+
+至少需要有代表性的组合：
+
+- Muon + AdamW；
+- Muon + AdamW8bit；
+- Muon + Lion；
+- AdamW + ScheduleFree；
+- 同一 Profile 多 LR groups；
+- 多 Profile 同 optimizer type；
+- fallback 与 primary 使用不同 dependency family。
+
+这里的目标不是穷举所有笛卡尔积，而是验证 CompositeOptimizer 对不同 child lifecycle 的组合不会失效。
+
+## 27.3 Backend 层
+
+对准备宣称“正式支持”的 optimizer，需要至少在真实 trainer 中覆盖：
+
+- one LoRA backend；
+- one Full backend；
+- save/resume。
+
+如果 optimizer 有特殊 lifecycle，例如 ScheduleFree，还应额外覆盖：
+
+- `train()` / `eval()`；
+- sampling/save 前后状态；
+- scheduler absence contract。
+
+## 27.4 Dependency 层
+
+bitsandbytes / lion-pytorch / schedulefree / pytorch-optimizer 的兼容不能只记录“能 import”。
+
+qualification artifact 应记录：
+
+- package version；
+- torch version；
+- CUDA runtime；
+- GPU model；
+- git SHA。
+
+现有 GPU matrix 已经记录这些 metadata，应继续沿用。
+
+---
+
+# 28. Standard 模式 Muon + fallback 的决策边界
+
+现阶段不要因为当前参考 workload 需要 Muon + fallback，就把这套 ownership 复制进 Standard。
+
+当前架构最清楚的边界仍然是：
+
+```text
+Standard
+= legacy single-optimizer semantics
+
+Component
+= explicit multi-optimizer / fallback ownership semantics
+```
+
+因此当前产品建议继续保持：
+
+> 需要 Muon + explicit fallback 的用户，应通过 Standard → Component bootstrap 进入 Component，而不是在 Standard 内再实现一套 Parallel Parameter Policy。
+
+只有在未来明确提出：
+
+> Standard 必须原生支持 multi-optimizer fallback，同时又不能切换到 Component
+
+时，才应该单独设计 Standard compatibility runtime。
+
+否则会重新引入：
+
+- 两套 ownership compiler；
+- 两套 checkpoint topology；
+- 两套 fallback semantics；
+- 两套 GUI；
+- 更难保证 Standard regression。
+
+---
+
+# 29. 后续文档和 release 状态应使用统一术语
+
+为了避免再次出现“支持了到底是什么意思”的争议，后续 issue / PR / 文档建议统一使用以下状态词。
+
+## Implemented
+
+代码路径存在，host/runtime contract 已实现。
+
+不自动意味着真实 CUDA 已通过。
+
+## Shared-CUDA-qualified
+
+在 `run_parameter_policy_gpu_matrix.py` 这类 shared runtime matrix 上有真实 CUDA evidence。
+
+不自动意味着某个具体 backend 已通过。
+
+## Backend-qualified
+
+真实 trainer 完成 fresh + save + resume，并产生可审计 artifact。
+
+## Feature-qualified
+
+某个高级 execution feature，例如 full BF16 / FP8 / compile，针对指定 backend 完成专门 qualification。
+
+## Semantic-unsupported
+
+当前 Parameter Policy schema/ownership 本身无法准确表达。
+
+这类功能不能通过“多跑几个 GPU test”解锁。
+
+## Restricted optimizer
+
+optimizer 已注册，但其 LR/scheduler/ownership contract 尚未定义或尚未验证。
+
+也不能仅凭 constructor 成功就改成 supported。
+
+---
+
+# 30. 当前最直接的开发顺序
+
+从当前 reference workload 出发，后续工作顺序应收敛为：
+
+1. **full BF16 true-parameter qualification**
+   - 先补 shared CUDA case；
+   - 再做 Accelerate；
+   - 再做 LoRA/Full；
+   - 最后做 Anima Stage 1 fresh/resume。
+
+2. **决定 full BF16 blocker 的粒度**
+   - 全 backend 一次性解锁；
+   - 或建立 backend × feature qualification registry。
+
+3. **扩大 supported optimizer 的 release evidence**
+   - 不再把 constructor/synthetic smoke 等同于 backend support。
+
+4. **继续 GUI ownership closure**
+   - Component 模式下把 legacy optimizer/global LR 明确标成 bootstrap-only / non-authoritative；
+   - optimizer-specific typed args；
+   - fallback capability-aware UI。
+
+5. **再进入 full FP16 / FP8 / compile / offload / multi-GPU / DeepSpeed / fused runtime**
+   - 每个 feature 独立定义 ownership contract；
+   - 独立 qualification；
+   - 独立解除 blocker。
+
+---
+
+## 31. 当前 reference acceptance target
+
+对于当前 Anima Stage 1，多组件训练达到“release-qualified”的最低闭环应是：
+
+```text
+preset load
+→ canonical policy
+→ Preview runtime_ready
+→ parameter scan
+→ routing
+→ Muon eligibility split
+→ explicit AdamW fallback
+→ CompositeOptimizer
+→ Accelerator.prepare
+→ post-prepare audits
+→ real forward/backward
+→ optimizer step
+→ component LR logging
+→ save
+→ checkpoint manifest v2
+→ resume
+→ topology/ownership identity check
+→ second optimizer step
+```
+
+并且同时满足：
+
+- `dit.self_attention` / `dit.cross_attention` / `dit.mlp` 的 eligible 参数只属于 Muon；
+- 上述三个 component 的 ineligible 参数只属于 AdamW fallback；
+- `dit.modulation` / `dit.base_other` / `dit.llm_adapter` 只属于 AdamW；
+- `qwen3` 不属于任何 optimizer；
+- 没有 orphan trainable parameter；
+- 没有 duplicate ownership；
+- 没有 implicit hidden fallback；
+- checkpoint topology 与 resume 完全一致；
+- Standard path 不受影响。
+
+当前普通 mixed-BF16 Stage 1 已经具备表达和 baseline runtime 基础。
+
+**full BF16 版本仍然必须保持 fail-closed，直到第 26 节的 qualification gate 完成。**
