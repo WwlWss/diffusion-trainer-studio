@@ -252,10 +252,9 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                     [],
                 )
 
-    def test_non_anima_bootstrap_defers_unqualified_precision_modes_to_runtime(self):
+    def test_non_anima_bootstrap_defers_remaining_unqualified_precision_modes_to_runtime(self):
         cases = (
             ("full_fp16", True, "full_fp16"),
-            ("full_bf16", True, "full_bf16"),
             ("fp8_base", True, "fp8_base"),
             ("fp8_base_unet", True, "fp8_base_unet"),
         )
@@ -275,13 +274,33 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                 self.assertEqual(len(blockers), 1)
                 self.assertIn(marker, blockers[0])
 
-    def test_anima_bootstrap_behavior_is_unchanged_for_unqualified_precision(self):
-        blockers = parameter_policy_compatibility_blockers(
-            {"full_bf16": True},
-            "anima-finetune",
-        )
-        self.assertEqual(len(blockers), 1)
-        self.assertIn("full_bf16", blockers[0])
+    def test_full_bf16_is_no_longer_owned_by_compatibility_gate(self):
+        for train_type in ("flux-finetune", "anima-finetune"):
+            with self.subTest(train_type=train_type):
+                self.assertEqual(
+                    parameter_policy_v1_semantic_blockers(
+                        {"full_bf16": True},
+                        train_type,
+                    ),
+                    [],
+                )
+                self.assertEqual(
+                    parameter_policy_compatibility_blockers(
+                        {"full_bf16": True},
+                        train_type,
+                    ),
+                    [],
+                )
+
+    def test_anima_other_unqualified_precision_behavior_is_unchanged(self):
+        for field in ("full_fp16", "fp8_base", "fp8_base_unet"):
+            with self.subTest(field=field):
+                blockers = parameter_policy_compatibility_blockers(
+                    {field: True},
+                    "anima-finetune",
+                )
+                self.assertEqual(len(blockers), 1)
+                self.assertIn(field, blockers[0])
 
     def test_ordinary_mixed_precision_remains_allowed(self):
         for precision in ("no", "fp16", "bf16"):
@@ -348,7 +367,6 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
             ("blockwise_fused_optimizers", 2),
             ("deepspeed", []),
             ("full_fp16", "maybe"),
-            ("full_bf16", 2),
             ("fp8_base", []),
             ("fp8_base_unet", "maybe"),
         )
