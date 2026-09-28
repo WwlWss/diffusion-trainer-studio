@@ -112,6 +112,31 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         self.assertEqual(observed, [("AdamW", 1)])
         return args, model, structural_bias, session, scheduler
 
+    def test_full_bf16_direct_trainer_fails_before_parameter_scan(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args = _scheduler_args(
+                policy_path,
+                full_bf16=True,
+                mixed_precision="bf16",
+            )
+            model = TinyFlux()
+
+            with mock.patch(
+                "mikazuki.parameter_policy_trainer.scan_parameter_roots"
+            ) as scan:
+                with self.assertRaisesRegex(
+                    ParameterPolicyTrainerRuntimeError,
+                    "full_bf16",
+                ):
+                    create_parameter_policy_session(
+                        args=args,
+                        train_type="flux-finetune",
+                        roots={"transformer": model},
+                    )
+                scan.assert_not_called()
+
     def test_session_owns_freeze_scheduler_prepare_device_and_manifest(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
