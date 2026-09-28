@@ -577,6 +577,20 @@ def parameter_policy_runtime_blockers(
                 normalized_train_type,
             )
         )
+
+        # Import lazily so Standard mode and inactive Parameter Policy callers
+        # do not load the execution-feature qualification subsystem.
+        from mikazuki.parameter_policy_execution import (
+            parameter_policy_execution_blockers,
+        )
+
+        blockers.extend(
+            parameter_policy_execution_blockers(
+                canonical,
+                train_type=normalized_train_type,
+                effective_config=effective_config,
+            )
+        )
         if normalized_train_type not in {"anima-lora", "anima-finetune"}:
             blockers.extend(
                 _non_anima_policy_structure_and_target_blockers(
