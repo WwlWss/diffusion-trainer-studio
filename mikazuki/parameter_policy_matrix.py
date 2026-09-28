@@ -6,8 +6,10 @@ Start and the execution modes that still require dedicated qualification or
 new semantics.
 
 "Baseline" means one CUDA process using the ordinary trainer optimizer/forward
-lifecycle. Feature-specific blockers remain authoritative in
-parameter_policy_compat.py.
+lifecycle. The baseline matrix does not grant execution-feature qualification:
+individual blockers may remain in parameter_policy_compat.py or move to the
+dedicated execution-feature qualification layer as their runtime contracts are
+developed.
 """
 
 from __future__ import annotations
