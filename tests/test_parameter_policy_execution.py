@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +42,9 @@ class _ExplodingMapping(dict):
         raise AssertionError("inactive execution feature consulted qualification metadata")
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
     def test_backend_full_bf16_table_matches_release_matrix_exactly(self):
         self.assertEqual(
@@ -76,6 +81,35 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
         row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-dreambooth"]
         self.assertEqual(row.status, "unsupported")
         self.assertTrue(row.reason)
+
+    def test_qualification_rows_are_structurally_valid_and_fail_closed_by_default(self):
+        allowed = {"pending", "qualified", "unsupported"}
+        rows = (
+            list(execution.FULL_BF16_BACKEND_QUALIFICATIONS.values())
+            + list(execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.values())
+        )
+        for row in rows:
+            with self.subTest(status=row.status, reason=row.reason):
+                self.assertIn(row.status, allowed)
+                self.assertTrue(row.reason.strip())
+                if row.status == "qualified":
+                    self.assertTrue(str(row.evidence_case_id or "").strip())
+                else:
+                    self.assertIsNone(row.evidence_case_id)
+
+    def test_execution_module_remains_torch_free_and_host_side(self):
+        source = (ROOT / "mikazuki" / "parameter_policy_execution.py").read_text(
+            encoding="utf-8"
+        )
+        tree = ast.parse(source)
+        imported_roots = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported_roots.add(node.module.split(".", 1)[0])
+        self.assertNotIn("torch", imported_roots)
+        self.assertNotIn("accelerate", imported_roots)
 
 
 class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
