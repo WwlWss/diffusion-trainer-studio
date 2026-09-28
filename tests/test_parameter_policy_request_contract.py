@@ -190,6 +190,55 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
                     trained.runtime_blockers,
                 )
 
+    def test_full_bf16_moves_to_execution_gate_without_opening_start(self):
+        prepare = _real_prepare_request()
+        prepared = prepare(
+            _component_gui_config(
+                "flux-finetune",
+                ["transformer.double_stream"],
+                full_bf16=True,
+                mixed_precision="bf16",
+            ),
+            "flux-finetune",
+            launch=False,
+        )
+        self.assertTrue(prepared.config["full_bf16"])
+        self.assertTrue(
+            any(
+                "full_bf16" in blocker and "pending" in blocker
+                for blocker in prepared.runtime_blockers
+            ),
+            prepared.runtime_blockers,
+        )
+
+        with self.assertRaisesRegex(ValueError, "full_bf16"):
+            prepare(
+                _component_gui_config(
+                    "flux-finetune",
+                    ["transformer.double_stream"],
+                    full_bf16=True,
+                    mixed_precision="bf16",
+                ),
+                "flux-finetune",
+                launch=True,
+            )
+
+    def test_inactive_full_bf16_does_not_change_normal_component_readiness(self):
+        prepare = _real_prepare_request()
+        for raw in (False, "false", 0):
+            with self.subTest(raw=raw):
+                prepared = prepare(
+                    _component_gui_config(
+                        "flux-finetune",
+                        ["transformer.double_stream"],
+                        full_bf16=raw,
+                        mixed_precision="bf16",
+                    ),
+                    "flux-finetune",
+                    launch=False,
+                )
+                self.assertEqual(prepared.runtime_blockers, [])
+
     def test_fp8_survives_bootstrap_then_blocks_runtime(self):
         prepare = _real_prepare_request()
         resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
