@@ -247,6 +247,58 @@ def active_parameter_policy_execution_features(
     return ()
 
 
+def _full_bf16_mixed_precision(
+    effective_config: Mapping[str, Any],
+) -> str:
+    mixed_precision = str(
+        effective_config.get("mixed_precision") or "no"
+    ).strip().lower()
+    if mixed_precision != "bf16":
+        raise ValueError(
+            "Component full_bf16 requires mixed_precision='bf16'; "
+            f"received {mixed_precision!r}."
+        )
+    return mixed_precision
+
+
+def build_parameter_policy_execution_contract(
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+) -> ParameterPolicyExecutionContract | None:
+    """Compile active execution semantics without consulting release qualification.
+
+    Inactive execution features are a strict no-op.  Qualification metadata is
+    deliberately not part of contract construction so promoting a backend or
+    optimizer from pending to qualified cannot change checkpoint identity.
+    """
+
+    features = active_parameter_policy_execution_features(effective_config)
+    if not features:
+        return None
+
+    if features != ("full_bf16",):
+        raise ValueError(
+            "Parameter Policy execution has no runtime contract for feature "
+            f"combination {features!r}."
+        )
+
+    normalized_train_type = str(train_type or "").strip().lower()
+    if not normalized_train_type:
+        raise ValueError(
+            "Parameter Policy execution contract requires a non-empty train_type."
+        )
+
+    mixed_precision = _full_bf16_mixed_precision(effective_config)
+    return ParameterPolicyExecutionContract(
+        train_type=normalized_train_type,
+        features=("full_bf16",),
+        mixed_precision=mixed_precision,
+        expected_trainable_parameter_dtype="bfloat16",
+        require_live_root_identity=True,
+    )
+
+
 def _qualification_is_released(
     qualification: ExecutionFeatureQualification | None,
 ) -> bool:
@@ -333,12 +385,10 @@ def parameter_policy_execution_blockers(
     if "full_bf16" not in features:
         return []
 
-    mixed_precision = str(effective_config.get("mixed_precision") or "no").strip().lower()
-    if mixed_precision != "bf16":
-        return [
-            "Component full_bf16 requires mixed_precision='bf16'; "
-            f"received {mixed_precision!r}."
-        ]
+    try:
+        _full_bf16_mixed_precision(effective_config)
+    except ValueError as exc:
+        return [str(exc)]
 
     normalized_train_type = str(train_type or "").strip().lower()
     backend_qualification = FULL_BF16_BACKEND_QUALIFICATIONS.get(
@@ -405,5 +455,6 @@ __all__ = [
     "FULL_BF16_BACKEND_QUALIFICATIONS",
     "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
     "active_parameter_policy_execution_features",
+    "build_parameter_policy_execution_contract",
     "parameter_policy_execution_blockers",
 ]
