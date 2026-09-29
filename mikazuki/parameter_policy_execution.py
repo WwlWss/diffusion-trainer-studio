@@ -13,12 +13,84 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any, Literal
 
 from mikazuki.optimizer_profiles import get_optimizer_capability
 
 
 QualificationStatus = Literal["pending", "qualified", "unsupported"]
+
+
+PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA = "dts.parameter-policy.execution-identity"
+PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION = 1
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ParameterPolicyExecutionContract:
+    """Immutable host-side execution semantics for one Parameter Policy job.
+
+    Runtime-enforcement fields are intentionally broader than the serialized
+    execution identity.  Checkpoint compatibility must depend only on stable
+    execution semantics, not on the mechanism DTS currently uses to audit them.
+    """
+
+    train_type: str
+    features: tuple[str, ...]
+    mixed_precision: str | None
+    expected_trainable_parameter_dtype: str | None
+    require_live_root_identity: bool
+
+    def execution_identity(self) -> dict[str, Any]:
+        if self.features != ("full_bf16",):
+            raise ValueError(
+                "Parameter Policy execution identity has no schema for feature "
+                f"combination {self.features!r}."
+            )
+        if self.mixed_precision != "bf16":
+            raise ValueError(
+                "full_bf16 execution identity requires mixed_precision='bf16'."
+            )
+        if self.expected_trainable_parameter_dtype != "bfloat16":
+            raise ValueError(
+                "full_bf16 execution identity requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+        normalized_train_type = str(self.train_type or "").strip().lower()
+        if not normalized_train_type:
+            raise ValueError(
+                "Parameter Policy execution identity requires a non-empty train_type."
+            )
+
+        return {
+            "schema": PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA,
+            "version": PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION,
+            "train_type": normalized_train_type,
+            "features": {
+                "full_bf16": {
+                    "mixed_precision": "bf16",
+                    "trainable_parameter_dtype": "bfloat16",
+                }
+            },
+        }
+
+    def execution_signature(self) -> str:
+        return _sha256_json(self.execution_identity())
 
 
 @dataclass(frozen=True)
@@ -327,6 +399,9 @@ def parameter_policy_execution_blockers(
 
 __all__ = [
     "ExecutionFeatureQualification",
+    "PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA",
+    "PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION",
+    "ParameterPolicyExecutionContract",
     "FULL_BF16_BACKEND_QUALIFICATIONS",
     "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
     "active_parameter_policy_execution_features",
