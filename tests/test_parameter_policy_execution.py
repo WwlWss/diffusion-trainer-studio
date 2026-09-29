@@ -324,14 +324,25 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             encoding="utf-8"
         )
         tree = ast.parse(source)
-        imported_roots = set()
+        imported_modules = set()
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
-                imported_roots.update(alias.name.split(".", 1)[0] for alias in node.names)
+                imported_modules.update(alias.name for alias in node.names)
             elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_roots.add(node.module.split(".", 1)[0])
-        self.assertNotIn("torch", imported_roots)
-        self.assertNotIn("accelerate", imported_roots)
+                imported_modules.add(node.module)
+
+        forbidden_prefixes = (
+            "torch",
+            "accelerate",
+            "mikazuki.parameter_policy_trainer",
+            "mikazuki.parameter_policy_torch",
+        )
+        for imported in imported_modules:
+            for forbidden in forbidden_prefixes:
+                self.assertFalse(
+                    imported == forbidden or imported.startswith(forbidden + "."),
+                    f"execution module must not import runtime dependency {imported!r}",
+                )
 
 
 class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
