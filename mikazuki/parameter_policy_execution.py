@@ -4,9 +4,10 @@ This module is intentionally dormant unless an execution feature is explicitly
 active in the effective trainer configuration.  It is torch-free, model-free,
 I/O-free, and must not mutate policy/config state.
 
-Phase A introduces only the qualification contract for Component full BF16.
-All backend and optimizer qualifications start fail-closed; later phases may
-promote individual entries only after exact-head CUDA evidence exists.
+Phase A introduced fail-closed qualification for Component full BF16. Phase B1
+adds a deterministic host-side execution contract/identity ABI without wiring
+it into trainer runtime or checkpoint state. All backend and optimizer
+qualifications remain fail-closed until later exact-head CUDA evidence exists.
 """
 
 from __future__ import annotations
