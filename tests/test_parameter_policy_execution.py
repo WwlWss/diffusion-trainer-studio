@@ -45,6 +45,86 @@ class _ExplodingMapping(dict):
 ROOT = Path(__file__).resolve().parents[1]
 
 
+class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
+    def _contract(self, **overrides):
+        values = {
+            "train_type": "anima-finetune",
+            "features": ("full_bf16",),
+            "mixed_precision": "bf16",
+            "expected_trainable_parameter_dtype": "bfloat16",
+            "require_live_root_identity": True,
+        }
+        values.update(overrides)
+        return execution.ParameterPolicyExecutionContract(**values)
+
+    def test_full_bf16_execution_identity_is_exact_and_stable(self):
+        contract = self._contract()
+        self.assertEqual(
+            contract.execution_identity(),
+            {
+                "schema": "dts.parameter-policy.execution-identity",
+                "version": 1,
+                "train_type": "anima-finetune",
+                "features": {
+                    "full_bf16": {
+                        "mixed_precision": "bf16",
+                        "trainable_parameter_dtype": "bfloat16",
+                    }
+                },
+            },
+        )
+        self.assertEqual(
+            contract.execution_signature(),
+            "9f511c8f94192fe7ad4728285157466a9d6cc79488e71b0be569da62451dcca8",
+        )
+
+    def test_runtime_enforcement_fields_do_not_change_execution_identity(self):
+        strict = self._contract(require_live_root_identity=True)
+        relaxed = self._contract(require_live_root_identity=False)
+        self.assertEqual(strict.execution_identity(), relaxed.execution_identity())
+        self.assertEqual(strict.execution_signature(), relaxed.execution_signature())
+
+    def test_execution_identity_normalizes_train_type(self):
+        left = self._contract(train_type=" Anima-Finetune ")
+        right = self._contract(train_type="anima-finetune")
+        self.assertEqual(left.execution_identity(), right.execution_identity())
+        self.assertEqual(left.execution_signature(), right.execution_signature())
+
+    def test_execution_identity_returns_fresh_mutable_payload(self):
+        contract = self._contract()
+        first = contract.execution_identity()
+        first["features"]["full_bf16"]["mixed_precision"] = "mutated"
+        second = contract.execution_identity()
+        self.assertEqual(
+            second["features"]["full_bf16"]["mixed_precision"],
+            "bf16",
+        )
+
+    def test_execution_identity_rejects_unknown_feature_combinations(self):
+        for features in ((), ("future_feature",), ("full_bf16", "future_feature")):
+            with self.subTest(features=features), self.assertRaisesRegex(
+                ValueError,
+                "feature combination",
+            ):
+                self._contract(features=features).execution_identity()
+
+    def test_execution_identity_rejects_malformed_full_bf16_semantics(self):
+        cases = (
+            ({"mixed_precision": "fp16"}, "mixed_precision"),
+            (
+                {"expected_trainable_parameter_dtype": "float32"},
+                "bfloat16",
+            ),
+            ({"train_type": "   "}, "train_type"),
+        )
+        for overrides, marker in cases:
+            with self.subTest(overrides=overrides), self.assertRaisesRegex(
+                ValueError,
+                marker,
+            ):
+                self._contract(**overrides).execution_identity()
+
+
 class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
     def test_backend_full_bf16_table_matches_release_matrix_exactly(self):
         self.assertEqual(
