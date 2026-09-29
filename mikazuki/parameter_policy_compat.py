@@ -242,19 +242,18 @@ def parameter_policy_v1_semantic_blockers(
             "save/resume 语义。",
         )
 
-    for field, label in (
-        ("full_fp16", "full FP16"),
-        ("full_bf16", "full BF16"),
-    ):
-        if _as_bool(effective_config.get(field), field=field):
-            _append_once(
-                blockers,
-                seen,
-                f"{field} 会把训练模型/梯度切换为 {label} runtime；"
-                "Component-wise v1 尚未完成真实 CUDA 下的 CompositeOptimizer、"
-                "GradScaler/Accelerate prepare 与 checkpoint save/resume 验证。"
-                "当前请使用普通 mixed_precision 模式。",
-            )
+    # full_bf16 qualification is owned by parameter_policy_execution.py.
+    # Keep full_fp16 here until that feature receives its own execution contract.
+    field = "full_fp16"
+    if _as_bool(effective_config.get(field), field=field):
+        _append_once(
+            blockers,
+            seen,
+            "full_fp16 会把训练模型/梯度切换为 full FP16 runtime；"
+            "Component-wise v1 尚未完成真实 CUDA 下的 CompositeOptimizer、"
+            "GradScaler/Accelerate prepare 与 checkpoint save/resume 验证。"
+            "当前请使用普通 mixed_precision 模式。",
+        )
 
     for field in ("fp8_base", "fp8_base_unet"):
         if _as_bool(effective_config.get(field), field=field):

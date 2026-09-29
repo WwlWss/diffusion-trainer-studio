@@ -1059,6 +1059,24 @@ def create_parameter_policy_session(
             + "\n- ".join(semantic_blockers)
         )
 
+    # Direct trainer entry must share the same execution qualification gate as
+    # Preview/Start.  This remains host-side preflight and runs before any
+    # parameter scan, routing, optimizer construction, or requires_grad change.
+    from mikazuki.parameter_policy_execution import (
+        parameter_policy_execution_blockers,
+    )
+
+    execution_blockers = parameter_policy_execution_blockers(
+        policy,
+        train_type=train_type,
+        effective_config=effective_config,
+    )
+    if execution_blockers:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Parameter Policy execution feature is not qualified:\n- "
+            + "\n- ".join(execution_blockers)
+        )
+
     descriptors = scan_parameter_roots(roots)
     structural = _unique_parameters(structural_frozen_parameters)
     descriptor_ids = {descriptor.parameter_id for descriptor in descriptors}

@@ -66,6 +66,20 @@ evidence reproducible and machine-readable.
 
 Step 6F distinguishes two blocker classes.
 
+`full_bf16` is the first qualification-only feature whose ownership is being
+moved out of the monolithic compatibility gate. Its host-side source of truth
+is `mikazuki/parameter_policy_execution.py`. This does not open full BF16:
+Phase A starts every backend and every baseline-supported optimizer as
+`pending`, except `sd-dreambooth`, which is explicitly `unsupported` until a
+real training-model full-BF16 contract exists. Missing qualification metadata
+also fails closed.
+
+The inactive-feature invariant is mandatory: when Component `full_bf16` is not
+enabled, the execution layer must return before consulting feature
+qualification metadata and must not change blocker contents/order, canonical
+policy, optimizer topology, checkpoint identity, or trainer behavior. Standard
+mode continues to bypass Parameter Policy runtime entirely.
+
 Qualification blockers may eventually be removed after a dedicated runtime
 contract and GPU evidence:
 

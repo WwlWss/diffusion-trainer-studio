@@ -190,6 +190,102 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
                     trained.runtime_blockers,
                 )
 
+    def test_anima_full_bf16_bootstrap_reaches_execution_gate_then_blocks_start(self):
+        prepare = _real_prepare_request()
+        resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
+
+        standard = {
+            "optimizer_type": "AdamW",
+            "anima_finetune_learning_rate": 1e-6,
+            "anima_precision_mode": "full_bf16",
+            "anima_latent_cache_mode": "off",
+            "anima_text_encoder_cache_mode": "off",
+            "anima_checkpoint_mode": "standard",
+            "train_qwen3_text_encoder": False,
+        }
+        gui = bootstrap_parameter_policy_editor(
+            standard,
+            "anima-finetune",
+            resolve_backend=resolver,
+        )
+        self.assertEqual(gui["optimization_mode"], "component")
+
+        component_raw = dict(standard)
+        component_raw.update(gui)
+        preview_raw = dict(component_raw)
+        start_raw = dict(component_raw)
+
+        preview = prepare(
+            preview_raw,
+            "anima-finetune",
+            launch=False,
+        )
+        self.assertEqual(preview.config["mixed_precision"], "bf16")
+        self.assertTrue(preview.config["full_bf16"])
+        self.assertTrue(
+            any(
+                "full_bf16" in blocker and "pending" in blocker
+                for blocker in preview.runtime_blockers
+            ),
+            preview.runtime_blockers,
+        )
+
+        with self.assertRaisesRegex(ValueError, "full_bf16"):
+            prepare(
+                start_raw,
+                "anima-finetune",
+                launch=True,
+            )
+
+    def test_full_bf16_moves_to_execution_gate_without_opening_start(self):
+        prepare = _real_prepare_request()
+        prepared = prepare(
+            _component_gui_config(
+                "flux-finetune",
+                ["transformer.double_stream"],
+                full_bf16=True,
+                mixed_precision="bf16",
+            ),
+            "flux-finetune",
+            launch=False,
+        )
+        self.assertTrue(prepared.config["full_bf16"])
+        self.assertTrue(
+            any(
+                "full_bf16" in blocker and "pending" in blocker
+                for blocker in prepared.runtime_blockers
+            ),
+            prepared.runtime_blockers,
+        )
+
+        with self.assertRaisesRegex(ValueError, "full_bf16"):
+            prepare(
+                _component_gui_config(
+                    "flux-finetune",
+                    ["transformer.double_stream"],
+                    full_bf16=True,
+                    mixed_precision="bf16",
+                ),
+                "flux-finetune",
+                launch=True,
+            )
+
+    def test_inactive_full_bf16_does_not_change_normal_component_readiness(self):
+        prepare = _real_prepare_request()
+        for raw in (False, "false", 0):
+            with self.subTest(raw=raw):
+                prepared = prepare(
+                    _component_gui_config(
+                        "flux-finetune",
+                        ["transformer.double_stream"],
+                        full_bf16=raw,
+                        mixed_precision="bf16",
+                    ),
+                    "flux-finetune",
+                    launch=False,
+                )
+                self.assertEqual(prepared.runtime_blockers, [])
+
     def test_fp8_survives_bootstrap_then_blocks_runtime(self):
         prepare = _real_prepare_request()
         resolver = lambda config, requested: (requested, f"trainer/{requested}.py")

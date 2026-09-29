@@ -18,6 +18,7 @@ from mikazuki.parameter_policy import (
     validate_parameter_policy,
 )
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
+from mikazuki.parameter_policy_execution import parameter_policy_execution_blockers
 from mikazuki.parameter_policy_editor import (
     bootstrap_parameter_policy_editor,
     normalize_parameter_policy_editor_state,
@@ -703,10 +704,32 @@ class ParameterPolicyStep7RegistryClosureTests(unittest.TestCase):
         for field in sorted(expected):
             with self.subTest(field=field):
                 train_type = "anima-finetune" if field == "compile" else "flux-finetune"
-                blockers = parameter_policy_v1_semantic_blockers(
-                    {field: active_values[field]},
-                    train_type,
-                )
+                if field == "full_bf16":
+                    blockers = parameter_policy_execution_blockers(
+                        {
+                            "version": 1,
+                            "optimizer_profiles": {
+                                "main": {"type": "AdamW", "args": {}},
+                            },
+                            "components": {
+                                "component": {
+                                    "train": True,
+                                    "optimizer_profile": "main",
+                                    "learning_rate": 1e-4,
+                                }
+                            },
+                        },
+                        train_type=train_type,
+                        effective_config={
+                            field: active_values[field],
+                            "mixed_precision": "bf16",
+                        },
+                    )
+                else:
+                    blockers = parameter_policy_v1_semantic_blockers(
+                        {field: active_values[field]},
+                        train_type,
+                    )
                 self.assertTrue(
                     blockers,
                     f"{field} stopped producing a Step 6F qualification blocker",

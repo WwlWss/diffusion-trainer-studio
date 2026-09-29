@@ -2722,25 +2722,54 @@ Anima Muon+AdamW cross-axis reference
 - `mikazuki/parameter_policy_execution.py`
 - `tests/test_parameter_policy_execution.py`
 
-修改：
+生产代码仅修改：
 
 - `mikazuki/parameter_policy_compat.py`
 - `mikazuki/parameter_policy.py`
+- `mikazuki/parameter_policy_trainer.py`（只增加 host-side preflight，不改变 torch/runtime lifecycle）
+
+测试修改：
+
 - `tests/test_parameter_policy_compat.py`
 - `tests/test_parameter_policy_request_contract.py`
-- `tests/test_parameter_policy_frontend_behavior.py`
+- `tests/test_parameter_policy_trainer_runtime_smoke.py`
 
-目标：
+文档/注释 closeout：
 
-- full BF16 从 unconditional blocker 迁到 canonical-policy-aware execution gate；
-- 10 backend 初始全部 fail closed；
-- `sd-dreambooth` 明确 unsupported；
-- AdamW/Muon feature rules 存在但 backend 未 qualified 前不开放；
-- Preview / Export / Start blocker 一致；
-- Standard runtime 行为不变。
+- `mikazuki/parameter_policy_matrix.py`
+- `docs/parameter-policy-step6f-plan.md`
+- 本文档
 
-此阶段**不开放任何 full BF16 backend**。
+Phase A 的唯一行为迁移：
 
+```text
+full_bf16 unconditional compatibility blocker
+→ canonical-policy-aware execution qualification blocker
+```
+
+不得顺便迁移 `full_fp16`、FP8、compile、DeepSpeed、fused、swap/offload 或 multi-GPU。
+
+硬性 invariant：
+
+- Standard 没有 `parameter_policy_config` 时不进入 execution subsystem；
+- Component `full_bf16` 未启用时，execution helper 必须在访问 backend/optimizer qualification metadata 之前立即返回空 blocker；
+- inactive `full_bf16` 不改变现有 blocker 内容和顺序；
+- inactive `full_bf16` 不改变 canonical policy、routing、optimizer topology、scheduler、checkpoint 或 trainer lifecycle；
+- direct trainer 与 Preview/Start 使用同一个 execution gate，且 active-but-unqualified full BF16 必须在 parameter scan / optimizer construction 前 fail closed；
+- 10 backend 初始全部为 `pending` / `unsupported`，没有任何 `qualified`；
+- 所有 baseline-supported optimizer 初始均为 `pending`，没有任何 `qualified`；
+- `sd-dreambooth` 明确为 `unsupported`，直到单独实现并验证真正 full-BF16 trainer contract；
+- missing qualification metadata 与 `qualified` 但缺 evidence id 都必须 fail closed；
+- 不新增 hidden CLI / environment bypass；
+- 不修改 frontend、checkpoint schema、具体 model trainer BF16 cast、`parameter_policy_torch.py` 或训练 hot path。
+
+Phase A 按三个 closeout 单元执行：
+
+1. **A1 dormant infrastructure**：先加入静态 qualification metadata / pure host helpers / tests，没有 caller，零产品行为变化；
+2. **A2 ownership transfer**：只迁 `full_bf16` blocker，并把 request gate 与 direct trainer preflight 接到同一 helper；
+3. **A3 closeout**：只更新矩阵说明与开发文档，不再改变生产逻辑。
+
+此阶段**不开放任何 Component full BF16 backend 或 optimizer**。
 ## Phase B — execution runtime contract
 
 修改：
