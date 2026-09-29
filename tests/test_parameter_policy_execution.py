@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -123,6 +124,147 @@ class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
                 marker,
             ):
                 self._contract(**overrides).execution_identity()
+
+
+class ParameterPolicyExecutionContractBuilderTests(unittest.TestCase):
+    def test_inactive_execution_contract_is_none_before_other_validation(self):
+        for raw in (None, False, 0, "", "false", "off", "no"):
+            with self.subTest(raw=raw), patch.object(
+                execution,
+                "FULL_BF16_BACKEND_QUALIFICATIONS",
+                _ExplodingMapping(),
+            ), patch.object(
+                execution,
+                "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
+                _ExplodingMapping(),
+            ):
+                self.assertIsNone(
+                    execution.build_parameter_policy_execution_contract(
+                        train_type="",
+                        effective_config={
+                            "full_bf16": raw,
+                            "mixed_precision": "not-a-real-mode",
+                        },
+                    )
+                )
+
+    def test_full_bf16_contract_is_compiled_from_effective_config(self):
+        contract = execution.build_parameter_policy_execution_contract(
+            train_type=" Anima-Finetune ",
+            effective_config={
+                "full_bf16": "true",
+                "mixed_precision": " BF16 ",
+            },
+        )
+        self.assertIsNotNone(contract)
+        self.assertEqual(contract.train_type, "anima-finetune")
+        self.assertEqual(contract.features, ("full_bf16",))
+        self.assertEqual(contract.mixed_precision, "bf16")
+        self.assertEqual(
+            contract.expected_trainable_parameter_dtype,
+            "bfloat16",
+        )
+        self.assertTrue(contract.require_live_root_identity)
+
+    def test_contract_builder_does_not_consult_qualification_metadata(self):
+        with patch.object(
+            execution,
+            "FULL_BF16_BACKEND_QUALIFICATIONS",
+            _ExplodingMapping(),
+        ), patch.object(
+            execution,
+            "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
+            _ExplodingMapping(),
+        ):
+            contract = execution.build_parameter_policy_execution_contract(
+                train_type="anima-finetune",
+                effective_config={
+                    "full_bf16": True,
+                    "mixed_precision": "bf16",
+                },
+            )
+        self.assertEqual(contract.features, ("full_bf16",))
+
+    def test_contract_builder_does_not_mutate_effective_config(self):
+        config = {
+            "full_bf16": True,
+            "mixed_precision": "bf16",
+            "unrelated": {
+                "nested": [1, 2, {"value": "keep"}],
+            },
+        }
+        before = copy.deepcopy(config)
+        execution.build_parameter_policy_execution_contract(
+            train_type="flux-finetune",
+            effective_config=config,
+        )
+        self.assertEqual(config, before)
+
+    def test_unrelated_config_does_not_change_execution_identity_or_signature(self):
+        left = execution.build_parameter_policy_execution_contract(
+            train_type="anima-finetune",
+            effective_config={
+                "full_bf16": True,
+                "mixed_precision": "bf16",
+                "batch_size": 1,
+                "learning_rate": 1e-6,
+                "gradient_checkpointing": False,
+            },
+        )
+        right = execution.build_parameter_policy_execution_contract(
+            train_type=" Anima-Finetune ",
+            effective_config={
+                "gradient_checkpointing": True,
+                "learning_rate": 9e-4,
+                "batch_size": 32,
+                "mixed_precision": "BF16",
+                "full_bf16": "true",
+            },
+        )
+        self.assertEqual(left.execution_identity(), right.execution_identity())
+        self.assertEqual(left.execution_signature(), right.execution_signature())
+
+    def test_full_bf16_contract_rejects_invalid_mixed_precision(self):
+        for raw in (None, "no", "fp16", "float32"):
+            with self.subTest(raw=raw), self.assertRaisesRegex(
+                ValueError,
+                "mixed_precision='bf16'",
+            ):
+                execution.build_parameter_policy_execution_contract(
+                    train_type="anima-finetune",
+                    effective_config={
+                        "full_bf16": True,
+                        "mixed_precision": raw,
+                    },
+                )
+
+    def test_active_contract_requires_non_empty_train_type(self):
+        for raw in (None, "", "   "):
+            with self.subTest(raw=raw), self.assertRaisesRegex(
+                ValueError,
+                "train_type",
+            ):
+                execution.build_parameter_policy_execution_contract(
+                    train_type=raw,
+                    effective_config={
+                        "full_bf16": True,
+                        "mixed_precision": "bf16",
+                    },
+                )
+
+    def test_unknown_future_feature_combination_fails_closed(self):
+        with patch.object(
+            execution,
+            "active_parameter_policy_execution_features",
+            return_value=("full_bf16", "future_feature"),
+        ), self.assertRaisesRegex(ValueError, "feature combination"):
+            execution.build_parameter_policy_execution_contract(
+                train_type="anima-finetune",
+                effective_config={
+                    "full_bf16": True,
+                    "mixed_precision": "bf16",
+                },
+            )
 
 
 class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
