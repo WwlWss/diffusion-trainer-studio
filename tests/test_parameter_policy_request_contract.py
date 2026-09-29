@@ -212,9 +212,11 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
 
         component_raw = dict(standard)
         component_raw.update(gui)
+        preview_raw = dict(component_raw)
+        start_raw = dict(component_raw)
 
         preview = prepare(
-            component_raw,
+            preview_raw,
             "anima-finetune",
             launch=False,
         )
@@ -230,7 +232,7 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "full_bf16"):
             prepare(
-                dict(component_raw),
+                start_raw,
                 "anima-finetune",
                 launch=True,
             )
