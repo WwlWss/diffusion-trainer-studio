@@ -751,10 +751,23 @@ class ParameterPolicyTrainerSession:
             metadata["ss_dts_parameter_policy_scheduler_signature"] = (
                 self.scheduler_signature
             )
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is not None:
+            execution_identity, execution_signature = execution_payload
+            metadata["ss_dts_parameter_policy_execution_identity"] = json.dumps(
+                execution_identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            metadata["ss_dts_parameter_policy_execution_signature"] = (
+                execution_signature
+            )
         return metadata
 
     def startup_diagnostics(self) -> dict[str, Any]:
-        return {
+        diagnostics: dict[str, Any] = {
             "train_type": self.train_type,
             "policy_hash": self.policy_hash,
             "topology_fingerprint": self.runtime_spec.topology_fingerprint,
@@ -765,6 +778,12 @@ class ParameterPolicyTrainerSession:
             "trainable_parameter_elements": self.trainable_parameter_element_count,
             "scheduler_signature": self.scheduler_signature,
         }
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is not None:
+            execution_identity, execution_signature = execution_payload
+            diagnostics["execution_identity"] = execution_identity
+            diagnostics["execution_signature"] = execution_signature
+        return diagnostics
 
     def log_startup_diagnostics(self, accelerator: object) -> None:
         printer = getattr(accelerator, "print", None)
@@ -781,24 +800,31 @@ class ParameterPolicyTrainerSession:
         )
         trainable = ", ".join(diagnostics["trainable_components"]) or "<none>"
         frozen = ", ".join(diagnostics["frozen_components"]) or "<none>"
-        printer(
-            "\n".join(
+        lines = [
+            "[DTS Parameter Policy]",
+            f"  train_type: {diagnostics['train_type']}",
+            f"  policy_hash: {diagnostics['policy_hash']}",
+            f"  topology: {diagnostics['topology_fingerprint']}",
+            f"  trainable_components: {trainable}",
+            f"  frozen_components: {frozen}",
+            f"  optimizer_profiles: {profiles or '<none>'}",
+            "  trainable_parameters: "
+            f"{diagnostics['trainable_parameter_tensors']} tensors / "
+            f"{diagnostics['trainable_parameter_elements']} elements",
+            "  scheduler_signature: "
+            f"{diagnostics['scheduler_signature'] or '<optimizer-managed/unset>'}",
+        ]
+        if self.execution_contract is not None:
+            lines.extend(
                 (
-                    "[DTS Parameter Policy]",
-                    f"  train_type: {diagnostics['train_type']}",
-                    f"  policy_hash: {diagnostics['policy_hash']}",
-                    f"  topology: {diagnostics['topology_fingerprint']}",
-                    f"  trainable_components: {trainable}",
-                    f"  frozen_components: {frozen}",
-                    f"  optimizer_profiles: {profiles or '<none>'}",
-                    "  trainable_parameters: "
-                    f"{diagnostics['trainable_parameter_tensors']} tensors / "
-                    f"{diagnostics['trainable_parameter_elements']} elements",
-                    "  scheduler_signature: "
-                    f"{diagnostics['scheduler_signature'] or '<optimizer-managed/unset>'}",
+                    "  execution_features: "
+                    + ", ".join(self.execution_contract.features),
+                    "  execution_trainable_dtype: "
+                    + self.execution_contract.expected_trainable_parameter_dtype,
+                    f"  execution_signature: {diagnostics['execution_signature']}",
                 )
             )
-        )
+        printer("\n".join(lines))
 
     def component_lr_logs(self, scheduler: object) -> dict[str, Any]:
         """Return stable component-oriented LR logs from the composite runtime."""
