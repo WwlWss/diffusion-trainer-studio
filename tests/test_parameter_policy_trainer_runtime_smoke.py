@@ -1259,6 +1259,69 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             accelerator.end_training()
 
+    def test_full_bf16_optimizer_managed_scheduler_persists_execution_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(
+                json.dumps(_policy("AdamWScheduleFree")),
+                encoding="utf-8",
+            )
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path,
+                optimizer_type="AdamWScheduleFree",
+            )
+
+            def must_not_be_called(*_args, **_kwargs):
+                raise AssertionError("external scheduler factory must not run")
+
+            factory = make_legacy_scheduler_factory(
+                args=args,
+                get_scheduler_fix=must_not_be_called,
+                num_processes=1,
+            )
+            scheduler = session.build_scheduler(factory)
+            self.assertTrue(
+                all(entry.mode == "optimizer_managed" for entry in scheduler.entries)
+            )
+            self.assertEqual(
+                session.scheduler_identity["mode"],
+                "optimizer_managed",
+            )
+
+            model.to(torch.bfloat16)
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            manifest = session.checkpoint_manifest(scheduler)
+            self.assertEqual(
+                manifest["execution_identity"],
+                session.execution_contract.execution_identity(),
+            )
+            self.assertEqual(
+                manifest["execution_signature"],
+                session.execution_contract.execution_signature(),
+            )
+            self.assertEqual(
+                manifest["scheduler_identity"]["mode"],
+                "optimizer_managed",
+            )
+            state_dir = Path(temp_dir) / "optimizer-managed-state"
+            accelerator.save_state(state_dir)
+            session.validate_checkpoint_manifest(
+                state_dir,
+                scheduler=scheduler,
+            )
+            accelerator.end_training()
+
     def test_optimizer_managed_scheduler_ignores_unused_global_scheduler_fields(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
