@@ -168,6 +168,50 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertIsNone(model_ref())
             self.assertIsNone(session.execution_root_refs[0].reference())
 
+    def test_dead_execution_root_fails_closed_without_strong_module_reference(self):
+        from mikazuki import parameter_policy_execution as execution
+
+        released_backend = execution.ExecutionFeatureQualification(
+            "qualified",
+            "test-only backend release",
+            "test:backend",
+        )
+        released_optimizer = execution.ExecutionFeatureQualification(
+            "qualified",
+            "test-only optimizer release",
+            "test:adamw",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+            {"flux-finetune": released_backend},
+        ), mock.patch.dict(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
+            {"AdamW": released_optimizer},
+        ):
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args = _scheduler_args(
+                policy_path,
+                full_bf16=True,
+                mixed_precision="bf16",
+            )
+            model = TinyFlux()
+            model_ref = weakref.ref(model)
+            session = create_parameter_policy_session(
+                args=args,
+                train_type="flux-finetune",
+                roots={"transformer": model},
+            )
+
+            del model
+            gc.collect()
+            self.assertIsNone(model_ref())
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "execution root 'transformer' is no longer alive",
+            ):
+                session.assert_live_root_identity_contract()
+
     def _build_mock_qualified_full_bf16_session(self, policy_path):
         from mikazuki import parameter_policy_execution as execution
 
