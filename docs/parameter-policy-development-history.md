@@ -2830,14 +2830,42 @@ B1 merge 后仍不开放任何 full-BF16 backend/optimizer；其作用是冻结�
 B2 完成后仍不把任何 backend/optimizer 从 `pending` 改成 `qualified`。
 ### B3 — checkpoint / metadata execution identity
 
-目标：
+实现范围：
 
-- manifest version 保持 v2；
-- full-BF16 active 时 additive 写入 `execution_identity` / `execution_signature`；
-- baseline manifest key/value 结构保持不变；
-- execution mismatch 在 Accelerator state mutation 前的 load pre-hook 中 fail closed；
-- model metadata/startup diagnostics仅在 active execution contract 时追加 execution identity/signature。
+- `mikazuki/parameter_policy_trainer.py`；
+- `tests/test_parameter_policy_trainer_runtime_smoke.py`；
+- 本开发文档。
 
+已实现：
+
+- B1 `ParameterPolicyExecutionContract` 是 execution identity/signature 的唯一权威来源；B3 不从 args/effective config 重新推导 execution semantics，也不缓存第二套 execution state；
+- manifest version 保持 v2；active execution contract 时 additive 写入 `execution_identity` / `execution_signature`，inactive/baseline 时两个 key 完全不存在；
+- checkpoint validation 保持既有 policy → topology → scheduler 错误优先级，在 generic exact-manifest equality 前增加 execution-specific field-pair comparison；
+- execution comparison按 key presence + value整体比较，可捕获 mixed↔full 双向 mismatch、missing/partial pair、identity/signature drift；
+- mismatch 发生在 Accelerator load pre-hook，先于 model / optimizer / scheduler state mutation；
+- model metadata仅 active execution时追加 canonical JSON execution identity与 signature；
+- startup diagnostics仅 active execution时追加 execution identity/signature；human log只追加 feature、expected trainable dtype、signature 三行摘要；
+- checkpoint内容不会反向修改当前 execution contract，也不会自动开启 `full_bf16`；
+- B3 不检查 optimizer state/gradient/activation dtype，不引入 GPU qualification，也不改变任何 backend/optimizer qualification状态。
+
+Baseline compatibility hardening：
+
+- baseline v2 manifest完整 dict shape被冻结；
+- baseline manifest serialized JSON text被冻结；
+- baseline model metadata key set被冻结；
+- baseline startup diagnostics key set被冻结；
+- baseline startup log完整文本被冻结；
+- active same-identity manifest可正向验证；
+- mixed-BF16 checkpoint → full-BF16 run 与 full-BF16 checkpoint → mixed-BF16 run 都在 state mutation前 fail closed；
+- malformed execution identity/signature partial pair得到 execution-specific error。
+
+性能边界：
+
+- B3仅处理小型 execution identity payload与 SHA-256 fingerprint，复杂度与模型 parameter数量无关；
+- 不增加 root scan、tensor-content scan、GPU copy或 hot-path elementwise工作；
+- 不为减少 hash开销缓存第二份 identity/signature，优先避免 state drift。
+
+B3 完成后仍不把任何 backend/optimizer 从 `pending` 改成 `qualified`；真实 CUDA full-BF16 evidence 仍由 Phase C/D 负责。
 ### B4 — Phase B closeout
 
 目标：

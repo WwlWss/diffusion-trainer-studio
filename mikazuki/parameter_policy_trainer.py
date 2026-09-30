@@ -53,6 +53,10 @@ _LIVE_ROOT_AUDIT_PHASES = frozenset({"post_prepare", "post_resume"})
 _EXECUTION_PARAMETER_DTYPES: dict[str, torch.dtype] = {
     "bfloat16": torch.bfloat16,
 }
+_EXECUTION_MANIFEST_KEYS = (
+    "execution_identity",
+    "execution_signature",
+)
 
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
@@ -464,6 +468,16 @@ def _parameter_alias_identity_map(
     return result
 
 
+def _execution_manifest_fields(
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    return {
+        key: manifest[key]
+        for key in _EXECUTION_MANIFEST_KEYS
+        if key in manifest
+    }
+
+
 def _capture_execution_root_refs(
     roots: Mapping[str, Any],
 ) -> tuple[_ExecutionRootRef, ...]:
@@ -682,6 +696,31 @@ class ParameterPolicyTrainerSession:
                 + "; ".join(mismatches[:8])
             )
 
+    def _execution_identity_payload(
+        self,
+    ) -> tuple[dict[str, Any], str] | None:
+        contract = self.execution_contract
+        if contract is None:
+            return None
+
+        try:
+            identity = contract.execution_identity()
+            signature = contract.execution_signature()
+        except ValueError as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid Parameter Policy execution identity: {exc}"
+            ) from exc
+
+        if not isinstance(identity, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution identity must be a mapping."
+            )
+        if not isinstance(signature, str) or not signature:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution signature must be non-empty."
+            )
+        return dict(identity), signature
+
     def model_metadata(self) -> dict[str, str]:
         metadata = {
             "ss_dts_parameter_policy_hash": self.policy_hash,
@@ -712,10 +751,23 @@ class ParameterPolicyTrainerSession:
             metadata["ss_dts_parameter_policy_scheduler_signature"] = (
                 self.scheduler_signature
             )
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is not None:
+            execution_identity, execution_signature = execution_payload
+            metadata["ss_dts_parameter_policy_execution_identity"] = json.dumps(
+                execution_identity,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                allow_nan=False,
+            )
+            metadata["ss_dts_parameter_policy_execution_signature"] = (
+                execution_signature
+            )
         return metadata
 
     def startup_diagnostics(self) -> dict[str, Any]:
-        return {
+        diagnostics: dict[str, Any] = {
             "train_type": self.train_type,
             "policy_hash": self.policy_hash,
             "topology_fingerprint": self.runtime_spec.topology_fingerprint,
@@ -726,6 +778,12 @@ class ParameterPolicyTrainerSession:
             "trainable_parameter_elements": self.trainable_parameter_element_count,
             "scheduler_signature": self.scheduler_signature,
         }
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is not None:
+            execution_identity, execution_signature = execution_payload
+            diagnostics["execution_identity"] = execution_identity
+            diagnostics["execution_signature"] = execution_signature
+        return diagnostics
 
     def log_startup_diagnostics(self, accelerator: object) -> None:
         printer = getattr(accelerator, "print", None)
@@ -742,24 +800,31 @@ class ParameterPolicyTrainerSession:
         )
         trainable = ", ".join(diagnostics["trainable_components"]) or "<none>"
         frozen = ", ".join(diagnostics["frozen_components"]) or "<none>"
-        printer(
-            "\n".join(
+        lines = [
+            "[DTS Parameter Policy]",
+            f"  train_type: {diagnostics['train_type']}",
+            f"  policy_hash: {diagnostics['policy_hash']}",
+            f"  topology: {diagnostics['topology_fingerprint']}",
+            f"  trainable_components: {trainable}",
+            f"  frozen_components: {frozen}",
+            f"  optimizer_profiles: {profiles or '<none>'}",
+            "  trainable_parameters: "
+            f"{diagnostics['trainable_parameter_tensors']} tensors / "
+            f"{diagnostics['trainable_parameter_elements']} elements",
+            "  scheduler_signature: "
+            f"{diagnostics['scheduler_signature'] or '<optimizer-managed/unset>'}",
+        ]
+        if self.execution_contract is not None:
+            lines.extend(
                 (
-                    "[DTS Parameter Policy]",
-                    f"  train_type: {diagnostics['train_type']}",
-                    f"  policy_hash: {diagnostics['policy_hash']}",
-                    f"  topology: {diagnostics['topology_fingerprint']}",
-                    f"  trainable_components: {trainable}",
-                    f"  frozen_components: {frozen}",
-                    f"  optimizer_profiles: {profiles or '<none>'}",
-                    "  trainable_parameters: "
-                    f"{diagnostics['trainable_parameter_tensors']} tensors / "
-                    f"{diagnostics['trainable_parameter_elements']} elements",
-                    "  scheduler_signature: "
-                    f"{diagnostics['scheduler_signature'] or '<optimizer-managed/unset>'}",
+                    "  execution_features: "
+                    + ", ".join(self.execution_contract.features),
+                    "  execution_trainable_dtype: "
+                    + self.execution_contract.expected_trainable_parameter_dtype,
+                    f"  execution_signature: {diagnostics['execution_signature']}",
                 )
             )
-        )
+        printer("\n".join(lines))
 
     def component_lr_logs(self, scheduler: object) -> dict[str, Any]:
         """Return stable component-oriented LR logs from the composite runtime."""
@@ -1070,6 +1135,12 @@ class ParameterPolicyTrainerSession:
                 }
                 for entry in composite_scheduler.entries
             ]
+
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is not None:
+            execution_identity, execution_signature = execution_payload
+            manifest["execution_identity"] = execution_identity
+            manifest["execution_signature"] = execution_signature
         return manifest
 
     def validate_checkpoint_manifest(
@@ -1112,6 +1183,11 @@ class ParameterPolicyTrainerSession:
             raise ParameterPolicyTrainerRuntimeError(
                 "Checkpoint scheduler configuration does not match the current run. "
                 "Load model weights only when intentionally starting a new policy/stage."
+            )
+        if _execution_manifest_fields(actual) != _execution_manifest_fields(expected):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint Parameter Policy execution identity does not match the current run. "
+                "Load model weights only when intentionally changing execution mode."
             )
         if actual != expected:
             raise ParameterPolicyTrainerRuntimeError(
