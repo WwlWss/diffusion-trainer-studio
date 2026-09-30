@@ -609,14 +609,15 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 self._scheduler_factory(mixed_args)
             )
             save_accelerator = Accelerator(cpu=True)
-            mixed_session.register_checkpoint_manifest(
-                save_accelerator,
-                scheduler=mixed_scheduler,
-            )
             mixed_model, mixed_optimizer, mixed_scheduler = save_accelerator.prepare(
                 mixed_model,
                 mixed_session.optimizer,
                 mixed_scheduler,
+            )
+            mixed_session.finalize_after_prepare(
+                accelerator=save_accelerator,
+                optimizer=mixed_optimizer,
+                scheduler=mixed_scheduler,
             )
             loss = mixed_model(torch.ones(2, 4)).sum()
             save_accelerator.backward(loss)
@@ -635,14 +636,15 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             full_model.to(torch.bfloat16)
             load_accelerator = Accelerator(cpu=True)
-            full_session.register_checkpoint_manifest(
-                load_accelerator,
-                scheduler=full_scheduler,
-            )
             full_model, full_optimizer, full_scheduler = load_accelerator.prepare(
                 full_model,
                 full_session.optimizer,
                 full_scheduler,
+            )
+            full_session.finalize_after_prepare(
+                accelerator=load_accelerator,
+                optimizer=full_optimizer,
+                scheduler=full_scheduler,
             )
 
             model_before = (
@@ -683,14 +685,15 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             with torch.no_grad():
                 full_model.double_blocks[0].weight.fill_(7)
             save_accelerator = Accelerator(cpu=True)
-            full_session.register_checkpoint_manifest(
-                save_accelerator,
-                scheduler=full_scheduler,
-            )
             full_model, full_optimizer, full_scheduler = save_accelerator.prepare(
                 full_model,
                 full_session.optimizer,
                 full_scheduler,
+            )
+            full_session.finalize_after_prepare(
+                accelerator=save_accelerator,
+                optimizer=full_optimizer,
+                scheduler=full_scheduler,
             )
             state_dir = Path(temp_dir) / "full-state"
             save_accelerator.save_state(state_dir)
@@ -713,14 +716,15 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 self._scheduler_factory(mixed_args)
             )
             load_accelerator = Accelerator(cpu=True)
-            mixed_session.register_checkpoint_manifest(
-                load_accelerator,
-                scheduler=mixed_scheduler,
-            )
             mixed_model, mixed_optimizer, mixed_scheduler = load_accelerator.prepare(
                 mixed_model,
                 mixed_session.optimizer,
                 mixed_scheduler,
+            )
+            mixed_session.finalize_after_prepare(
+                accelerator=load_accelerator,
+                optimizer=mixed_optimizer,
+                scheduler=mixed_scheduler,
             )
 
             model_before = (
