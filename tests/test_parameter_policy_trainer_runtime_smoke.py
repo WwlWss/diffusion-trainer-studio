@@ -168,6 +168,149 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertIsNone(model_ref())
             self.assertIsNone(session.execution_root_refs[0].reference())
 
+    def _build_mock_qualified_full_bf16_session(self, policy_path):
+        from mikazuki import parameter_policy_execution as execution
+
+        backend_patch = mock.patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+            {
+                "flux-finetune": execution.ExecutionFeatureQualification(
+                    "qualified",
+                    "test-only backend release",
+                    "test:backend",
+                )
+            },
+        )
+        optimizer_patch = mock.patch.dict(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
+            {
+                "AdamW": execution.ExecutionFeatureQualification(
+                    "qualified",
+                    "test-only optimizer release",
+                    "test:adamw",
+                )
+            },
+        )
+        backend_patch.start()
+        optimizer_patch.start()
+        self.addCleanup(backend_patch.stop)
+        self.addCleanup(optimizer_patch.stop)
+
+        args = _scheduler_args(
+            policy_path,
+            full_bf16=True,
+            mixed_precision="bf16",
+        )
+        model = TinyFlux()
+        session = create_parameter_policy_session(
+            args=args,
+            train_type="flux-finetune",
+            roots={"transformer": model},
+        )
+        return args, model, session
+
+    def test_full_bf16_live_root_identity_accepts_unchanged_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            session.assert_live_root_identity_contract()
+            self.assertIs(
+                session.execution_root_refs[0].reference(),
+                model,
+            )
+
+    def test_full_bf16_live_root_identity_rejects_parameter_replacement(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            old_weight = model.double_blocks[0].weight
+            replacement = torch.nn.Parameter(
+                old_weight.detach().clone(),
+                requires_grad=old_weight.requires_grad,
+            )
+            model.double_blocks[0].weight = replacement
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "live-root identity audit failed.*replaced=1",
+            ):
+                session.assert_live_root_identity_contract()
+
+    def test_full_bf16_live_root_identity_rejects_alias_topology_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            model.double_blocks[0].register_parameter(
+                "shadow_weight",
+                model.double_blocks[0].weight,
+            )
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "live-root identity audit failed.*unexpected=1",
+            ):
+                session.assert_live_root_identity_contract()
+
+    def test_full_bf16_post_resume_rechecks_live_root_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            accelerator = Accelerator(cpu=True)
+            model, optimizer = accelerator.prepare(model, session.optimizer)
+            session.assert_runtime_contract(
+                phase="post_prepare",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+
+            current = accelerator.unwrap_model(model).double_blocks[0].weight
+            accelerator.unwrap_model(model).double_blocks[0].weight = torch.nn.Parameter(
+                current.detach().clone(),
+                requires_grad=current.requires_grad,
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "post_resume.*live-root identity audit failed",
+            ):
+                session.assert_runtime_contract(
+                    phase="post_resume",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
+            accelerator.end_training()
+
+    def test_full_bf16_epoch_start_does_not_rescan_live_roots(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            accelerator = Accelerator(cpu=True)
+            model, optimizer = accelerator.prepare(model, session.optimizer)
+            with mock.patch(
+                "mikazuki.parameter_policy_trainer.scan_parameter_roots",
+                side_effect=AssertionError("epoch_start must not rescan roots"),
+            ):
+                session.assert_runtime_contract(
+                    phase="epoch_start",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
+            accelerator.end_training()
+
     def test_full_bf16_direct_trainer_fails_before_parameter_scan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
