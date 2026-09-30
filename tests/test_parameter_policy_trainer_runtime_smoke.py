@@ -212,7 +212,12 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             ):
                 session.assert_live_root_identity_contract()
 
-    def _build_mock_qualified_full_bf16_session(self, policy_path):
+    def _build_mock_qualified_full_bf16_session(
+        self,
+        policy_path,
+        *,
+        optimizer_type="AdamW",
+    ):
         from mikazuki import parameter_policy_execution as execution
 
         backend_patch = mock.patch.dict(
@@ -228,10 +233,10 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         optimizer_patch = mock.patch.dict(
             execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
             {
-                "AdamW": execution.ExecutionFeatureQualification(
+                optimizer_type: execution.ExecutionFeatureQualification(
                     "qualified",
                     "test-only optimizer release",
-                    "test:adamw",
+                    f"test:{optimizer_type}",
                 )
             },
         )
