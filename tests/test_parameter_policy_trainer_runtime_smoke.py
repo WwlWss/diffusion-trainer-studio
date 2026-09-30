@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import gc
 import json
 import tempfile
 import unittest
+import weakref
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
@@ -111,6 +113,60 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         )
         self.assertEqual(observed, [("AdamW", 1)])
         return args, model, structural_bias, session, scheduler
+
+    def test_baseline_session_has_no_execution_contract_or_root_refs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, _model, _bias, session, _scheduler = self._build_runtime(policy_path)
+            self.assertIsNone(session.execution_contract)
+            self.assertEqual(session.execution_root_refs, ())
+
+    def test_mock_qualified_full_bf16_session_captures_contract_and_weak_roots(self):
+        from mikazuki import parameter_policy_execution as execution
+
+        released_backend = execution.ExecutionFeatureQualification(
+            "qualified",
+            "test-only backend release",
+            "test:backend",
+        )
+        released_optimizer = execution.ExecutionFeatureQualification(
+            "qualified",
+            "test-only optimizer release",
+            "test:adamw",
+        )
+        with tempfile.TemporaryDirectory() as temp_dir, mock.patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+            {"flux-finetune": released_backend},
+        ), mock.patch.dict(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
+            {"AdamW": released_optimizer},
+        ):
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args = _scheduler_args(
+                policy_path,
+                full_bf16=True,
+                mixed_precision="bf16",
+            )
+            model = TinyFlux()
+            model_ref = weakref.ref(model)
+            session = create_parameter_policy_session(
+                args=args,
+                train_type="flux-finetune",
+                roots={"transformer": model},
+            )
+            self.assertIsNotNone(session.execution_contract)
+            self.assertEqual(session.execution_contract.features, ("full_bf16",))
+            self.assertEqual(session.execution_contract.mixed_precision, "bf16")
+            self.assertEqual(len(session.execution_root_refs), 1)
+            self.assertEqual(session.execution_root_refs[0].scan_key, "transformer")
+            self.assertIs(session.execution_root_refs[0].reference(), model)
+
+            del model
+            gc.collect()
+            self.assertIsNone(model_ref())
+            self.assertIsNone(session.execution_root_refs[0].reference())
 
     def test_full_bf16_direct_trainer_fails_before_parameter_scan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
