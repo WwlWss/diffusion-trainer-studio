@@ -268,6 +268,64 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 model,
             )
 
+    def test_full_bf16_real_module_cast_prepare_and_finalize_passes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            original_weight = model.double_blocks[0].weight
+            original_weight_id = id(original_weight)
+
+            model.to(torch.bfloat16)
+            self.assertEqual(
+                id(model.double_blocks[0].weight),
+                original_weight_id,
+            )
+            self.assertEqual(
+                model.double_blocks[0].weight.dtype,
+                torch.bfloat16,
+            )
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer = accelerator.prepare(model, session.optimizer)
+            self.assertEqual(
+                id(accelerator.unwrap_model(model).double_blocks[0].weight),
+                original_weight_id,
+            )
+            self.assertEqual(
+                accelerator.unwrap_model(model).double_blocks[0].weight.dtype,
+                torch.bfloat16,
+            )
+
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            accelerator.end_training()
+
+    def test_full_bf16_live_root_identity_rejects_in_place_shape_change(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            parameter = model.double_blocks[0].weight
+            original_parameter_id = id(parameter)
+            original_shape = tuple(parameter.shape)
+
+            parameter.data = parameter.data.reshape(-1)
+            self.assertEqual(id(parameter), original_parameter_id)
+            self.assertNotEqual(tuple(parameter.shape), original_shape)
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "live-root identity audit failed.*reshaped=1",
+            ):
+                session.assert_live_root_identity_contract()
+
     def test_full_bf16_live_root_identity_rejects_parameter_replacement(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
