@@ -79,17 +79,32 @@ class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
             "9f511c8f94192fe7ad4728285157466a9d6cc79488e71b0be569da62451dcca8",
         )
 
-    def test_runtime_enforcement_fields_do_not_change_execution_identity(self):
-        strict = self._contract(require_live_root_identity=True)
-        relaxed = self._contract(require_live_root_identity=False)
-        self.assertEqual(strict.execution_identity(), relaxed.execution_identity())
-        self.assertEqual(strict.execution_signature(), relaxed.execution_signature())
+    def test_full_bf16_contract_requires_live_root_identity_audit(self):
+        with self.assertRaisesRegex(ValueError, "live-root identity"):
+            self._contract(require_live_root_identity=False)
 
-    def test_execution_identity_normalizes_train_type(self):
-        left = self._contract(train_type=" Anima-Finetune ")
-        right = self._contract(train_type="anima-finetune")
-        self.assertEqual(left.execution_identity(), right.execution_identity())
-        self.assertEqual(left.execution_signature(), right.execution_signature())
+    def test_runtime_enforcement_field_is_not_serialized(self):
+        contract = self._contract()
+        identity = contract.execution_identity()
+        self.assertNotIn("require_live_root_identity", identity)
+        self.assertNotIn("require_live_root_identity", repr(identity))
+
+    def test_contract_constructor_normalizes_supported_string_fields(self):
+        contract = self._contract(
+            train_type=" Anima-Finetune ",
+            mixed_precision=" BF16 ",
+            expected_trainable_parameter_dtype=" BFloat16 ",
+        )
+        self.assertEqual(contract.train_type, "anima-finetune")
+        self.assertEqual(contract.mixed_precision, "bf16")
+        self.assertEqual(
+            contract.expected_trainable_parameter_dtype,
+            "bfloat16",
+        )
+        self.assertEqual(
+            contract.execution_signature(),
+            "9f511c8f94192fe7ad4728285157466a9d6cc79488e71b0be569da62451dcca8",
+        )
 
     def test_execution_identity_returns_fresh_mutable_payload(self):
         contract = self._contract()
@@ -101,15 +116,15 @@ class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
             "bf16",
         )
 
-    def test_execution_identity_rejects_unknown_feature_combinations(self):
+    def test_contract_constructor_rejects_unknown_feature_combinations(self):
         for features in ((), ("future_feature",), ("full_bf16", "future_feature")):
             with self.subTest(features=features), self.assertRaisesRegex(
                 ValueError,
                 "feature combination",
             ):
-                self._contract(features=features).execution_identity()
+                self._contract(features=features)
 
-    def test_execution_identity_rejects_malformed_full_bf16_semantics(self):
+    def test_contract_constructor_rejects_malformed_full_bf16_semantics(self):
         cases = (
             ({"mixed_precision": "fp16"}, "mixed_precision"),
             (
@@ -117,13 +132,19 @@ class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
                 "bfloat16",
             ),
             ({"train_type": "   "}, "train_type"),
+            ({"train_type": None}, "train_type"),
+            ({"mixed_precision": None}, "mixed_precision"),
+            (
+                {"expected_trainable_parameter_dtype": None},
+                "bfloat16",
+            ),
         )
         for overrides, marker in cases:
             with self.subTest(overrides=overrides), self.assertRaisesRegex(
                 ValueError,
                 marker,
             ):
-                self._contract(**overrides).execution_identity()
+                self._contract(**overrides)
 
 
 class ParameterPolicyExecutionContractBuilderTests(unittest.TestCase):
@@ -285,7 +306,7 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             supported,
         )
 
-    def test_phase_a_has_no_qualified_backend_or_optimizer(self):
+    def test_b1_does_not_qualify_backend_or_optimizer(self):
         self.assertFalse(
             any(
                 row.status == "qualified"
