@@ -202,10 +202,12 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             mixed_precision="bf16",
         )
         model = TinyFlux()
+        structural_bias = model.double_blocks[0].bias
         session = create_parameter_policy_session(
             args=args,
             train_type="flux-finetune",
             roots={"transformer": model},
+            structural_frozen_parameters=(structural_bias,),
         )
         return args, model, session
 
@@ -267,6 +269,9 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             _args, model, session = self._build_mock_qualified_full_bf16_session(
                 policy_path
             )
+            model.double_blocks[0].weight.data = (
+                model.double_blocks[0].weight.data.to(torch.bfloat16)
+            )
             accelerator = Accelerator(cpu=True)
             model, optimizer = accelerator.prepare(model, session.optimizer)
             session.assert_runtime_contract(
@@ -298,6 +303,9 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             _args, model, session = self._build_mock_qualified_full_bf16_session(
                 policy_path
             )
+            model.double_blocks[0].weight.data = (
+                model.double_blocks[0].weight.data.to(torch.bfloat16)
+            )
             accelerator = Accelerator(cpu=True)
             model, optimizer = accelerator.prepare(model, session.optimizer)
             with mock.patch(
@@ -310,6 +318,48 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                     optimizer=optimizer,
                 )
             accelerator.end_training()
+
+    def test_full_bf16_dtype_contract_accepts_trainable_bf16_and_frozen_fp32(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            trainable_weight = model.double_blocks[0].weight
+            frozen_bias = model.double_blocks[0].bias
+            trainable_weight.data = trainable_weight.data.to(torch.bfloat16)
+
+            self.assertEqual(trainable_weight.dtype, torch.bfloat16)
+            self.assertEqual(frozen_bias.dtype, torch.float32)
+            session.assert_execution_dtype_contract()
+
+    def test_full_bf16_dtype_contract_rejects_trainable_fp32(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            self.assertEqual(model.double_blocks[0].weight.dtype, torch.float32)
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "execution dtype audit failed.*bfloat16",
+            ):
+                session.assert_execution_dtype_contract()
+
+    def test_full_bf16_runtime_contract_checks_dtype_without_optimizer_audit(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "dtype_only.*execution dtype audit failed",
+            ):
+                session.assert_runtime_contract(phase="dtype_only")
 
     def test_full_bf16_direct_trainer_fails_before_parameter_scan(self):
         with tempfile.TemporaryDirectory() as temp_dir:
