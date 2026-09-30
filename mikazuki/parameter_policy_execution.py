@@ -53,9 +53,61 @@ class ParameterPolicyExecutionContract:
 
     train_type: str
     features: tuple[str, ...]
-    mixed_precision: str | None
-    expected_trainable_parameter_dtype: str | None
+    mixed_precision: str
+    expected_trainable_parameter_dtype: str
     require_live_root_identity: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.train_type, str):
+            raise ValueError(
+                "Parameter Policy execution contract requires train_type to be a string."
+            )
+        normalized_train_type = self.train_type.strip().lower()
+        if not normalized_train_type:
+            raise ValueError(
+                "Parameter Policy execution contract requires a non-empty train_type."
+            )
+
+        if self.features != ("full_bf16",):
+            raise ValueError(
+                "Parameter Policy execution contract has no schema for feature "
+                f"combination {self.features!r}."
+            )
+
+        if not isinstance(self.mixed_precision, str):
+            raise ValueError(
+                "full_bf16 execution contract requires mixed_precision='bf16'."
+            )
+        normalized_mixed_precision = self.mixed_precision.strip().lower()
+        if normalized_mixed_precision != "bf16":
+            raise ValueError(
+                "full_bf16 execution contract requires mixed_precision='bf16'."
+            )
+
+        if not isinstance(self.expected_trainable_parameter_dtype, str):
+            raise ValueError(
+                "full_bf16 execution contract requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+        normalized_dtype = self.expected_trainable_parameter_dtype.strip().lower()
+        if normalized_dtype != "bfloat16":
+            raise ValueError(
+                "full_bf16 execution contract requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+
+        if self.require_live_root_identity is not True:
+            raise ValueError(
+                "full_bf16 execution contract requires live-root identity auditing."
+            )
+
+        object.__setattr__(self, "train_type", normalized_train_type)
+        object.__setattr__(self, "mixed_precision", normalized_mixed_precision)
+        object.__setattr__(
+            self,
+            "expected_trainable_parameter_dtype",
+            normalized_dtype,
+        )
 
     def execution_identity(self) -> dict[str, Any]:
         if self.features != ("full_bf16",):
