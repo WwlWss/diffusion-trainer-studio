@@ -1001,8 +1001,33 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             session.log_startup_diagnostics(
                 SimpleNamespace(print=output.append)
             )
-            self.assertEqual(len(output), 1)
-            self.assertNotIn("execution_", output[0])
+            self.assertEqual(
+                output,
+                [
+                    "\n".join(
+                        (
+                            "[DTS Parameter Policy]",
+                            f"  train_type: {session.train_type}",
+                            f"  policy_hash: {session.policy_hash}",
+                            "  topology: "
+                            f"{session.runtime_spec.topology_fingerprint}",
+                            "  trainable_components: "
+                            + ", ".join(sorted(session.trainable_components)),
+                            "  frozen_components: "
+                            + (
+                                ", ".join(sorted(session.frozen_components))
+                                or "<none>"
+                            ),
+                            "  optimizer_profiles: main=AdamW",
+                            "  trainable_parameters: "
+                            f"{session.trainable_parameter_tensor_count} tensors / "
+                            f"{session.trainable_parameter_element_count} elements",
+                            "  scheduler_signature: "
+                            f"{session.scheduler_signature}",
+                        )
+                    )
+                ],
+            )
 
             accelerator = Accelerator(cpu=True)
             session.register_checkpoint_manifest(accelerator, scheduler=scheduler)
