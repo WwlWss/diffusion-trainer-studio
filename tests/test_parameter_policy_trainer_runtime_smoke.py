@@ -544,6 +544,203 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             accelerator.end_training()
 
+    def test_full_bf16_manifest_contains_execution_identity_and_validates_same_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+            model.to(torch.bfloat16)
+
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            manifest = session.checkpoint_manifest(scheduler)
+            self.assertEqual(
+                manifest["execution_identity"],
+                session.execution_contract.execution_identity(),
+            )
+            self.assertEqual(
+                manifest["execution_signature"],
+                session.execution_contract.execution_signature(),
+            )
+            self.assertEqual(manifest["version"], 2)
+
+            state_dir = Path(temp_dir) / "full-state"
+            accelerator.save_state(state_dir)
+            session.validate_checkpoint_manifest(state_dir, scheduler=scheduler)
+            accelerator.end_training()
+
+    def test_mixed_bf16_checkpoint_rejects_full_bf16_before_state_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+            mixed_args = _scheduler_args(
+                policy_path,
+                mixed_precision="bf16",
+                full_bf16=False,
+            )
+            mixed_model = TinyFlux()
+            mixed_bias = mixed_model.double_blocks[0].bias
+            mixed_session = create_parameter_policy_session(
+                args=mixed_args,
+                train_type="flux-finetune",
+                roots={"transformer": mixed_model},
+                structural_frozen_parameters=(mixed_bias,),
+            )
+            mixed_scheduler = mixed_session.build_scheduler(
+                self._scheduler_factory(mixed_args)
+            )
+            save_accelerator = Accelerator(cpu=True)
+            mixed_session.register_checkpoint_manifest(
+                save_accelerator,
+                scheduler=mixed_scheduler,
+            )
+            mixed_model, mixed_optimizer, mixed_scheduler = save_accelerator.prepare(
+                mixed_model,
+                mixed_session.optimizer,
+                mixed_scheduler,
+            )
+            loss = mixed_model(torch.ones(2, 4)).sum()
+            save_accelerator.backward(loss)
+            mixed_optimizer.step()
+            mixed_scheduler.step()
+            mixed_optimizer.zero_grad()
+            state_dir = Path(temp_dir) / "mixed-state"
+            save_accelerator.save_state(state_dir)
+            save_accelerator.end_training()
+
+            full_args, full_model, full_session = (
+                self._build_mock_qualified_full_bf16_session(policy_path)
+            )
+            full_scheduler = full_session.build_scheduler(
+                self._scheduler_factory(full_args)
+            )
+            full_model.to(torch.bfloat16)
+            load_accelerator = Accelerator(cpu=True)
+            full_session.register_checkpoint_manifest(
+                load_accelerator,
+                scheduler=full_scheduler,
+            )
+            full_model, full_optimizer, full_scheduler = load_accelerator.prepare(
+                full_model,
+                full_session.optimizer,
+                full_scheduler,
+            )
+
+            model_before = (
+                load_accelerator.unwrap_model(full_model)
+                .double_blocks[0]
+                .weight.detach()
+                .clone()
+            )
+            optimizer_before = copy.deepcopy(full_session.optimizer.state_dict())
+            scheduler_before = copy.deepcopy(full_scheduler.state_dict())
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "execution identity",
+            ):
+                load_accelerator.load_state(state_dir)
+
+            torch.testing.assert_close(
+                load_accelerator.unwrap_model(full_model).double_blocks[0].weight,
+                model_before,
+            )
+            self.assertEqual(full_session.optimizer.state_dict(), optimizer_before)
+            self.assertEqual(full_scheduler.state_dict(), scheduler_before)
+            load_accelerator.end_training()
+
+    def test_full_bf16_checkpoint_rejects_mixed_bf16_before_state_mutation(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+            full_args, full_model, full_session = (
+                self._build_mock_qualified_full_bf16_session(policy_path)
+            )
+            full_scheduler = full_session.build_scheduler(
+                self._scheduler_factory(full_args)
+            )
+            full_model.to(torch.bfloat16)
+            with torch.no_grad():
+                full_model.double_blocks[0].weight.fill_(7)
+            save_accelerator = Accelerator(cpu=True)
+            full_session.register_checkpoint_manifest(
+                save_accelerator,
+                scheduler=full_scheduler,
+            )
+            full_model, full_optimizer, full_scheduler = save_accelerator.prepare(
+                full_model,
+                full_session.optimizer,
+                full_scheduler,
+            )
+            state_dir = Path(temp_dir) / "full-state"
+            save_accelerator.save_state(state_dir)
+            save_accelerator.end_training()
+
+            mixed_args = _scheduler_args(
+                policy_path,
+                mixed_precision="bf16",
+                full_bf16=False,
+            )
+            mixed_model = TinyFlux()
+            mixed_bias = mixed_model.double_blocks[0].bias
+            mixed_session = create_parameter_policy_session(
+                args=mixed_args,
+                train_type="flux-finetune",
+                roots={"transformer": mixed_model},
+                structural_frozen_parameters=(mixed_bias,),
+            )
+            mixed_scheduler = mixed_session.build_scheduler(
+                self._scheduler_factory(mixed_args)
+            )
+            load_accelerator = Accelerator(cpu=True)
+            mixed_session.register_checkpoint_manifest(
+                load_accelerator,
+                scheduler=mixed_scheduler,
+            )
+            mixed_model, mixed_optimizer, mixed_scheduler = load_accelerator.prepare(
+                mixed_model,
+                mixed_session.optimizer,
+                mixed_scheduler,
+            )
+
+            model_before = (
+                load_accelerator.unwrap_model(mixed_model)
+                .double_blocks[0]
+                .weight.detach()
+                .clone()
+            )
+            optimizer_before = copy.deepcopy(mixed_session.optimizer.state_dict())
+            scheduler_before = copy.deepcopy(mixed_scheduler.state_dict())
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "execution identity",
+            ):
+                load_accelerator.load_state(state_dir)
+
+            torch.testing.assert_close(
+                load_accelerator.unwrap_model(mixed_model).double_blocks[0].weight,
+                model_before,
+            )
+            self.assertEqual(mixed_session.optimizer.state_dict(), optimizer_before)
+            self.assertEqual(mixed_scheduler.state_dict(), scheduler_before)
+            load_accelerator.end_training()
+
     def test_accelerator_load_state_accepts_same_scheduler_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
