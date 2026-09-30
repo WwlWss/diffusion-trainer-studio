@@ -2868,14 +2868,43 @@ Baseline compatibility hardening：
 B3 完成后仍不把任何 backend/optimizer 从 `pending` 改成 `qualified`；真实 CUDA full-BF16 evidence 仍由 Phase C/D 负责。
 ### B4 — Phase B closeout
 
-目标：
+Phase B closeout 只做组合审计、精确回归与文档收口，不开放任何新的 execution capability。
 
-- exact-head CPU/runtime smoke；
-- source-level review；
-- baseline checkpoint exact regression；
-- docs closeout。
+组合审计结论：
 
-Phase B 全部完成后仍不把任何 backend/optimizer从 `pending` 改成 `qualified`；真实 CUDA qualification 仍由 Phase C/D 负责。
+- request-level Preview/Start runtime blocker、direct trainer execution gate、B1 contract builder、B2 physical runtime audit、B3 checkpoint persistence 按单向 owner 链路组合，没有第二套 execution semantics；
+- `full_bf16` inactive 仍在 qualification metadata / contract / physical audit 之前 no-op；ordinary Component 不持有 execution contract/root refs，也不增加 live-root scan；
+- B1 execution identity ABI/version/signature reference 保持冻结；B2/B3 只消费该 contract，不从 args/checkpoint 重新推导；
+- B2 `post_prepare` / `post_resume` physical identity audit、trainable dtype audit、optimizer ownership/device audit 的顺序保持 fail-closed；
+- B3 manifest version 仍为 v2；baseline manifest/metadata/diagnostics/log exact regression 保持不变；active execution identity/signature 只做 additive persistence；
+- mixed-BF16 ↔ full-BF16 checkpoint mismatch 使用真实 production lifecycle (`prepare -> finalize_after_prepare -> load_state`) 在 model/optimizer/scheduler state mutation 前 fail closed；
+- external scheduler 与 optimizer-managed scheduler 均覆盖 active execution persistence；
+- merge 后 main tree 与已通过 exact-head PR tree 无源码差异。
+
+Phase B closeout qualification state：
+
+- backend：`sd-dreambooth=unsupported`；其余 release-matrix backend 全部 `pending`；
+- optimizer：当前 baseline `component_support="supported"` 的所有 optimizer 全部 `pending`；
+- `qualified` 记录数保持 0；Phase B 没有使用测试 mock 以外的 capability promotion。
+
+性能与兼容性边界：
+
+- Standard 路径不进入 Parameter Policy trainer runtime；
+- ordinary Component 仅承担 inactive execution feature detection/contract no-op，新增成本为 O(1) host metadata；
+- active full-BF16 只有 startup/post-resume metadata root scan 与 O(trainable tensor count) dtype metadata audit，不做 tensor-content scan；
+- B3 persistence/hash 与模型大小无关；
+- 不支持/未验证的 DeepSpeed、compile、FP8、full FP16、offload/swap、fused optimizer 等语义仍由已有 compatibility blockers fail closed。
+
+Phase C 入口条件：
+
+1. Phase B exact-head host/runtime CI 全绿；
+2. qualification table 仍保持上述 pending/unsupported 状态；
+3. B1 execution identity ABI 不再在 Phase C 内修改；
+4. B2/B3 只作为 evidence target 使用，Phase C 不通过绕过/放宽这些 runtime/checkpoint invariant 来换取测试通过；
+5. 只有 shared true-BF16 CUDA matrix 在 exact head 上通过的 optimizer variant，才允许后续单独 promotion；
+6. backend qualification 仍必须等 Phase D backend-specific fresh forward/backward/step/save/resume/second-step evidence。
+
+因此 Phase B 的最终产物是：**execution semantics 已可定义、审计、持久化和恢复验证，但 production capability 仍保持关闭。**
 ## Phase C — shared true-BF16 CUDA qualification
 
 新增：
