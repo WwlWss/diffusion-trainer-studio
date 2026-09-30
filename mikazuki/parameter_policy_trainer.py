@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import os
+import weakref
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,11 @@ import torch
 
 from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
+from mikazuki.parameter_policy_execution import (
+    ParameterPolicyExecutionContract,
+    build_parameter_policy_execution_contract,
+    parameter_policy_execution_blockers,
+)
 from mikazuki.parameter_policy_runtime import (
     ParameterPolicyRuntimeSpec,
     compile_parameter_policy_runtime_spec,
@@ -43,6 +49,10 @@ from mikazuki.parameter_routing import (
 PARAMETER_POLICY_CHECKPOINT_MANIFEST = "dts_parameter_policy_manifest.json"
 PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 2
 PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
+_LIVE_ROOT_AUDIT_PHASES = frozenset({"post_prepare", "post_resume"})
+_EXECUTION_PARAMETER_DTYPES: dict[str, torch.dtype] = {
+    "bfloat16": torch.bfloat16,
+}
 
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
@@ -424,6 +434,56 @@ class LegacySchedulerFactory:
         )
 
 
+@dataclass(frozen=True)
+class _ExecutionRootRef:
+    scan_key: str
+    reference: weakref.ReferenceType[Any]
+
+
+def _parameter_alias_identity_map(
+    descriptors: Iterable[ParameterDescriptor],
+) -> dict[str, tuple[int, tuple[int, ...], int]]:
+    result: dict[str, tuple[int, tuple[int, ...], int]] = {}
+    for descriptor in descriptors:
+        if descriptor.parameter_id != id(descriptor.parameter):
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Parameter Policy descriptor {descriptor.canonical_name!r} has stale physical identity."
+            )
+        for alias in descriptor.aliases:
+            name = alias.qualified_name
+            value = (
+                descriptor.parameter_id,
+                tuple(descriptor.shape),
+                int(descriptor.numel),
+            )
+            if name in result:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Parameter Policy alias {name!r} is duplicated in the live identity map."
+                )
+            result[name] = value
+    return result
+
+
+def _capture_execution_root_refs(
+    roots: Mapping[str, Any],
+) -> tuple[_ExecutionRootRef, ...]:
+    refs: list[_ExecutionRootRef] = []
+    for scan_key in sorted(roots, key=lambda item: (str(item).casefold(), str(item))):
+        if not isinstance(scan_key, str):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution roots must use string scan keys."
+            )
+        root = roots[scan_key]
+        try:
+            reference = weakref.ref(root)
+        except TypeError as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Parameter Policy execution root {scan_key!r} does not support weak references."
+            ) from exc
+        refs.append(_ExecutionRootRef(scan_key=scan_key, reference=reference))
+    return tuple(refs)
+
+
 @dataclass
 class ParameterPolicyTrainerSession:
     """One immutable routing/runtime topology plus mutable trainability contract."""
@@ -437,6 +497,8 @@ class ParameterPolicyTrainerSession:
     runtime_spec: ParameterPolicyRuntimeSpec
     optimizer: CompositeOptimizer
     structural_frozen_parameters: tuple[Any, ...]
+    execution_contract: ParameterPolicyExecutionContract | None
+    execution_root_refs: tuple[_ExecutionRootRef, ...]
     scheduler_identity: dict[str, Any] | None = None
     scheduler_signature: str | None = None
 
@@ -531,6 +593,74 @@ class ParameterPolicyTrainerSession:
                     f"Parameter {descriptor.canonical_name!r} does not expose requires_grad_()."
                 )
             requires_grad_(desired)
+
+    def _live_execution_roots(self) -> dict[str, Any]:
+        if self.execution_contract is None:
+            return {}
+        if not self.execution_contract.require_live_root_identity:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Active execution contract does not require live-root identity auditing."
+            )
+
+        roots: dict[str, Any] = {}
+        for item in self.execution_root_refs:
+            root = item.reference()
+            if root is None:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Parameter Policy execution root {item.scan_key!r} is no longer alive."
+                )
+            if item.scan_key in roots:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Parameter Policy execution root {item.scan_key!r} is duplicated."
+                )
+            roots[item.scan_key] = root
+
+        if not roots:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Active execution contract has no live Parameter Policy roots."
+            )
+        return roots
+
+    def assert_live_root_identity_contract(self) -> None:
+        if self.execution_contract is None:
+            return
+
+        expected = _parameter_alias_identity_map(self.descriptors)
+        roots = self._live_execution_roots()
+        try:
+            live_descriptors = scan_parameter_roots(roots)
+        except Exception as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Parameter Policy live-root rescan failed: {exc}"
+            ) from exc
+        actual = _parameter_alias_identity_map(live_descriptors)
+
+        expected_names = set(expected)
+        actual_names = set(actual)
+        missing = sorted(expected_names.difference(actual_names))
+        unexpected = sorted(actual_names.difference(expected_names))
+
+        replaced: list[str] = []
+        reshaped: list[str] = []
+        for name in sorted(expected_names.intersection(actual_names)):
+            expected_id, expected_shape, expected_numel = expected[name]
+            actual_id, actual_shape, actual_numel = actual[name]
+            if expected_id != actual_id:
+                replaced.append(name)
+            if expected_shape != actual_shape or expected_numel != actual_numel:
+                reshaped.append(name)
+
+        if missing or unexpected or replaced or reshaped:
+            def _sample(values: list[str]) -> str:
+                return repr(values[:8])
+
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy live-root identity audit failed; "
+                f"missing={len(missing)} {_sample(missing)}, "
+                f"unexpected={len(unexpected)} {_sample(unexpected)}, "
+                f"replaced={len(replaced)} {_sample(replaced)}, "
+                f"reshaped={len(reshaped)} {_sample(reshaped)}."
+            )
 
     def assert_requires_grad_contract(self) -> None:
         expected = self._expected_requires_grad()
@@ -710,6 +840,37 @@ class ParameterPolicyTrainerSession:
             ).hexdigest()
         return scheduler
 
+    def assert_execution_dtype_contract(self) -> None:
+        if self.execution_contract is None:
+            return
+
+        dtype_name = self.execution_contract.expected_trainable_parameter_dtype
+        expected_dtype = _EXECUTION_PARAMETER_DTYPES.get(dtype_name)
+        if expected_dtype is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution contract requests unsupported trainable "
+                f"parameter dtype {dtype_name!r}."
+            )
+
+        name_by_id = {
+            descriptor.parameter_id: descriptor.canonical_name
+            for descriptor in self.descriptors
+        }
+        mismatches: list[str] = []
+        for parameter in self.trainable_parameters:
+            actual_dtype = getattr(parameter, "dtype", None)
+            if actual_dtype != expected_dtype:
+                mismatches.append(
+                    f"{name_by_id.get(id(parameter), '<parameter>')}={actual_dtype!r}"
+                )
+
+        if mismatches:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution dtype audit failed; optimizer-owned "
+                f"trainable parameters must use {expected_dtype}: "
+                + ", ".join(mismatches[:8])
+            )
+
     def _audit_prepared_optimizer_and_device(
         self,
         *,
@@ -838,7 +999,13 @@ class ParameterPolicyTrainerSession:
                 "Parameter Policy runtime contract phase cannot be empty."
             )
         try:
+            if (
+                self.execution_contract is not None
+                and phase_name in _LIVE_ROOT_AUDIT_PHASES
+            ):
+                self.assert_live_root_identity_contract()
             self.assert_requires_grad_contract()
+            self.assert_execution_dtype_contract()
             if accelerator is None and optimizer is None:
                 return
             if accelerator is None or optimizer is None:
@@ -1060,12 +1227,8 @@ def create_parameter_policy_session(
         )
 
     # Direct trainer entry must share the same execution qualification gate as
-    # Preview/Start.  This remains host-side preflight and runs before any
+    # Preview/Start. This remains host-side preflight and runs before any
     # parameter scan, routing, optimizer construction, or requires_grad change.
-    from mikazuki.parameter_policy_execution import (
-        parameter_policy_execution_blockers,
-    )
-
     execution_blockers = parameter_policy_execution_blockers(
         policy,
         train_type=train_type,
@@ -1077,7 +1240,29 @@ def create_parameter_policy_session(
             + "\n- ".join(execution_blockers)
         )
 
-    descriptors = scan_parameter_roots(roots)
+    try:
+        execution_contract = build_parameter_policy_execution_contract(
+            train_type=train_type,
+            effective_config=effective_config,
+        )
+    except ValueError as exc:
+        raise ParameterPolicyTrainerRuntimeError(str(exc)) from exc
+
+    scan_roots: Mapping[str, Any] = roots
+    if execution_contract is not None:
+        try:
+            scan_roots = dict(roots)
+        except Exception as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution roots could not be snapshotted."
+            ) from exc
+
+    descriptors = scan_parameter_roots(scan_roots)
+    execution_root_refs = (
+        _capture_execution_root_refs(scan_roots)
+        if execution_contract is not None
+        else ()
+    )
     structural = _unique_parameters(structural_frozen_parameters)
     descriptor_ids = {descriptor.parameter_id for descriptor in descriptors}
     structural_ids = {id(parameter) for parameter in structural}
@@ -1117,6 +1302,8 @@ def create_parameter_policy_session(
         runtime_spec=runtime_spec,
         optimizer=optimizer,
         structural_frozen_parameters=structural,
+        execution_contract=execution_contract,
+        execution_root_refs=execution_root_refs,
     )
     session.apply_requires_grad_contract()
     session.assert_requires_grad_contract()

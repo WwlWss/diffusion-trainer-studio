@@ -2798,20 +2798,36 @@ B1 merge 后仍不开放任何 full-BF16 backend/optimizer；其作用是冻结�
 
 ### B2 — physical runtime contract
 
-计划修改：
+实现范围：
 
 - `mikazuki/parameter_policy_trainer.py`；
-- trainer runtime smoke/contract tests。
+- `tests/test_parameter_policy_trainer_runtime_smoke.py`；
+- 本开发文档。
 
-目标：
+已实现：
 
-- session 接入 B1 execution contract；
-- full-BF16 active 时使用 weak root references 做一次 live-root Parameter identity rescan；
-- root identity audit 必须先于现有 ownership/device audit，防止 session/optimizer 对 stale Parameter 共同一致而误通过；
-- optimizer-owned trainable parameters 执行 dtype contract；
-- frozen parameters、optimizer state、gradients/activations不进入 generic production dtype invariant；
-- baseline / inactive full BF16 不增加 root refs 或 execution-specific audit。
+- qualification 通过后才构建 B1 `ParameterPolicyExecutionContract`；
+- inactive execution feature 保持 `execution_contract=None`、`execution_root_refs=()`，不增加 root snapshot / weakref / live scan；
+- active execution feature 对 semantic roots 做一次 shallow snapshot，并仅保存 `weakref`，避免 session 额外强引用完整 module tree；
+- `post_prepare` 与 `post_resume` 两个结构变化 seam 执行 live-root rescan；
+- live-root audit 比较完整 alias topology、physical Parameter identity、shape 与 numel，但不比较 dtype / requires_grad；
+- live-root audit 必须先于 requires-grad、dtype、optimizer ownership/device audit；
+- 发现 Parameter replacement / alias topology drift / dead root 时 fail closed，不自动 rebind optimizer；
+- `epoch_start`、checkpoint save/load 等普通 runtime assertion 不重复扫描 module tree；
+- execution dtype audit 只检查 RuntimeSpec 实际 optimizer-owned trainable Parameters；
+- frozen Parameters 可以保持其它 dtype；
+- optimizer state、gradients、activations、finite tensor scan 不进入 B2 generic production invariant；
+- host contract dtype name 使用显式 `str -> torch.dtype` 映射，不做动态 `getattr(torch, ...)`；
+- B2 不修改 checkpoint manifest/model metadata/startup diagnostics，B3 仍负责 execution identity 的持久化。
 
+性能边界：
+
+- Standard 路径不进入 Parameter Policy trainer runtime；
+- ordinary Component / `full_bf16 != true` 仅多一次 B1 contract builder 的 O(1) inactive return；
+- active full-BF16 仅在 startup/post-resume 做 metadata-only root scan，不按 tensor element 扫描，也不在每 epoch 扫描；
+- dtype audit 为 O(trainable tensor count) metadata read，不触发 tensor copy / finite scan / CUDA elementwise work。
+
+B2 完成后仍不把任何 backend/optimizer 从 `pending` 改成 `qualified`。
 ### B3 — checkpoint / metadata execution identity
 
 目标：
