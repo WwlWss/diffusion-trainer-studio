@@ -883,6 +883,176 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertEqual(diagnostics["trainable_parameter_tensors"], 1)
             accelerator.end_training()
 
+    def test_full_bf16_metadata_diagnostics_and_log_include_execution_identity(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+
+            identity = session.execution_contract.execution_identity()
+            signature = session.execution_contract.execution_signature()
+
+            metadata = session.model_metadata()
+            self.assertEqual(
+                metadata["ss_dts_parameter_policy_execution_identity"],
+                json.dumps(
+                    identity,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    allow_nan=False,
+                ),
+            )
+            self.assertEqual(
+                metadata["ss_dts_parameter_policy_execution_signature"],
+                signature,
+            )
+
+            diagnostics = session.startup_diagnostics()
+            self.assertEqual(diagnostics["execution_identity"], identity)
+            self.assertEqual(diagnostics["execution_signature"], signature)
+
+            output = []
+            session.log_startup_diagnostics(
+                SimpleNamespace(print=output.append)
+            )
+            self.assertEqual(len(output), 1)
+            self.assertIn("  execution_features: full_bf16", output[0])
+            self.assertIn(
+                "  execution_trainable_dtype: bfloat16",
+                output[0],
+            )
+            self.assertIn(
+                f"  execution_signature: {signature}",
+                output[0],
+            )
+
+    def test_baseline_manifest_metadata_diagnostics_and_log_shape_remain_exact(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, _bias, session, scheduler = self._build_runtime(policy_path)
+
+            expected_manifest = {
+                "version": 2,
+                "train_type": session.train_type,
+                "policy_hash": session.policy_hash,
+                "runtime_topology_fingerprint": session.runtime_spec.topology_fingerprint,
+                "trainable_components": sorted(session.trainable_components),
+                "frozen_components": sorted(session.frozen_components),
+                "trainable_parameter_tensors": session.trainable_parameter_tensor_count,
+                "trainable_parameter_elements": session.trainable_parameter_element_count,
+                "optimizer_profiles": session.optimizer_profiles,
+                "optimizers": [
+                    {
+                        "profile_name": spec.profile_name,
+                        "optimizer_type": spec.optimizer_type,
+                        "topology_fingerprint": spec.topology_fingerprint,
+                    }
+                    for spec in session.runtime_spec.optimizers
+                ],
+                "scheduler_identity": dict(session.scheduler_identity),
+                "scheduler_signature": session.scheduler_signature,
+                "schedulers": [
+                    {
+                        "profile_name": entry.profile_name,
+                        "mode": entry.mode,
+                        "scheduler_type": entry.scheduler_type,
+                        "topology_fingerprint": entry.topology_fingerprint,
+                    }
+                    for entry in scheduler.entries
+                ],
+            }
+            self.assertEqual(session.checkpoint_manifest(scheduler), expected_manifest)
+
+            expected_metadata_keys = {
+                "ss_dts_parameter_policy_hash",
+                "ss_dts_parameter_policy_topology",
+                "ss_dts_parameter_policy_profiles",
+                "ss_dts_parameter_policy_train_type",
+                "ss_dts_parameter_policy_trainable_components",
+                "ss_dts_parameter_policy_trainable_parameter_tensors",
+                "ss_dts_parameter_policy_trainable_parameter_elements",
+                "ss_dts_parameter_policy_manifest_version",
+                "ss_dts_parameter_policy_scheduler_signature",
+            }
+            self.assertEqual(set(session.model_metadata()), expected_metadata_keys)
+
+            expected_diagnostic_keys = {
+                "train_type",
+                "policy_hash",
+                "topology_fingerprint",
+                "trainable_components",
+                "frozen_components",
+                "optimizer_profiles",
+                "trainable_parameter_tensors",
+                "trainable_parameter_elements",
+                "scheduler_signature",
+            }
+            self.assertEqual(
+                set(session.startup_diagnostics()),
+                expected_diagnostic_keys,
+            )
+
+            output = []
+            session.log_startup_diagnostics(
+                SimpleNamespace(print=output.append)
+            )
+            self.assertEqual(len(output), 1)
+            self.assertNotIn("execution_", output[0])
+
+            accelerator = Accelerator(cpu=True)
+            session.register_checkpoint_manifest(accelerator, scheduler=scheduler)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            state_dir = Path(temp_dir) / "baseline-state"
+            accelerator.save_state(state_dir)
+            manifest_path = state_dir / PARAMETER_POLICY_CHECKPOINT_MANIFEST
+            self.assertEqual(
+                manifest_path.read_text(encoding="utf-8"),
+                json.dumps(
+                    expected_manifest,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                )
+                + "\n",
+            )
+            accelerator.end_training()
+
+    def test_malformed_execution_manifest_pair_gets_execution_specific_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, _model, _bias, session, scheduler = self._build_runtime(policy_path)
+
+            state_dir = Path(temp_dir) / "malformed-state"
+            state_dir.mkdir()
+            manifest = session.checkpoint_manifest(scheduler)
+            manifest["execution_identity"] = {
+                "schema": "dts.parameter-policy.execution-identity",
+                "version": 1,
+            }
+            (state_dir / PARAMETER_POLICY_CHECKPOINT_MANIFEST).write_text(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "execution identity",
+            ):
+                session.validate_checkpoint_manifest(
+                    state_dir,
+                    scheduler=scheduler,
+                )
+
     def test_runtime_contract_detects_requires_grad_mutation_with_phase(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
