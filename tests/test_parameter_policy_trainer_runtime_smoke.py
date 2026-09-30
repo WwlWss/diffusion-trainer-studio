@@ -546,6 +546,8 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
 
             manifest = session.checkpoint_manifest(scheduler)
+            self.assertNotIn("execution_identity", manifest)
+            self.assertNotIn("execution_signature", manifest)
             self.assertEqual(
                 manifest["version"],
                 PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
@@ -563,6 +565,8 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
 
             metadata = session.model_metadata()
+            self.assertNotIn("ss_dts_parameter_policy_execution_identity", metadata)
+            self.assertNotIn("ss_dts_parameter_policy_execution_signature", metadata)
             self.assertEqual(
                 metadata["ss_dts_parameter_policy_train_type"],
                 "flux-finetune",
