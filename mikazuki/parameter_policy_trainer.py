@@ -50,6 +50,9 @@ PARAMETER_POLICY_CHECKPOINT_MANIFEST = "dts_parameter_policy_manifest.json"
 PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 2
 PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
 _LIVE_ROOT_AUDIT_PHASES = frozenset({"post_prepare", "post_resume"})
+_EXECUTION_PARAMETER_DTYPES: dict[str, torch.dtype] = {
+    "bfloat16": torch.bfloat16,
+}
 
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
@@ -838,6 +841,37 @@ class ParameterPolicyTrainerSession:
             ).hexdigest()
         return scheduler
 
+    def assert_execution_dtype_contract(self) -> None:
+        if self.execution_contract is None:
+            return
+
+        dtype_name = self.execution_contract.expected_trainable_parameter_dtype
+        expected_dtype = _EXECUTION_PARAMETER_DTYPES.get(dtype_name)
+        if expected_dtype is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution contract requests unsupported trainable "
+                f"parameter dtype {dtype_name!r}."
+            )
+
+        name_by_id = {
+            descriptor.parameter_id: descriptor.canonical_name
+            for descriptor in self.descriptors
+        }
+        mismatches: list[str] = []
+        for parameter in self.trainable_parameters:
+            actual_dtype = getattr(parameter, "dtype", None)
+            if actual_dtype != expected_dtype:
+                mismatches.append(
+                    f"{name_by_id.get(id(parameter), '<parameter>')}={actual_dtype!r}"
+                )
+
+        if mismatches:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution dtype audit failed; optimizer-owned "
+                f"trainable parameters must use {expected_dtype}: "
+                + ", ".join(mismatches[:8])
+            )
+
     def _audit_prepared_optimizer_and_device(
         self,
         *,
@@ -972,6 +1006,7 @@ class ParameterPolicyTrainerSession:
             ):
                 self.assert_live_root_identity_contract()
             self.assert_requires_grad_contract()
+            self.assert_execution_dtype_contract()
             if accelerator is None and optimizer is None:
                 return
             if accelerator is None or optimizer is None:
