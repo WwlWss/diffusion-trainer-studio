@@ -4,21 +4,146 @@ This module is intentionally dormant unless an execution feature is explicitly
 active in the effective trainer configuration.  It is torch-free, model-free,
 I/O-free, and must not mutate policy/config state.
 
-Phase A introduces only the qualification contract for Component full BF16.
-All backend and optimizer qualifications start fail-closed; later phases may
-promote individual entries only after exact-head CUDA evidence exists.
+Phase A introduced fail-closed qualification for Component full BF16. Phase B1
+adds a deterministic host-side execution contract/identity ABI without wiring
+it into trainer runtime or checkpoint state. All backend and optimizer
+qualifications remain fail-closed until later exact-head CUDA evidence exists.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
+import json
 from typing import Any, Literal
 
 from mikazuki.optimizer_profiles import get_optimizer_capability
 
 
 QualificationStatus = Literal["pending", "qualified", "unsupported"]
+
+
+PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA = "dts.parameter-policy.execution-identity"
+PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION = 1
+
+
+def _canonical_json(value: object) -> str:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+
+
+def _sha256_json(value: object) -> str:
+    return hashlib.sha256(_canonical_json(value).encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class ParameterPolicyExecutionContract:
+    """Immutable host-side execution semantics for one Parameter Policy job.
+
+    Runtime-enforcement fields are intentionally broader than the serialized
+    execution identity.  Checkpoint compatibility must depend only on stable
+    execution semantics, not on the mechanism DTS currently uses to audit them.
+    """
+
+    train_type: str
+    features: tuple[str, ...]
+    mixed_precision: str
+    expected_trainable_parameter_dtype: str
+    require_live_root_identity: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.train_type, str):
+            raise ValueError(
+                "Parameter Policy execution contract requires train_type to be a string."
+            )
+        normalized_train_type = self.train_type.strip().lower()
+        if not normalized_train_type:
+            raise ValueError(
+                "Parameter Policy execution contract requires a non-empty train_type."
+            )
+
+        if self.features != ("full_bf16",):
+            raise ValueError(
+                "Parameter Policy execution contract has no schema for feature "
+                f"combination {self.features!r}."
+            )
+
+        if not isinstance(self.mixed_precision, str):
+            raise ValueError(
+                "full_bf16 execution contract requires mixed_precision='bf16'."
+            )
+        normalized_mixed_precision = self.mixed_precision.strip().lower()
+        if normalized_mixed_precision != "bf16":
+            raise ValueError(
+                "full_bf16 execution contract requires mixed_precision='bf16'."
+            )
+
+        if not isinstance(self.expected_trainable_parameter_dtype, str):
+            raise ValueError(
+                "full_bf16 execution contract requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+        normalized_dtype = self.expected_trainable_parameter_dtype.strip().lower()
+        if normalized_dtype != "bfloat16":
+            raise ValueError(
+                "full_bf16 execution contract requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+
+        if self.require_live_root_identity is not True:
+            raise ValueError(
+                "full_bf16 execution contract requires live-root identity auditing."
+            )
+
+        object.__setattr__(self, "train_type", normalized_train_type)
+        object.__setattr__(self, "mixed_precision", normalized_mixed_precision)
+        object.__setattr__(
+            self,
+            "expected_trainable_parameter_dtype",
+            normalized_dtype,
+        )
+
+    def execution_identity(self) -> dict[str, Any]:
+        if self.features != ("full_bf16",):
+            raise ValueError(
+                "Parameter Policy execution identity has no schema for feature "
+                f"combination {self.features!r}."
+            )
+        if self.mixed_precision != "bf16":
+            raise ValueError(
+                "full_bf16 execution identity requires mixed_precision='bf16'."
+            )
+        if self.expected_trainable_parameter_dtype != "bfloat16":
+            raise ValueError(
+                "full_bf16 execution identity requires trainable parameter dtype "
+                "'bfloat16'."
+            )
+        normalized_train_type = str(self.train_type or "").strip().lower()
+        if not normalized_train_type:
+            raise ValueError(
+                "Parameter Policy execution identity requires a non-empty train_type."
+            )
+
+        return {
+            "schema": PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA,
+            "version": PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION,
+            "train_type": normalized_train_type,
+            "features": {
+                "full_bf16": {
+                    "mixed_precision": "bf16",
+                    "trainable_parameter_dtype": "bfloat16",
+                }
+            },
+        }
+
+    def execution_signature(self) -> str:
+        return _sha256_json(self.execution_identity())
 
 
 @dataclass(frozen=True)
@@ -175,6 +300,58 @@ def active_parameter_policy_execution_features(
     return ()
 
 
+def _full_bf16_mixed_precision(
+    effective_config: Mapping[str, Any],
+) -> str:
+    mixed_precision = str(
+        effective_config.get("mixed_precision") or "no"
+    ).strip().lower()
+    if mixed_precision != "bf16":
+        raise ValueError(
+            "Component full_bf16 requires mixed_precision='bf16'; "
+            f"received {mixed_precision!r}."
+        )
+    return mixed_precision
+
+
+def build_parameter_policy_execution_contract(
+    *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+) -> ParameterPolicyExecutionContract | None:
+    """Compile active execution semantics without consulting release qualification.
+
+    Inactive execution features are a strict no-op.  Qualification metadata is
+    deliberately not part of contract construction so promoting a backend or
+    optimizer from pending to qualified cannot change checkpoint identity.
+    """
+
+    features = active_parameter_policy_execution_features(effective_config)
+    if not features:
+        return None
+
+    if features != ("full_bf16",):
+        raise ValueError(
+            "Parameter Policy execution has no runtime contract for feature "
+            f"combination {features!r}."
+        )
+
+    normalized_train_type = str(train_type or "").strip().lower()
+    if not normalized_train_type:
+        raise ValueError(
+            "Parameter Policy execution contract requires a non-empty train_type."
+        )
+
+    mixed_precision = _full_bf16_mixed_precision(effective_config)
+    return ParameterPolicyExecutionContract(
+        train_type=normalized_train_type,
+        features=("full_bf16",),
+        mixed_precision=mixed_precision,
+        expected_trainable_parameter_dtype="bfloat16",
+        require_live_root_identity=True,
+    )
+
+
 def _qualification_is_released(
     qualification: ExecutionFeatureQualification | None,
 ) -> bool:
@@ -261,12 +438,10 @@ def parameter_policy_execution_blockers(
     if "full_bf16" not in features:
         return []
 
-    mixed_precision = str(effective_config.get("mixed_precision") or "no").strip().lower()
-    if mixed_precision != "bf16":
-        return [
-            "Component full_bf16 requires mixed_precision='bf16'; "
-            f"received {mixed_precision!r}."
-        ]
+    try:
+        _full_bf16_mixed_precision(effective_config)
+    except ValueError as exc:
+        return [str(exc)]
 
     normalized_train_type = str(train_type or "").strip().lower()
     backend_qualification = FULL_BF16_BACKEND_QUALIFICATIONS.get(
@@ -327,8 +502,12 @@ def parameter_policy_execution_blockers(
 
 __all__ = [
     "ExecutionFeatureQualification",
+    "PARAMETER_POLICY_EXECUTION_IDENTITY_SCHEMA",
+    "PARAMETER_POLICY_EXECUTION_IDENTITY_VERSION",
+    "ParameterPolicyExecutionContract",
     "FULL_BF16_BACKEND_QUALIFICATIONS",
     "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
     "active_parameter_policy_execution_features",
+    "build_parameter_policy_execution_contract",
     "parameter_policy_execution_blockers",
 ]

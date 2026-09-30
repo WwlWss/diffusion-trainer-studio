@@ -2772,24 +2772,66 @@ Phase A 按三个 closeout 单元执行：
 此阶段**不开放任何 Component full BF16 backend 或 optimizer**。
 ## Phase B — execution runtime contract
 
-修改：
+Phase B 分为四个独立 closeout 单元，避免把 identity、physical audit 与 checkpoint migration 混成一次大改：
 
-- `mikazuki/parameter_policy_trainer.py`
-- 必要时增加小型 host contract helper；
+### B1 — deterministic execution contract / identity ABI
+
+只修改：
+
+- `mikazuki/parameter_policy_execution.py`；
+- `tests/test_parameter_policy_execution.py`；
+- 本开发文档。
+
+职责：
+
+- 定义 immutable `ParameterPolicyExecutionContract`；
+- full BF16 contract 只表达 `train_type`、active feature、`mixed_precision=bf16`、expected trainable dtype 与 runtime-audit requirement；
+- serialized execution identity 只包含 checkpoint/resume-relevant execution semantics；
+- `require_live_root_identity` 等 enforcement implementation detail 明确不进入 identity/signature；
+- identity 使用固定 schema/version、canonical JSON 与 SHA-256；
+- `build_parameter_policy_execution_contract()` 只从 effective config 编译 execution semantics，不读取 backend/optimizer qualification metadata；
+- inactive execution feature 返回 `None`，且发生在 train_type / mixed_precision / qualification metadata 访问之前；
+- future unknown feature combination fail closed；
+- 不接 trainer、checkpoint、model metadata 或 runtime audit caller。
+
+B1 merge 后仍不开放任何 full-BF16 backend/optimizer；其作用是冻结后续 B2/B3 共用的 execution identity ABI。
+
+### B2 — physical runtime contract
+
+计划修改：
+
+- `mikazuki/parameter_policy_trainer.py`；
 - trainer runtime smoke/contract tests。
 
 目标：
 
-- execution contract；
-- trainable dtype audit；
-- live-root identity audit；
-- startup diagnostics；
-- model metadata execution signature；
-- manifest v2 additive execution identity；
-- pre-load mismatch fail-closed。
+- session 接入 B1 execution contract；
+- full-BF16 active 时使用 weak root references 做一次 live-root Parameter identity rescan；
+- root identity audit 必须先于现有 ownership/device audit，防止 session/optimizer 对 stale Parameter 共同一致而误通过；
+- optimizer-owned trainable parameters 执行 dtype contract；
+- frozen parameters、optimizer state、gradients/activations不进入 generic production dtype invariant；
+- baseline / inactive full BF16 不增加 root refs 或 execution-specific audit。
 
-此阶段仍不开放任何 backend。
+### B3 — checkpoint / metadata execution identity
 
+目标：
+
+- manifest version 保持 v2；
+- full-BF16 active 时 additive 写入 `execution_identity` / `execution_signature`；
+- baseline manifest key/value 结构保持不变；
+- execution mismatch 在 Accelerator state mutation 前的 load pre-hook 中 fail closed；
+- model metadata/startup diagnostics仅在 active execution contract 时追加 execution identity/signature。
+
+### B4 — Phase B closeout
+
+目标：
+
+- exact-head CPU/runtime smoke；
+- source-level review；
+- baseline checkpoint exact regression；
+- docs closeout。
+
+Phase B 全部完成后仍不把任何 backend/optimizer从 `pending` 改成 `qualified`；真实 CUDA qualification 仍由 Phase C/D 负责。
 ## Phase C — shared true-BF16 CUDA qualification
 
 新增：
