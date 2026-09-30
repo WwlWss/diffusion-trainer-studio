@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import os
+import weakref
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,11 @@ import torch
 
 from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
+from mikazuki.parameter_policy_execution import (
+    ParameterPolicyExecutionContract,
+    build_parameter_policy_execution_contract,
+    parameter_policy_execution_blockers,
+)
 from mikazuki.parameter_policy_runtime import (
     ParameterPolicyRuntimeSpec,
     compile_parameter_policy_runtime_spec,
@@ -424,6 +430,32 @@ class LegacySchedulerFactory:
         )
 
 
+@dataclass(frozen=True)
+class _ExecutionRootRef:
+    scan_key: str
+    reference: weakref.ReferenceType[Any]
+
+
+def _capture_execution_root_refs(
+    roots: Mapping[str, Any],
+) -> tuple[_ExecutionRootRef, ...]:
+    refs: list[_ExecutionRootRef] = []
+    for scan_key in sorted(roots, key=lambda item: (str(item).casefold(), str(item))):
+        if not isinstance(scan_key, str):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution roots must use string scan keys."
+            )
+        root = roots[scan_key]
+        try:
+            reference = weakref.ref(root)
+        except TypeError as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Parameter Policy execution root {scan_key!r} does not support weak references."
+            ) from exc
+        refs.append(_ExecutionRootRef(scan_key=scan_key, reference=reference))
+    return tuple(refs)
+
+
 @dataclass
 class ParameterPolicyTrainerSession:
     """One immutable routing/runtime topology plus mutable trainability contract."""
@@ -437,6 +469,8 @@ class ParameterPolicyTrainerSession:
     runtime_spec: ParameterPolicyRuntimeSpec
     optimizer: CompositeOptimizer
     structural_frozen_parameters: tuple[Any, ...]
+    execution_contract: ParameterPolicyExecutionContract | None
+    execution_root_refs: tuple[_ExecutionRootRef, ...]
     scheduler_identity: dict[str, Any] | None = None
     scheduler_signature: str | None = None
 
@@ -1060,12 +1094,8 @@ def create_parameter_policy_session(
         )
 
     # Direct trainer entry must share the same execution qualification gate as
-    # Preview/Start.  This remains host-side preflight and runs before any
+    # Preview/Start. This remains host-side preflight and runs before any
     # parameter scan, routing, optimizer construction, or requires_grad change.
-    from mikazuki.parameter_policy_execution import (
-        parameter_policy_execution_blockers,
-    )
-
     execution_blockers = parameter_policy_execution_blockers(
         policy,
         train_type=train_type,
@@ -1077,7 +1107,29 @@ def create_parameter_policy_session(
             + "\n- ".join(execution_blockers)
         )
 
-    descriptors = scan_parameter_roots(roots)
+    try:
+        execution_contract = build_parameter_policy_execution_contract(
+            train_type=train_type,
+            effective_config=effective_config,
+        )
+    except ValueError as exc:
+        raise ParameterPolicyTrainerRuntimeError(str(exc)) from exc
+
+    scan_roots: Mapping[str, Any] = roots
+    if execution_contract is not None:
+        try:
+            scan_roots = dict(roots)
+        except Exception as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution roots could not be snapshotted."
+            ) from exc
+
+    descriptors = scan_parameter_roots(scan_roots)
+    execution_root_refs = (
+        _capture_execution_root_refs(scan_roots)
+        if execution_contract is not None
+        else ()
+    )
     structural = _unique_parameters(structural_frozen_parameters)
     descriptor_ids = {descriptor.parameter_id for descriptor in descriptors}
     structural_ids = {id(parameter) for parameter in structural}
@@ -1117,6 +1169,8 @@ def create_parameter_policy_session(
         runtime_spec=runtime_spec,
         optimizer=optimizer,
         structural_frozen_parameters=structural,
+        execution_contract=execution_contract,
+        execution_root_refs=execution_root_refs,
     )
     session.apply_requires_grad_contract()
     session.assert_requires_grad_contract()
