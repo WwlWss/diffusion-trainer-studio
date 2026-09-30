@@ -456,10 +456,9 @@ def _parameter_alias_identity_map(
                 tuple(descriptor.shape),
                 int(descriptor.numel),
             )
-            previous = result.get(name)
-            if previous is not None and previous != value:
+            if name in result:
                 raise ParameterPolicyTrainerRuntimeError(
-                    f"Parameter Policy alias {name!r} maps to conflicting physical parameters."
+                    f"Parameter Policy alias {name!r} is duplicated in the live identity map."
                 )
             result[name] = value
     return result
