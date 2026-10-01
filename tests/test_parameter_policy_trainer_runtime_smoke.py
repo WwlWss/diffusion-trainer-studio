@@ -147,7 +147,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 ParameterPolicyTrainerRuntimeError,
-                "post_prepare.*full_bf16.*single-process.*num_processes=2",
+                "(?s)post_prepare.*full_bf16.*single-process.*num_processes=2",
             ):
                 session.assert_runtime_contract(
                     phase="post_prepare",
