@@ -131,29 +131,45 @@ def _worker_mode_from_argv(argv: list[str]) -> bool:
     )
 
 
-def _worker_dir_from_argv(argv: list[str]) -> str:
+def _single_worker_path_from_argv(
+    argv: list[str],
+    *,
+    option: str,
+) -> str:
+    candidate: str | None = None
+    prefix = option + "="
     for index, value in enumerate(argv):
-        if value == "--worker-dir":
+        parsed: str | None = None
+        if value == option:
             if index + 1 >= len(argv):
                 raise ExecutionGpuMatrixBootstrapError(
-                    "--worker-dir requires a non-empty value."
+                    f"{option} requires a non-empty value."
                 )
-            candidate = argv[index + 1].strip()
-            if candidate:
-                return candidate
+            parsed = argv[index + 1].strip()
+        elif value.startswith(prefix):
+            parsed = value.split("=", 1)[1].strip()
+        else:
+            continue
+
+        if candidate is not None:
             raise ExecutionGpuMatrixBootstrapError(
-                "--worker-dir requires a non-empty value."
+                f"Worker mode requires {option} exactly once before runtime imports."
             )
-        if value.startswith("--worker-dir="):
-            candidate = value.split("=", 1)[1].strip()
-            if candidate:
-                return candidate
+        if not parsed:
             raise ExecutionGpuMatrixBootstrapError(
-                "--worker-dir requires a non-empty value."
+                f"{option} requires a non-empty value."
             )
-    raise ExecutionGpuMatrixBootstrapError(
-        "Worker mode requires --worker-dir before runtime imports."
-    )
+        candidate = parsed
+
+    if candidate is None:
+        raise ExecutionGpuMatrixBootstrapError(
+            f"Worker mode requires {option} before runtime imports."
+        )
+    return candidate
+
+
+def _worker_dir_from_argv(argv: list[str]) -> str:
+    return _single_worker_path_from_argv(argv, option="--worker-dir")
 
 
 def _assert_worker_dir_outside_repo(worker_dir: str) -> Path:
@@ -169,28 +185,7 @@ def _assert_worker_dir_outside_repo(worker_dir: str) -> Path:
 
 
 def _worker_result_from_argv(argv: list[str]) -> str:
-    for index, value in enumerate(argv):
-        if value == "--worker-result":
-            if index + 1 >= len(argv):
-                raise ExecutionGpuMatrixBootstrapError(
-                    "--worker-result requires a non-empty value."
-                )
-            candidate = argv[index + 1].strip()
-            if candidate:
-                return candidate
-            raise ExecutionGpuMatrixBootstrapError(
-                "--worker-result requires a non-empty value."
-            )
-        if value.startswith("--worker-result="):
-            candidate = value.split("=", 1)[1].strip()
-            if candidate:
-                return candidate
-            raise ExecutionGpuMatrixBootstrapError(
-                "--worker-result requires a non-empty value."
-            )
-    raise ExecutionGpuMatrixBootstrapError(
-        "Worker mode requires --worker-result before runtime imports."
-    )
+    return _single_worker_path_from_argv(argv, option="--worker-result")
 
 
 def _assert_worker_result_in_dir(worker_result: str, worker_dir: Path) -> Path:
@@ -1040,7 +1035,12 @@ def _write_json(path: Path, payload: object) -> None:
 
 
 def _worker_main(args: argparse.Namespace) -> int:
-    result_path = Path(args.worker_result)
+    if _BOOTSTRAP_WORKER_RESULT is None or _BOOTSTRAP_WORKER_DIR is None:
+        raise ExecutionGpuMatrixBootstrapError(
+            "Worker execution is missing validated bootstrap paths."
+        )
+    result_path = _BOOTSTRAP_WORKER_RESULT
+    case_dir = _BOOTSTRAP_WORKER_DIR
     started = time.time()
     payload: dict[str, Any] = {
         "case_id": args.worker_case,
@@ -1050,7 +1050,6 @@ def _worker_main(args: argparse.Namespace) -> int:
     }
     try:
         payload["commit"] = _assert_exact_clean_head(args.expected_commit)
-        case_dir = Path(args.worker_dir)
         case_dir.mkdir(parents=True, exist_ok=True)
         payload["details"] = _run_worker_case(
             args.worker_case,
