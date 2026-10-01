@@ -27,6 +27,7 @@ from mikazuki.parameter_policy_execution import (
     ParameterPolicyExecutionContract,
     build_parameter_policy_execution_contract,
     parameter_policy_execution_blockers,
+    parameter_policy_execution_environment_blockers,
 )
 from mikazuki.parameter_policy_runtime import (
     ParameterPolicyRuntimeSpec,
@@ -936,6 +937,34 @@ class ParameterPolicyTrainerSession:
                 + ", ".join(mismatches[:8])
             )
 
+    def assert_execution_environment_contract(
+        self,
+        accelerator: object,
+    ) -> None:
+        if self.execution_contract is None:
+            return
+
+        num_processes = getattr(accelerator, "num_processes", None)
+        raw_distributed_type = getattr(accelerator, "distributed_type", None)
+        distributed_type = getattr(
+            raw_distributed_type,
+            "value",
+            raw_distributed_type,
+        )
+        try:
+            blockers = parameter_policy_execution_environment_blockers(
+                self.execution_contract,
+                num_processes=num_processes,
+                distributed_type=distributed_type,
+            )
+        except ValueError as exc:
+            raise ParameterPolicyTrainerRuntimeError(str(exc)) from exc
+        if blockers:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Parameter Policy execution environment is not qualified:\n- "
+                + "\n- ".join(blockers)
+            )
+
     def _audit_prepared_optimizer_and_device(
         self,
         *,
@@ -1077,6 +1106,7 @@ class ParameterPolicyTrainerSession:
                 raise ParameterPolicyTrainerRuntimeError(
                     "Runtime ownership/device audit requires both accelerator and optimizer."
                 )
+            self.assert_execution_environment_contract(accelerator)
             self._audit_prepared_optimizer_and_device(
                 accelerator=accelerator,
                 optimizer=optimizer,

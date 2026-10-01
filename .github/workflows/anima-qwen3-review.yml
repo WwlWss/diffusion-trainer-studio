@@ -78,6 +78,8 @@ on:
       - "tools/apply_anima_multi_caption_patch.py"
       - "tools/apply_anima_parameter_policy_metadata_patch.py"
       - "tools/run_parameter_policy_gpu_matrix.py"
+      - "tools/run_parameter_policy_execution_gpu_matrix.py"
+      - "tools/parameter_policy_execution_gpu_support.py"
       - "tools/run_parameter_policy_backend_gpu_matrix.py"
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
@@ -169,6 +171,8 @@ jobs:
             tools/apply_anima_parameter_policy_metadata_patch.py \
             tools/apply_anima_parameter_policy_runtime_patch.py \
             tools/run_parameter_policy_gpu_matrix.py \
+            tools/run_parameter_policy_execution_gpu_matrix.py \
+            tools/parameter_policy_execution_gpu_support.py \
             tools/run_parameter_policy_backend_gpu_matrix.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \

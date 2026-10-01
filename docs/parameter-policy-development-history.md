@@ -2907,26 +2907,96 @@ Phase C 入口条件：
 因此 Phase B 的最终产物是：**execution semantics 已可定义、审计、持久化和恢复验证，但 production capability 仍保持关闭。**
 ## Phase C — shared true-BF16 CUDA qualification
 
+### C0 — reachable execution state
+
+Phase C 首先冻结 shared full-BF16 qualification 的运行环境边界，不把单卡 CUDA evidence 外推到未经验证的 runtime modifier。
+
+已实现：
+
+- `parameter_policy_execution_environment_blockers()` 保持 torch-free / accelerate-free，只消费已经建立的 execution contract 与规范化 `num_processes` / `distributed_type`；
+- active `full_bf16` 当前只允许 `num_processes == 1` 且 `distributed_type == NO`；multi-process/DDP/FSDP 等 distributed runtime 在独立 exact-head CUDA qualification 前 fail closed；
+- ordinary Component (`execution_contract=None`) 不受该限制，现有 multi-process Component 路径不被 C0 改写；
+- environment gate 在既有 trainable dtype audit 后、optimizer ownership/device audit 前执行，不重排 B2 live-root/requires-grad/dtype 语义；
+- compile / torch_compile / FP8 / full FP16 / fused optimizer / DeepSpeed / offload / block swap 等已有 runtime blocker 继续保持 fail closed；
+- `gradient_accumulation_steps > 1` 不在 C0 被禁止，留给 Phase C shared CUDA evidence。
+
+### C1 — exact-head execution CUDA evidence harness
+
 新增：
 
-- `tools/run_parameter_policy_execution_gpu_matrix.py`
+- `tools/run_parameter_policy_execution_gpu_matrix.py`；
+- host-side harness contract test；
+- GitHub host CI 对 runner 的 path/py_compile 与 source contract 检查。
 
-修改：
+C1 runner contract：
 
-- GPU workflow；
-- Step6F/本开发文档 evidence 说明。
+- parent coordinator 与 worker subprocess 都要求 `--expected-commit`，并在 import torch / Accelerate / DTS runtime 之前验证实际 `git rev-parse HEAD` 完全一致；
+- qualification workspace 必须完全 clean，`git status --porcelain=v1 --untracked-files=all` 不能有任何输出；tracked/staged/untracked 污染都会 fail closed；evidence JSON 因此必须写到 repository 外；
+- CUDA 不可用、无 visible GPU、或 `torch.cuda.is_bf16_supported()` 不成立时直接 FAIL，不允许 CPU fallback/skip；
+- 每个 case 使用 fresh `sys.executable` subprocess，`shell=False`，为 C2/C3 的 train/save 与 fresh resume phase 保留同一 protocol；
+- temporary qualification lease 只存在于 worker 进程内：`pending` 可临时 leased，正式 `qualified + evidence_case_id` 直接使用，malformed qualified / unsupported / invalid status 全部 fail closed；退出时必须恢复原 qualification row；该状态机有 CPU 行为测试覆盖正常退出与异常退出恢复；
+- 不增加 production bypass 环境变量，不修改 production qualification table。
 
-目标：
+C1 infrastructure cases：
 
-- AdamW；
-- Muon；
-- Muon + AdamW；
-- Accelerate BF16；
-- accumulation seam；
-- save/reload；
-- dtype/state evidence。
+1. `infra:cuda-bf16-capability:v1`：记录真实 CUDA/BF16 hardware/runtime/package evidence，包括 GPU、compute capability、VRAM、CUDA runtime、NVIDIA driver 与 pinned package versions；
+2. `infra:full-bf16-session:v1`：使用 tiny Flux-shaped scaffold 走 `create session -> model.to(bfloat16) -> Accelerator(mixed_precision='bf16') -> prepare -> finalize_after_prepare -> B2 audit -> B3 execution manifest`。
 
-没有真实 CUDA evidence 前，不进入 backend qualification。
+两个 case 都明确：
+
+- `scope = infrastructure`；
+- `promotion_eligible = false`；
+- backend scaffold 不具备 backend qualification 资格；
+- AdamW scaffold 不具备 optimizer qualification 资格；
+- C1 不执行 optimizer step，不产生 C2 optimizer evidence。
+
+CUDA evidence execution model：
+
+- GitHub Actions 只负责 host/source/CPU/runtime contract CI；真实 CUDA qualification 不依赖 GitHub self-hosted workflow；
+- 现有 `.github/workflows/parameter-policy-gpu-matrix.yml` 保持原样，不调用新的 execution qualification runner，也不作为 C1/C2 的 authoritative evidence gate；
+- 在已知可用的 CUDA 环境（本地 GPU 或云 GPU）直接 checkout PR exact SHA，并运行 standalone runner；
+- 旧 `tools/run_parameter_policy_gpu_matrix.py` 保持历史宽松调用兼容，但 Phase C qualification 必须显式传 `--expected-commit` 进入 strict mode；strict mode 同样在 import torch 前验证 exact HEAD + 完整 clean workspace；
+- 新 execution runner 强制 `--expected-commit`，两个 standalone runner 的 authoritative qualification evidence 因此使用同等级 provenance，不依赖 CI provider 注入的环境变量；
+- standalone evidence JSON 由运行者保留并提交 review；GitHub workflow 是否能成功调度不影响 qualification 结论。
+
+推荐 exact-head CUDA evidence 命令：
+
+```text
+python tools/run_parameter_policy_gpu_matrix.py \
+  --expected-commit <PR_EXACT_SHA> \
+  --output ../parameter-policy-gpu-matrix.json
+
+python tools/run_parameter_policy_execution_gpu_matrix.py \
+  --expected-commit <PR_EXACT_SHA> \
+  --output ../parameter-policy-execution-gpu-matrix.json
+```
+
+C2 source-development 入口条件：
+
+1. GitHub host/source/CPU/runtime CI exact-head 全绿；
+2. C0/C1 focused source review 无 P1/P2 blocker；
+3. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
+4. B1 identity、B2 physical audit、B3 checkpoint schema 不为后续实现放宽；
+5. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture；
+6. C2/C3/Phase D 可以继续完成源码、host contract、CPU/runtime smoke 与 UI/Preview/Start wiring；source-development 不要求此时 clone CUDA 环境或生成真实 GPU evidence。
+
+因此，C1 standalone CUDA runner 是后续 final qualification 的 evidence infrastructure，不是继续开发 C2/C3/Phase D 源码的前置硬门槛。这样可以避免在完整 UI positive path 尚未形成时重复 clone / 配置 GPU 环境、反复生成很快会因源码继续变化而失效的中间态 evidence。
+
+Final qualification / promotion gate：
+
+1. 完整 UI positive path 已具备，能够从 UI 配置 full-BF16 / Component，经过 Preview 与 Start 进入真实 trainer lifecycle；
+2. 必须选择最终 candidate exact head，在已知可用 CUDA 环境 checkout 该 SHA；
+3. 旧 shared GPU matrix 以 `--expected-commit` strict mode PASS；
+4. C1 execution infrastructure matrix PASS；
+5. C2/C3/C4 对应的 AdamW、Muon、Muon + AdamW fallback 真实 step / accumulation / save / fresh-resume / second-step evidence PASS；
+6. Phase D 对目标 backend 的真实 forward/backward/step/save/resume evidence PASS；
+7. 完整 UI -> Preview -> Start -> train -> checkpoint -> resume -> second-step positive path 在相同 qualification candidate 上 PASS；
+8. 两类 standalone evidence JSON 均写在 repository 外，并完成 commit/provenance/runtime/case review；
+9. 在上述 evidence 完整之前，backend/optimizer production qualification 继续保持 pending/unsupported，不允许仅凭源码完成或 CPU CI 将 capability 切为 qualified。
+
+为了测试最终 UI positive path，允许后续设计一个显式、测试专用的 qualification session/lease，但必须保持以下边界：只用于 qualification 环境、进程内临时生效、退出自动恢复、普通 UI 用户不可触发、不能通过环境变量全局绕过、不能修改 production qualification table。现有 C1 temporary qualification lease 只属于 evidence tooling，不能直接当成 production UI bypass。
+
+后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在 final qualification / promotion gate 通过之前，不改变任何 optimizer qualification。
 
 ## Phase D — backend feature qualification
 

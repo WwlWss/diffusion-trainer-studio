@@ -342,6 +342,41 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
                 self.assertEqual(len(blockers), 1)
                 self.assertIn(marker, blockers[0])
 
+    def test_phase_c_unqualified_runtime_modifier_surface_remains_fail_closed(self):
+        cases = (
+            ("flux-finetune", "torch_compile", True, "torch_compile"),
+            ("flux-finetune", "full_fp16", True, "full_fp16"),
+            ("flux-finetune", "fp8_base", True, "fp8_base"),
+            ("flux-finetune", "fp8_base_unet", True, "fp8_base_unet"),
+            ("flux-finetune", "fused_backward_pass", True, "fused_backward_pass"),
+            ("flux-finetune", "fused_optimizer_groups", 2, "fused_optimizer_groups"),
+            ("flux-finetune", "blockwise_fused_optimizers", True, "blockwise_fused_optimizers"),
+            ("flux-finetune", "deepspeed", True, "DeepSpeed"),
+            ("flux-finetune", "cpu_offload_checkpointing", True, "cpu_offload_checkpointing"),
+            ("flux-finetune", "blocks_to_swap", 1, "blocks_to_swap"),
+            ("anima-finetune", "compile", True, "compile"),
+        )
+        for train_type, field, value, marker_text in cases:
+            with self.subTest(train_type=train_type, field=field):
+                blockers = parameter_policy_v1_semantic_blockers(
+                    {field: value},
+                    train_type,
+                )
+                self.assertTrue(blockers)
+                self.assertTrue(
+                    any(marker_text in blocker for blocker in blockers),
+                    blockers,
+                )
+
+    def test_gradient_accumulation_remains_a_phase_c_candidate(self):
+        self.assertEqual(
+            parameter_policy_v1_semantic_blockers(
+                {"gradient_accumulation_steps": 2},
+                "flux-finetune",
+            ),
+            [],
+        )
+
     def test_false_or_zero_global_runtime_fields_are_inert(self):
         config = {
             "fused_backward_pass": False,
