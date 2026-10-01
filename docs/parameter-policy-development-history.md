@@ -2926,7 +2926,7 @@ Phase C 首先冻结 shared full-BF16 qualification 的运行环境边界，不�
 
 - `tools/run_parameter_policy_execution_gpu_matrix.py`；
 - host-side harness contract test；
-- existing Parameter Policy GPU workflow 中的 shared execution evidence step。
+- GitHub host CI 对 runner 的 path/py_compile 与 source contract 检查。
 
 C1 runner contract：
 
@@ -2950,23 +2950,35 @@ C1 infrastructure cases：
 - AdamW scaffold 不具备 optimizer qualification 资格；
 - C1 不执行 optimizer step，不产生 C2 optimizer evidence。
 
-GPU workflow：
+CUDA evidence execution model：
 
-- 继续先跑原 `run_parameter_policy_gpu_matrix.py` baseline matrix；
-- 再串行跑新的 execution infrastructure matrix，避免单 GPU runner 并发争抢；
-- optional real backend matrix 保持独立；
-- baseline + execution 两个 shared JSON artifact 均为 required，缺失即 error；
-- GPU workflow 仍仅 `workflow_dispatch`，不会让普通 PR 自动在 self-hosted GPU 上执行代码；
-- Windows 与 non-Windows 路径都调用同一 execution runner。
+- GitHub Actions 只负责 host/source/CPU/runtime contract CI；真实 CUDA qualification 不依赖 GitHub self-hosted workflow；
+- 现有 `.github/workflows/parameter-policy-gpu-matrix.yml` 保持原样，不调用新的 execution qualification runner，也不作为 C1/C2 的 authoritative evidence gate；
+- 在已知可用的 CUDA 环境（本地 GPU 或云 GPU）直接 checkout PR exact SHA，并运行 standalone runner；
+- 旧 `tools/run_parameter_policy_gpu_matrix.py` 也可在同一 exact head 上直接运行，作为 ordinary Component GPU baseline regression；
+- 新 execution runner 通过 `--expected-commit` + tracked clean-tree 检查自行建立 exact-head provenance，不依赖 CI provider 注入的环境变量；
+- standalone evidence JSON 由运行者保留并提交 review；GitHub workflow 是否能成功调度不影响 qualification 结论。
+
+推荐 exact-head CUDA evidence 命令：
+
+```text
+python tools/run_parameter_policy_gpu_matrix.py \
+  --output parameter-policy-gpu-matrix.json
+
+python tools/run_parameter_policy_execution_gpu_matrix.py \
+  --expected-commit <PR_EXACT_SHA> \
+  --output parameter-policy-execution-gpu-matrix.json
+```
 
 C2 入口条件：
 
-1. C0 host/runtime regression 全绿；
-2. old shared GPU matrix exact-head PASS；
-3. C1 execution infrastructure matrix exact-head PASS；
-4. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
-5. B1 identity、B2 physical audit、B3 checkpoint schema 不为 GPU 测试放宽；
-6. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture。
+1. GitHub host/source/CPU/runtime CI exact-head 全绿；
+2. 同一 PR exact head 在已知可用 CUDA 环境直接运行旧 shared GPU matrix并 PASS；
+3. 同一 PR exact head 直接运行 C1 execution infrastructure matrix并 PASS；
+4. 两份 standalone evidence JSON 的 commit/runtime/case结果经过 review；
+5. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
+6. B1 identity、B2 physical audit、B3 checkpoint schema 不为 GPU 测试放宽；
+7. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture。
 
 后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在对应 exact-head promotion PR 之前，不改变任何 optimizer qualification。
 
