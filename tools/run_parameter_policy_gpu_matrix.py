@@ -99,6 +99,30 @@ def _assert_exact_clean_head(expected_commit: str) -> str:
     return actual
 
 
+def _output_from_argv(argv: list[str], *, default: str) -> str:
+    output = default
+    for index, value in enumerate(argv):
+        if value == "--output":
+            if index + 1 >= len(argv):
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            candidate = argv[index + 1].strip()
+            if not candidate:
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            output = candidate
+        elif value.startswith("--output="):
+            candidate = value.split("=", 1)[1].strip()
+            if not candidate:
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            output = candidate
+    return output
+
+
 def _assert_output_outside_repo(output: str) -> Path:
     resolved = Path(output).expanduser().resolve(strict=False)
     try:
@@ -114,6 +138,16 @@ def _assert_output_outside_repo(output: str) -> Path:
 _STRICT_EXPECTED_COMMIT = _strict_expected_commit_from_argv(sys.argv[1:])
 _STRICT_COMMIT = (
     _assert_exact_clean_head(_STRICT_EXPECTED_COMMIT)
+    if _STRICT_EXPECTED_COMMIT is not None
+    else None
+)
+_STRICT_OUTPUT = (
+    _assert_output_outside_repo(
+        _output_from_argv(
+            sys.argv[1:],
+            default="parameter-policy-gpu-matrix.json",
+        )
+    )
     if _STRICT_EXPECTED_COMMIT is not None
     else None
 )
@@ -454,9 +488,6 @@ def main() -> int:
     parser.add_argument("--output", default="parameter-policy-gpu-matrix.json")
     parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
-
-    if args.expected_commit is not None:
-        _assert_output_outside_repo(args.output)
 
     if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
         raise SystemExit("Parameter Policy GPU matrix requires a real CUDA device.")
