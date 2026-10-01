@@ -1141,6 +1141,10 @@ def _coordinator_main(args: argparse.Namespace) -> int:
     environment = _cuda_environment()
 
     selected = tuple(args.case) if args.case else _CASES
+    if len(set(selected)) != len(selected):
+        raise ExecutionGpuMatrixError(
+            "Execution GPU qualification case selection contains duplicates."
+        )
     unknown = sorted(set(selected).difference(_CASES))
     if unknown:
         raise ExecutionGpuMatrixError(
