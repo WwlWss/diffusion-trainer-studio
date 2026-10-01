@@ -353,6 +353,41 @@ def build_parameter_policy_execution_contract(
     )
 
 
+def parameter_policy_execution_environment_blockers(
+    contract: ParameterPolicyExecutionContract,
+    *,
+    num_processes: int,
+) -> list[str]:
+    """Return runtime-environment blockers for an active execution contract.
+
+    This remains host-side and deliberately accepts normalized runtime facts
+    instead of importing Accelerate or reading launcher environment variables.
+    """
+
+    if not isinstance(contract, ParameterPolicyExecutionContract):
+        raise ValueError(
+            "Parameter Policy execution environment requires an execution contract."
+        )
+    if isinstance(num_processes, bool) or not isinstance(num_processes, int):
+        raise ValueError(
+            "Parameter Policy execution environment requires num_processes "
+            "to be a positive integer."
+        )
+    if num_processes < 1:
+        raise ValueError(
+            "Parameter Policy execution environment requires num_processes "
+            "to be a positive integer."
+        )
+
+    if contract.features == ("full_bf16",) and num_processes != 1:
+        return [
+            "Parameter Policy full_bf16 execution is currently qualified only "
+            "for single-process runtime; multi-process/DDP requires separate "
+            f"exact-head CUDA qualification (num_processes={num_processes})."
+        ]
+    return []
+
+
 def _qualification_is_released(
     qualification: ExecutionFeatureQualification | None,
 ) -> bool:
@@ -511,4 +546,5 @@ __all__ = [
     "active_parameter_policy_execution_features",
     "build_parameter_policy_execution_contract",
     "parameter_policy_execution_blockers",
+    "parameter_policy_execution_environment_blockers",
 ]
