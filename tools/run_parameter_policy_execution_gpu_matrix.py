@@ -98,6 +98,39 @@ def _assert_exact_clean_head(expected_commit: str) -> str:
     return actual
 
 
+def _output_from_argv(argv: list[str], *, default: str) -> str:
+    output = default
+    for index, value in enumerate(argv):
+        if value == "--output":
+            if index + 1 >= len(argv):
+                raise ExecutionGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            candidate = argv[index + 1].strip()
+            if not candidate:
+                raise ExecutionGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            output = candidate
+        elif value.startswith("--output="):
+            candidate = value.split("=", 1)[1].strip()
+            if not candidate:
+                raise ExecutionGpuMatrixBootstrapError(
+                    "--output requires a non-empty value."
+                )
+            output = candidate
+    return output
+
+
+def _worker_mode_from_argv(argv: list[str]) -> bool:
+    worker_flags = ("--worker-case", "--worker-phase", "--worker-result")
+    return any(
+        value == flag or value.startswith(flag + "=")
+        for value in argv
+        for flag in worker_flags
+    )
+
+
 def _assert_output_outside_repo(output: str) -> Path:
     resolved = Path(output).expanduser().resolve(strict=False)
     try:
@@ -112,6 +145,17 @@ def _assert_output_outside_repo(output: str) -> Path:
 
 _BOOTSTRAP_EXPECTED_COMMIT = _expected_commit_from_argv(sys.argv[1:])
 _BOOTSTRAP_COMMIT = _assert_exact_clean_head(_BOOTSTRAP_EXPECTED_COMMIT)
+_BOOTSTRAP_WORKER_MODE = _worker_mode_from_argv(sys.argv[1:])
+_BOOTSTRAP_OUTPUT = (
+    None
+    if _BOOTSTRAP_WORKER_MODE
+    else _assert_output_outside_repo(
+        _output_from_argv(
+            sys.argv[1:],
+            default="parameter-policy-execution-gpu-matrix.json",
+        )
+    )
+)
 
 
 import torch
@@ -496,7 +540,11 @@ def _run_case_subprocess(
 
 def _coordinator_main(args: argparse.Namespace) -> int:
     commit = _assert_exact_clean_head(args.expected_commit)
-    output_path = _assert_output_outside_repo(args.output)
+    if _BOOTSTRAP_OUTPUT is None:
+        raise ExecutionGpuMatrixError(
+            "Coordinator execution is missing its validated external output path."
+        )
+    output_path = _BOOTSTRAP_OUTPUT
     environment = _cuda_environment()
 
     selected = tuple(args.case) if args.case else _CASES
