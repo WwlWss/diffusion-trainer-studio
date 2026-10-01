@@ -17,18 +17,54 @@ class ExecutionGpuMatrixError(RuntimeError):
 
 ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:adamw-full-bf16:v1"
 
+ADAMW_FULL_BF16_CASE_IDS = (
+    "optimizer:adamw:full-bf16:accum1:v1",
+    "optimizer:adamw:full-bf16:accum2:v1",
+)
+
 EXECUTION_GPU_CASE_PHASES: dict[str, tuple[str, ...]] = {
     "infra:cuda-bf16-capability:v1": ("probe",),
     "infra:full-bf16-session:v1": ("probe",),
-    "optimizer:adamw:full-bf16:accum1:v1": (
+    ADAMW_FULL_BF16_CASE_IDS[0]: (
         "train_save",
         "resume_second_step",
     ),
-    "optimizer:adamw:full-bf16:accum2:v1": (
+    ADAMW_FULL_BF16_CASE_IDS[1]: (
         "train_save",
         "resume_second_step",
     ),
 }
+
+
+def summarize_adamw_full_bf16_bundle(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    rows = {
+        row.get("case_id"): row
+        for row in case_rows
+        if row.get("case_id") in ADAMW_FULL_BF16_CASE_IDS
+    }
+    if not rows:
+        return None
+
+    missing_cases = sorted(set(ADAMW_FULL_BF16_CASE_IDS).difference(rows))
+    if missing_cases:
+        status = "incomplete"
+    elif all(row.get("status") == "pass" for row in rows.values()):
+        status = "pass"
+    else:
+        status = "fail"
+
+    return {
+        "scope": "optimizer",
+        "optimizer": "AdamW",
+        "feature": "full_bf16",
+        "required_cases": list(ADAMW_FULL_BF16_CASE_IDS),
+        "missing_cases": missing_cases,
+        "status": status,
+        "optimizer_qualification_eligible": status == "pass",
+        "production_qualification_mutated": False,
+    }
 
 
 @contextmanager
@@ -120,8 +156,10 @@ def temporary_execution_qualification(
 
 
 __all__ = [
+    "ADAMW_FULL_BF16_CASE_IDS",
     "ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID",
     "EXECUTION_GPU_CASE_PHASES",
     "ExecutionGpuMatrixError",
+    "summarize_adamw_full_bf16_bundle",
     "temporary_execution_qualification",
 ]
