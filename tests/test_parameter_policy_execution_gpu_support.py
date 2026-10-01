@@ -9,7 +9,10 @@ from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    MUON_FULL_BF16_CASE_IDS,
+    MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
+    summarize_muon_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -36,6 +39,17 @@ class ExecutionGpuCaseProtocolTests(unittest.TestCase):
             EXECUTION_GPU_CASE_PHASES["infra:full-bf16-session:v1"],
             ("probe",),
         )
+
+    def test_muon_evidence_bundle_and_phases_are_stable(self):
+        self.assertEqual(
+            MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            "phase-c:muon-full-bf16:v1",
+        )
+        for case_id in MUON_FULL_BF16_CASE_IDS:
+            self.assertEqual(
+                EXECUTION_GPU_CASE_PHASES[case_id],
+                ("train_save", "resume_second_step"),
+            )
 
 
 class AdamWFullBf16BundleTests(unittest.TestCase):
@@ -78,6 +92,49 @@ class AdamWFullBf16BundleTests(unittest.TestCase):
     def test_bundle_is_absent_without_adamw_cases(self):
         self.assertIsNone(
             summarize_adamw_full_bf16_bundle(
+                [{"case_id": "infra:cuda-bf16-capability:v1", "status": "pass"}]
+            )
+        )
+
+
+class MuonFullBf16BundleTests(unittest.TestCase):
+    def test_bundle_pass_requires_both_cases_to_pass(self):
+        rows = [
+            {"case_id": case_id, "status": "pass"}
+            for case_id in MUON_FULL_BF16_CASE_IDS
+        ]
+        bundle = summarize_muon_full_bf16_bundle(rows)
+        self.assertEqual(bundle["status"], "pass")
+        self.assertEqual(bundle["missing_cases"], [])
+        self.assertTrue(bundle["optimizer_evidence_complete"])
+        self.assertFalse(bundle["promotion_eligible"])
+        self.assertFalse(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_is_incomplete_when_only_one_case_is_present(self):
+        bundle = summarize_muon_full_bf16_bundle(
+            [{"case_id": MUON_FULL_BF16_CASE_IDS[0], "status": "pass"}]
+        )
+        self.assertEqual(bundle["status"], "incomplete")
+        self.assertEqual(
+            bundle["missing_cases"],
+            [MUON_FULL_BF16_CASE_IDS[1]],
+        )
+        self.assertFalse(bundle["optimizer_evidence_complete"])
+
+    def test_bundle_fails_when_required_case_fails(self):
+        bundle = summarize_muon_full_bf16_bundle(
+            [
+                {"case_id": MUON_FULL_BF16_CASE_IDS[0], "status": "pass"},
+                {"case_id": MUON_FULL_BF16_CASE_IDS[1], "status": "fail"},
+            ]
+        )
+        self.assertEqual(bundle["status"], "fail")
+        self.assertFalse(bundle["optimizer_evidence_complete"])
+        self.assertFalse(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_is_absent_without_muon_cases(self):
+        self.assertIsNone(
+            summarize_muon_full_bf16_bundle(
                 [{"case_id": "infra:cuda-bf16-capability:v1", "status": "pass"}]
             )
         )
