@@ -37,26 +37,16 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("evidence_case_id", source)
         self.assertIn("finally:", source)
 
-    def test_gpu_workflow_keeps_baseline_and_execution_matrices_serial(self):
+    def test_execution_qualification_is_not_coupled_to_github_gpu_workflow(self):
         workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
-        baseline = workflow.index("Run synthetic CUDA optimizer matrix on non-Windows runners")
-        execution = workflow.index(
-            "Run full-BF16 execution infrastructure matrix on non-Windows runners"
-        )
-        backend = workflow.index("Run real backend matrix on non-Windows runners")
-        self.assertLess(baseline, execution)
-        self.assertLess(execution, backend)
-        self.assertIn(
-            'run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}"',
+        self.assertNotIn(
+            "run_parameter_policy_execution_gpu_matrix.py",
             workflow,
         )
-        self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
-        self.assertIn("Verify required shared matrix evidence on Windows", workflow)
-        self.assertIn(
-            "Verify required shared matrix evidence on non-Windows runners",
+        self.assertNotIn(
+            "parameter-policy-execution-gpu-matrix.json",
             workflow,
         )
-        self.assertIn("if-no-files-found: error", workflow)
 
     def test_host_review_tracks_and_compiles_execution_gpu_runner(self):
         workflow = HOST_WORKFLOW.read_text(encoding="utf-8")
@@ -65,11 +55,12 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             2,
         )
 
-    def test_gpu_workflow_remains_manual_dispatch_only(self):
-        workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
-        trigger = workflow.split("jobs:", 1)[0]
-        self.assertIn("workflow_dispatch:", trigger)
-        self.assertNotIn("pull_request:", trigger)
+    def test_runner_remains_standalone_provider_independent(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('parser.add_argument("--expected-commit", required=True)', source)
+        self.assertIn('default="parameter-policy-execution-gpu-matrix.json"', source)
+        self.assertNotIn("GITHUB_SHA", source)
+        self.assertNotIn("GITHUB_ACTIONS", source)
 
 
 if __name__ == "__main__":
