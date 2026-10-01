@@ -205,7 +205,7 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("summarize_adamw_full_bf16_bundle", source)
         self.assertIn("ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID", source)
         self.assertIn('"qualification_evidence_component": True', source)
-        self.assertIn('"production_qualification_mutated": False', source)
+        self.assertIn('"production_qualification_mutated": False', support)
         self.assertIn("--worker-dir", source)
         self.assertIn("_run_phase_subprocess", source)
         self.assertIn("sys.executable", source)
