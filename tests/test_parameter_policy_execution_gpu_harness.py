@@ -1,0 +1,69 @@
+from __future__ import annotations
+
+from pathlib import Path
+import unittest
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNNER = ROOT / "tools" / "run_parameter_policy_execution_gpu_matrix.py"
+GPU_WORKFLOW = ROOT / ".github" / "workflows" / "parameter-policy-gpu-matrix.yml"
+HOST_WORKFLOW = ROOT / ".github" / "workflows" / "anima-qwen3-review.yml"
+
+
+class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
+    def test_runner_is_exact_head_subprocess_evidence_harness(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"', source)
+        self.assertIn('EVIDENCE_VERSION = 1', source)
+        self.assertIn('"infra:cuda-bf16-capability:v1"', source)
+        self.assertIn('"infra:full-bf16-session:v1"', source)
+        self.assertIn('"--expected-commit"', source)
+        self.assertIn('["git", "diff", "--quiet"]', source)
+        self.assertIn('["git", "diff", "--cached", "--quiet"]', source)
+        self.assertIn("subprocess.run(", source)
+        self.assertIn("sys.executable", source)
+        self.assertIn("shell=False", source)
+        self.assertIn('"promotion_eligible": False', source)
+        self.assertIn('"backend_qualification_eligible": False', source)
+        self.assertIn('"optimizer_qualification_eligible": False', source)
+
+    def test_runner_has_no_environment_bypass_or_production_promotion(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn("DTS_FULL_BF16_BYPASS", source)
+        self.assertNotIn("os.environ[", source)
+        self.assertNotIn('ExecutionFeatureQualification(\n        "qualified"', source)
+        self.assertIn("_temporary_execution_qualification", source)
+        self.assertIn("finally:", source)
+
+    def test_gpu_workflow_keeps_baseline_and_execution_matrices_serial(self):
+        workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
+        baseline = workflow.index("Run synthetic CUDA optimizer matrix on non-Windows runners")
+        execution = workflow.index(
+            "Run full-BF16 execution infrastructure matrix on non-Windows runners"
+        )
+        backend = workflow.index("Run real backend matrix on non-Windows runners")
+        self.assertLess(baseline, execution)
+        self.assertLess(execution, backend)
+        self.assertIn(
+            'run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}"',
+            workflow,
+        )
+        self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
+        self.assertIn("if-no-files-found: error", workflow)
+
+    def test_host_review_tracks_and_compiles_execution_gpu_runner(self):
+        workflow = HOST_WORKFLOW.read_text(encoding="utf-8")
+        self.assertGreaterEqual(
+            workflow.count("tools/run_parameter_policy_execution_gpu_matrix.py"),
+            2,
+        )
+
+    def test_gpu_workflow_remains_manual_dispatch_only(self):
+        workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
+        trigger = workflow.split("jobs:", 1)[0]
+        self.assertIn("workflow_dispatch:", trigger)
+        self.assertNotIn("pull_request:", trigger)
+
+
+if __name__ == "__main__":
+    unittest.main()
