@@ -127,6 +127,24 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             source.index("import torch"),
         )
 
+    def test_adamw_cases_use_phased_fresh_subprocess_protocol(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('"optimizer:adamw:full-bf16:accum1:v1"', source)
+        self.assertIn('"optimizer:adamw:full-bf16:accum2:v1"', source)
+        self.assertIn('"train_save"', source)
+        self.assertIn('"resume_second_step"', source)
+        self.assertIn('"dependency_failed"', source)
+        self.assertIn("ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID", source)
+        self.assertIn('"production_qualification_mutated": False', source)
+        self.assertIn("--worker-dir", source)
+        self.assertIn("_run_phase_subprocess", source)
+        self.assertIn("sys.executable", source)
+
+    def test_adamw_evidence_does_not_modify_production_qualification_table(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn('FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"] =', source)
+        self.assertNotIn("FULL_BF16_OPTIMIZER_QUALIFICATIONS.update", source)
+
     def test_runner_has_no_environment_bypass_or_production_promotion(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn("DTS_FULL_BF16_BYPASS", source)
