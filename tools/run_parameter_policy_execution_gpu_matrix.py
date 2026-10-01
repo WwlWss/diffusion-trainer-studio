@@ -336,7 +336,11 @@ def _qualification_snapshot() -> dict[str, dict[str, dict[str, Any]]]:
 class _TinyFlux(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.double_blocks = torch.nn.ModuleList([torch.nn.Linear(8, 8)])
+        layer = torch.nn.Linear(8, 8)
+        with torch.no_grad():
+            layer.weight.fill_(0.125)
+            layer.bias.fill_(0.25)
+        self.double_blocks = torch.nn.ModuleList([layer])
 
     def forward(self, value):
         return self.double_blocks[0](value)
