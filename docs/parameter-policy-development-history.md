@@ -2879,7 +2879,7 @@ Phase B closeout 只做组合审计、精确回归与文档收口，不开放任
 - B3 manifest version 仍为 v2；baseline manifest/metadata/diagnostics/log exact regression 保持不变；active execution identity/signature 只做 additive persistence；
 - mixed-BF16 ↔ full-BF16 checkpoint mismatch 使用真实 production lifecycle (`prepare -> finalize_after_prepare -> load_state`) 在 model/optimizer/scheduler state mutation 前 fail closed；
 - external scheduler 与 optimizer-managed scheduler 均覆盖 active execution persistence；
-- merge 后 main tree 与已通过 exact-head PR tree 无源码差异。
+- B3 / PR #50 merge 后 main tree 已验证与其 exact-head PR tree 无源码差异。
 
 Phase B closeout qualification state：
 
@@ -2891,7 +2891,7 @@ Phase B closeout qualification state：
 
 - Standard 路径不进入 Parameter Policy trainer runtime；
 - ordinary Component 仅承担 inactive execution feature detection/contract no-op，新增成本为 O(1) host metadata；
-- active full-BF16 只有 startup/post-resume metadata root scan 与 O(trainable tensor count) dtype metadata audit，不做 tensor-content scan；
+- active full-BF16 只在 `post_prepare` / `post_resume` 执行 metadata-only live-root scan，并进行 O(trainable tensor count) dtype metadata audit；不做 tensor-content scan；
 - B3 persistence/hash 与模型大小无关；
 - 不支持/未验证的 DeepSpeed、compile、FP8、full FP16、offload/swap、fused optimizer 等语义仍由已有 compatibility blockers fail closed。
 
