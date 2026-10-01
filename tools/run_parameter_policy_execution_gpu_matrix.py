@@ -123,11 +123,48 @@ def _output_from_argv(argv: list[str], *, default: str) -> str:
 
 
 def _worker_mode_from_argv(argv: list[str]) -> bool:
-    worker_flags = ("--worker-case", "--worker-phase", "--worker-result")
+    worker_flags = ("--worker-case", "--worker-phase", "--worker-result", "--worker-dir")
     return any(
         value == flag or value.startswith(flag + "=")
         for value in argv
         for flag in worker_flags
+    )
+
+
+def _worker_dir_from_argv(argv: list[str]) -> str:
+    for index, value in enumerate(argv):
+        if value == "--worker-dir":
+            if index + 1 >= len(argv):
+                raise ExecutionGpuMatrixBootstrapError(
+                    "--worker-dir requires a non-empty value."
+                )
+            candidate = argv[index + 1].strip()
+            if candidate:
+                return candidate
+            raise ExecutionGpuMatrixBootstrapError(
+                "--worker-dir requires a non-empty value."
+            )
+        if value.startswith("--worker-dir="):
+            candidate = value.split("=", 1)[1].strip()
+            if candidate:
+                return candidate
+            raise ExecutionGpuMatrixBootstrapError(
+                "--worker-dir requires a non-empty value."
+            )
+    raise ExecutionGpuMatrixBootstrapError(
+        "Worker mode requires --worker-dir before runtime imports."
+    )
+
+
+def _assert_worker_dir_outside_repo(worker_dir: str) -> Path:
+    resolved = Path(worker_dir).expanduser().resolve(strict=False)
+    try:
+        resolved.relative_to(REPO_ROOT.resolve(strict=False))
+    except ValueError:
+        return resolved
+    raise ExecutionGpuMatrixBootstrapError(
+        "Execution GPU qualification worker requires --worker-dir outside "
+        f"the repository; received {resolved}."
     )
 
 
@@ -146,6 +183,11 @@ def _assert_output_outside_repo(output: str) -> Path:
 _BOOTSTRAP_EXPECTED_COMMIT = _expected_commit_from_argv(sys.argv[1:])
 _BOOTSTRAP_COMMIT = _assert_exact_clean_head(_BOOTSTRAP_EXPECTED_COMMIT)
 _BOOTSTRAP_WORKER_MODE = _worker_mode_from_argv(sys.argv[1:])
+_BOOTSTRAP_WORKER_DIR = (
+    _assert_worker_dir_outside_repo(_worker_dir_from_argv(sys.argv[1:]))
+    if _BOOTSTRAP_WORKER_MODE
+    else None
+)
 _BOOTSTRAP_OUTPUT = (
     None
     if _BOOTSTRAP_WORKER_MODE
@@ -185,7 +227,7 @@ from tools.parameter_policy_execution_gpu_support import (
 
 
 EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
-EVIDENCE_VERSION = 1
+EVIDENCE_VERSION = 2
 _CASES = tuple(EXECUTION_GPU_CASE_PHASES)
 _ADAMW_CASES = (
     "optimizer:adamw:full-bf16:accum1:v1",
@@ -395,6 +437,59 @@ def _adamw_child_state_is_empty(session) -> bool:
     return child["state"] == {}
 
 
+def _adamw_step_counters(session) -> list[int]:
+    payload = session.optimizer.state_dict()
+    child_state = payload["children"]["main"]["state_dict"]["state"]
+    counters: list[int] = []
+    for parameter_state in child_state.values():
+        if not isinstance(parameter_state, dict) or "step" not in parameter_state:
+            continue
+        raw = parameter_state["step"]
+        if isinstance(raw, torch.Tensor):
+            if raw.numel() != 1:
+                raise AssertionError("AdamW step counter tensor must be scalar.")
+            raw = raw.detach().cpu().item()
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise AssertionError(f"AdamW step counter is not numeric: {raw!r}.")
+        number = int(raw)
+        if float(raw) != float(number) or number < 0:
+            raise AssertionError(f"AdamW step counter is invalid: {raw!r}.")
+        counters.append(number)
+    return sorted(counters)
+
+
+def _scheduler_step_count(raw_scheduler: object) -> int:
+    state = raw_scheduler.state_dict()
+    value = state.get("step_count")
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise AssertionError(f"Composite scheduler step_count is invalid: {value!r}.")
+    return value
+
+
+def _assert_tensor_evidence_finite(value: Any, *, label: str) -> None:
+    if isinstance(value, dict):
+        tensor = value.get("tensor")
+        if isinstance(tensor, dict) and tensor.get("finite") is not True:
+            raise AssertionError(f"{label} contains non-finite tensor evidence.")
+        for item in value.values():
+            _assert_tensor_evidence_finite(item, label=label)
+    elif isinstance(value, list):
+        for item in value:
+            _assert_tensor_evidence_finite(item, label=label)
+
+
+def _assert_gradient_evidence(gradients: dict[str, Any]) -> None:
+    if not gradients:
+        raise AssertionError("AdamW step produced no gradient evidence.")
+    for name, evidence in gradients.items():
+        if evidence is None:
+            raise AssertionError(f"AdamW trainable parameter {name} has no gradient.")
+        if evidence.get("finite") is not True:
+            raise AssertionError(f"AdamW trainable parameter {name} has non-finite gradient.")
+        if evidence.get("nonzero") is not True:
+            raise AssertionError(f"AdamW trainable parameter {name} has zero gradient.")
+
+
 def _run_logical_step(
     *,
     accelerator: Accelerator,
@@ -409,6 +504,10 @@ def _run_logical_step(
     before_model = model_parameter_evidence(accelerator.unwrap_model(model))
     before_optimizer = optimizer_state_evidence(session.optimizer)
     before_scheduler = scheduler_state_evidence(raw_scheduler)
+    before_counters = _adamw_step_counters(session)
+    before_scheduler_step = _scheduler_step_count(raw_scheduler)
+    _assert_tensor_evidence_finite(before_optimizer, label="AdamW optimizer state")
+    _assert_tensor_evidence_finite(before_scheduler, label="AdamW scheduler state")
     microsteps: list[dict[str, Any]] = []
 
     for microstep in range(accumulation_steps):
@@ -427,6 +526,7 @@ def _run_logical_step(
             accelerator.backward(loss)
             sync_gradients = bool(accelerator.sync_gradients)
             gradients = gradient_evidence(list(session.trainable_parameters))
+            _assert_gradient_evidence(gradients)
             optimizer.step()
             scheduler.step()
             optimizer.zero_grad()
@@ -434,6 +534,10 @@ def _run_logical_step(
         model_after = model_parameter_evidence(accelerator.unwrap_model(model))
         optimizer_after = optimizer_state_evidence(session.optimizer)
         scheduler_after = scheduler_state_evidence(raw_scheduler)
+        counters_after = _adamw_step_counters(session)
+        scheduler_step_after = _scheduler_step_count(raw_scheduler)
+        _assert_tensor_evidence_finite(optimizer_after, label="AdamW optimizer state")
+        _assert_tensor_evidence_finite(scheduler_after, label="AdamW scheduler state")
         microsteps.append(
             {
                 "microstep": microstep + 1,
@@ -445,6 +549,8 @@ def _run_logical_step(
                 != optimizer_before["sha256"],
                 "scheduler_state_changed": scheduler_after["sha256"]
                 != scheduler_before["sha256"],
+                "adamw_step_counters": counters_after,
+                "scheduler_step_count": scheduler_step_after,
             }
         )
 
@@ -457,10 +563,18 @@ def _run_logical_step(
                 raise AssertionError("Intermediate accumulation microstep changed optimizer state.")
             if scheduler_after["sha256"] != scheduler_before["sha256"]:
                 raise AssertionError("Intermediate accumulation microstep advanced scheduler.")
+            if counters_after != before_counters:
+                raise AssertionError("Intermediate accumulation microstep advanced AdamW step counter.")
+            if scheduler_step_after != before_scheduler_step:
+                raise AssertionError("Intermediate accumulation microstep advanced scheduler step count.")
 
     after_model = model_parameter_evidence(accelerator.unwrap_model(model))
     after_optimizer = optimizer_state_evidence(session.optimizer)
     after_scheduler = scheduler_state_evidence(raw_scheduler)
+    after_counters = _adamw_step_counters(session)
+    after_scheduler_step = _scheduler_step_count(raw_scheduler)
+    _assert_tensor_evidence_finite(after_optimizer, label="AdamW optimizer state")
+    _assert_tensor_evidence_finite(after_scheduler, label="AdamW scheduler state")
     if before_model == after_model:
         raise AssertionError("AdamW logical step did not update model parameters.")
     if before_optimizer["sha256"] == after_optimizer["sha256"]:
@@ -469,6 +583,23 @@ def _run_logical_step(
         raise AssertionError("AdamW logical step did not advance scheduler.")
     if not microsteps[-1]["sync_gradients"]:
         raise AssertionError("Final accumulation microstep did not synchronize gradients.")
+    if logical_step == 1:
+        if before_counters:
+            raise AssertionError("Fresh AdamW state unexpectedly has step counters.")
+    elif before_counters and any(value != logical_step - 1 for value in before_counters):
+        raise AssertionError(
+            f"AdamW resumed step counters are not at logical step {logical_step - 1}: "
+            f"{before_counters!r}."
+        )
+    if not after_counters or any(value != logical_step for value in after_counters):
+        raise AssertionError(
+            f"AdamW step counters did not reach logical step {logical_step}: "
+            f"{after_counters!r}."
+        )
+    if after_scheduler_step != before_scheduler_step + 1:
+        raise AssertionError(
+            "Composite scheduler did not advance exactly one step for one logical step."
+        )
 
     return {
         "logical_step": logical_step,
@@ -477,11 +608,15 @@ def _run_logical_step(
             "model": before_model,
             "optimizer": before_optimizer,
             "scheduler": before_scheduler,
+            "adamw_step_counters": before_counters,
+            "scheduler_step_count": before_scheduler_step,
         },
         "after": {
             "model": after_model,
             "optimizer": after_optimizer,
             "scheduler": after_scheduler,
+            "adamw_step_counters": after_counters,
+            "scheduler_step_count": after_scheduler_step,
         },
         "microsteps": microsteps,
     }
@@ -595,8 +730,9 @@ def _adamw_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
                     "name": "AdamW",
                 },
                 "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
-                "promotion_eligible": True,
-                "optimizer_qualification_eligible": True,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
                 "backend_scaffold": "flux-finetune",
                 "backend_qualification_eligible": False,
                 "qualification_lease": lease,
@@ -690,8 +826,9 @@ def _adamw_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
                     "name": "AdamW",
                 },
                 "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
-                "promotion_eligible": True,
-                "optimizer_qualification_eligible": True,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
                 "backend_scaffold": "flux-finetune",
                 "backend_qualification_eligible": False,
                 "qualification_lease": lease,
@@ -1010,6 +1147,20 @@ def _coordinator_main(args: argparse.Namespace) -> int:
                     4,
                 ),
             }
+            if case_id in _ADAMW_CASES:
+                row.update(
+                    {
+                        "scope": "optimizer",
+                        "qualification_target": {
+                            "feature": "full_bf16",
+                            "kind": "optimizer",
+                            "name": "AdamW",
+                        },
+                        "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                        "optimizer_qualification_eligible": case_status == "pass",
+                        "backend_qualification_eligible": False,
+                    }
+                )
             evidence["cases"].append(row)
             print(f"{case_status.upper():4} {case_id}", flush=True)
             if case_status != "pass":
@@ -1021,18 +1172,22 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         if row["case_id"] in _ADAMW_CASES
     }
     if adamw_rows:
+        missing_cases = sorted(set(_ADAMW_CASES).difference(adamw_rows))
+        if missing_cases:
+            bundle_status = "incomplete"
+        elif all(row.get("status") == "pass" for row in adamw_rows.values()):
+            bundle_status = "pass"
+        else:
+            bundle_status = "fail"
         evidence["evidence_bundles"] = {
             ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID: {
                 "scope": "optimizer",
                 "optimizer": "AdamW",
                 "feature": "full_bf16",
                 "required_cases": list(_ADAMW_CASES),
-                "status": (
-                    "pass"
-                    if set(adamw_rows) == set(_ADAMW_CASES)
-                    and all(row.get("status") == "pass" for row in adamw_rows.values())
-                    else "fail"
-                ),
+                "missing_cases": missing_cases,
+                "status": bundle_status,
+                "optimizer_qualification_eligible": bundle_status == "pass",
                 "production_qualification_mutated": False,
             }
         }
