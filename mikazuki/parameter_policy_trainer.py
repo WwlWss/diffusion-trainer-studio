@@ -945,10 +945,17 @@ class ParameterPolicyTrainerSession:
             return
 
         num_processes = getattr(accelerator, "num_processes", None)
+        raw_distributed_type = getattr(accelerator, "distributed_type", None)
+        distributed_type = getattr(
+            raw_distributed_type,
+            "value",
+            raw_distributed_type,
+        )
         try:
             blockers = parameter_policy_execution_environment_blockers(
                 self.execution_contract,
                 num_processes=num_processes,
+                distributed_type=distributed_type,
             )
         except ValueError as exc:
             raise ParameterPolicyTrainerRuntimeError(str(exc)) from exc
