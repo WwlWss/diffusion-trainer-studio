@@ -49,7 +49,6 @@ class AdamWFullBf16BundleTests(unittest.TestCase):
         self.assertEqual(bundle["missing_cases"], [])
         self.assertTrue(bundle["optimizer_evidence_complete"])
         self.assertFalse(bundle["promotion_eligible"])
-        self.assertFalse(bundle["optimizer_evidence_complete"])
         self.assertFalse(bundle["optimizer_qualification_eligible"])
 
     def test_bundle_is_incomplete_when_only_one_case_is_present(self):
@@ -61,6 +60,8 @@ class AdamWFullBf16BundleTests(unittest.TestCase):
             bundle["missing_cases"],
             [ADAMW_FULL_BF16_CASE_IDS[1]],
         )
+        self.assertFalse(bundle["optimizer_evidence_complete"])
+        self.assertFalse(bundle["promotion_eligible"])
         self.assertFalse(bundle["optimizer_qualification_eligible"])
 
     def test_bundle_fails_when_required_case_fails(self):
