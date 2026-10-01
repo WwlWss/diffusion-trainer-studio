@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """Exact-head CUDA evidence harness for Parameter Policy execution qualification.
 
-Phase C0/C1 establishes qualification infrastructure only.  The cases in this
-file currently prove CUDA/BF16 availability and that the Phase-B full-BF16
-execution contract can reach the real trainer prepare/finalize seam on one
-process.  They are deliberately not optimizer- or backend-promotion evidence.
+Phase C0/C1 established the strict exact-head CUDA/BF16 evidence infrastructure.
+Phase C2 extends that protocol with AdamW full-BF16 optimizer lifecycle evidence:
+train/save is followed by resume/second-step in a fresh Python subprocess.
 
-The coordinator always launches each case in a fresh Python subprocess.  Later
-Phase C optimizer cases can therefore add train/save and fresh resume phases
-without changing the evidence protocol.
+The coordinator launches every evidence phase in a fresh Python subprocess.
+Optimizer evidence remains non-promoting until the final qualification gate,
+and the tiny Flux scaffold is never backend-qualification evidence.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import importlib.metadata
 import json
 import os
@@ -29,6 +29,7 @@ from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+STABLE_SCRIPTS_ROOT = REPO_ROOT / "scripts" / "stable"
 
 
 class ExecutionGpuMatrixBootstrapError(RuntimeError):
@@ -420,17 +421,48 @@ def _scheduler_args(policy_path: Path) -> SimpleNamespace:
     )
 
 
-def _scheduler_factory(args: object):
-    def get_scheduler_fix(child_args, optimizer, num_processes):
-        del child_args, num_processes
-        return torch.optim.lr_scheduler.LambdaLR(
-            optimizer,
-            lr_lambda=lambda _step: 1.0,
+def _load_production_get_scheduler_fix():
+    expected_module = (STABLE_SCRIPTS_ROOT / "library" / "train_util.py").resolve(
+        strict=False
+    )
+    if not expected_module.is_file():
+        raise ExecutionGpuMatrixError(
+            "Production scheduler provider is unavailable at "
+            f"{expected_module}."
         )
 
+    stable_root = str(STABLE_SCRIPTS_ROOT.resolve(strict=False))
+    if stable_root not in sys.path:
+        sys.path.insert(0, stable_root)
+
+    try:
+        train_util = importlib.import_module("library.train_util")
+    except Exception as exc:
+        raise ExecutionGpuMatrixError(
+            "Could not import production scheduler provider "
+            "library.train_util.get_scheduler_fix."
+        ) from exc
+
+    module_file = getattr(train_util, "__file__", None)
+    if module_file is None or Path(module_file).resolve(strict=False) != expected_module:
+        raise ExecutionGpuMatrixError(
+            "Production scheduler provider resolved from an unexpected module: "
+            f"{module_file!r}; expected {expected_module}."
+        )
+
+    get_scheduler_fix = getattr(train_util, "get_scheduler_fix", None)
+    if not callable(get_scheduler_fix):
+        raise ExecutionGpuMatrixError(
+            "Production scheduler provider does not expose callable "
+            "library.train_util.get_scheduler_fix."
+        )
+    return get_scheduler_fix
+
+
+def _scheduler_factory(args: object):
     return make_legacy_scheduler_factory(
         args=args,
-        get_scheduler_fix=get_scheduler_fix,
+        get_scheduler_fix=_load_production_get_scheduler_fix(),
         num_processes=1,
     )
 
