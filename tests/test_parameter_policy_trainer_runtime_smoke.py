@@ -846,6 +846,58 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             load_accelerator.end_training()
 
+    def test_accelerate_accumulation_two_suppresses_first_physical_step(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, _bias, session, raw_scheduler = self._build_runtime(policy_path)
+
+            accelerator = Accelerator(
+                cpu=True,
+                gradient_accumulation_steps=2,
+            )
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                raw_scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            parameter = accelerator.unwrap_model(model).double_blocks[0].weight
+            initial_parameter = parameter.detach().clone()
+            initial_optimizer_state = copy.deepcopy(session.optimizer.state_dict())
+            initial_scheduler_state = copy.deepcopy(raw_scheduler.state_dict())
+
+            with accelerator.accumulate(model):
+                loss = model(torch.ones(2, 4)).sum()
+                accelerator.backward(loss)
+                self.assertFalse(accelerator.sync_gradients)
+                self.assertIsNotNone(parameter.grad)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+
+            torch.testing.assert_close(parameter, initial_parameter)
+            self.assertEqual(session.optimizer.state_dict(), initial_optimizer_state)
+            self.assertEqual(raw_scheduler.state_dict(), initial_scheduler_state)
+
+            with accelerator.accumulate(model):
+                loss = model(torch.ones(2, 4)).sum()
+                accelerator.backward(loss)
+                self.assertTrue(accelerator.sync_gradients)
+                optimizer.step()
+                scheduler.step()
+                optimizer.zero_grad()
+
+            self.assertFalse(torch.equal(parameter, initial_parameter))
+            self.assertNotEqual(session.optimizer.state_dict(), initial_optimizer_state)
+            self.assertNotEqual(raw_scheduler.state_dict(), initial_scheduler_state)
+            accelerator.end_training()
+
     def test_scheduler_mismatch_fails_before_optimizer_or_scheduler_state_mutation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
