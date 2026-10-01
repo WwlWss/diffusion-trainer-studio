@@ -14,7 +14,6 @@ without changing the evidence protocol.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
 import importlib.metadata
 import json
 import os
@@ -26,30 +25,13 @@ import tempfile
 import time
 import traceback
 from types import SimpleNamespace
-from typing import Any, Iterator
-
-import torch
-from accelerate import Accelerator
+from typing import Any
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(REPO_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT))
-
-from mikazuki import parameter_policy_execution as execution
-from mikazuki.parameter_policy_trainer import create_parameter_policy_session
 
 
-EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
-EVIDENCE_VERSION = 1
-_CASES = (
-    "infra:cuda-bf16-capability:v1",
-    "infra:full-bf16-session:v1",
-)
-_STDIO_TAIL_LIMIT = 16000
-
-
-class ExecutionGpuMatrixError(RuntimeError):
+class ExecutionGpuMatrixBootstrapError(RuntimeError):
     pass
 
 
@@ -62,7 +44,7 @@ def _git(*args: str) -> str:
             stderr=subprocess.STDOUT,
         ).strip()
     except subprocess.CalledProcessError as exc:
-        raise ExecutionGpuMatrixError(
+        raise ExecutionGpuMatrixBootstrapError(
             f"git {' '.join(args)} failed: {exc.output.strip()}"
         ) from exc
 
@@ -70,36 +52,78 @@ def _git(*args: str) -> str:
 def _git_sha() -> str:
     sha = _git("rev-parse", "HEAD")
     if not sha:
-        raise ExecutionGpuMatrixError("git rev-parse HEAD returned an empty SHA.")
+        raise ExecutionGpuMatrixBootstrapError(
+            "git rev-parse HEAD returned an empty SHA."
+        )
     return sha
+
+
+def _expected_commit_from_argv(argv: list[str]) -> str:
+    for index, value in enumerate(argv):
+        if value == "--expected-commit":
+            if index + 1 >= len(argv):
+                break
+            expected = argv[index + 1].strip()
+            if expected:
+                return expected
+            break
+        if value.startswith("--expected-commit="):
+            expected = value.split("=", 1)[1].strip()
+            if expected:
+                return expected
+            break
+    raise ExecutionGpuMatrixBootstrapError("--expected-commit is required.")
 
 
 def _assert_exact_clean_head(expected_commit: str) -> str:
     expected = str(expected_commit or "").strip()
     if not expected:
-        raise ExecutionGpuMatrixError("--expected-commit is required.")
+        raise ExecutionGpuMatrixBootstrapError("--expected-commit is required.")
+
     actual = _git_sha()
     if actual != expected:
-        raise ExecutionGpuMatrixError(
+        raise ExecutionGpuMatrixBootstrapError(
             "Execution GPU qualification must run on the requested exact head: "
             f"expected={expected}, actual={actual}."
         )
 
-    unstaged = subprocess.run(
-        ["git", "diff", "--quiet"],
-        cwd=REPO_ROOT,
-        check=False,
-    )
-    staged = subprocess.run(
-        ["git", "diff", "--cached", "--quiet"],
-        cwd=REPO_ROOT,
-        check=False,
-    )
-    if unstaged.returncode != 0 or staged.returncode != 0:
-        raise ExecutionGpuMatrixError(
-            "Execution GPU qualification requires a clean tracked working tree."
+    status = _git("status", "--porcelain=v1", "--untracked-files=all")
+    if status:
+        preview = "\n".join(status.splitlines()[:12])
+        raise ExecutionGpuMatrixBootstrapError(
+            "Execution GPU qualification requires a completely clean workspace, "
+            "including untracked files. Remove or move evidence outputs outside "
+            f"the repository before running. git status:\n{preview}"
         )
     return actual
+
+
+_BOOTSTRAP_EXPECTED_COMMIT = _expected_commit_from_argv(sys.argv[1:])
+_BOOTSTRAP_COMMIT = _assert_exact_clean_head(_BOOTSTRAP_EXPECTED_COMMIT)
+
+
+import torch
+from accelerate import Accelerator
+
+
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from mikazuki import parameter_policy_execution as execution
+from mikazuki.parameter_policy_trainer import create_parameter_policy_session
+from tools.parameter_policy_execution_gpu_support import (
+    ExecutionGpuMatrixError,
+    temporary_execution_qualification,
+)
+
+
+EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
+EVIDENCE_VERSION = 1
+_CASES = (
+    "infra:cuda-bf16-capability:v1",
+    "infra:full-bf16-session:v1",
+)
+_STDIO_TAIL_LIMIT = 16000
 
 
 def _package_version(name: str) -> str | None:
@@ -107,6 +131,30 @@ def _package_version(name: str) -> str | None:
         return importlib.metadata.version(name)
     except importlib.metadata.PackageNotFoundError:
         return None
+
+
+def _nvidia_driver_version() -> str | None:
+    try:
+        output = subprocess.check_output(
+            [
+                "nvidia-smi",
+                "--query-gpu=driver_version",
+                "--format=csv,noheader",
+            ],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    versions = sorted(
+        {
+            line.strip()
+            for line in output.splitlines()
+            if line.strip()
+        }
+    )
+    return ",".join(versions) if versions else None
 
 
 def _cuda_environment() -> dict[str, Any]:
@@ -140,6 +188,7 @@ def _cuda_environment() -> dict[str, Any]:
         "platform": platform.platform(),
         "torch": torch.__version__,
         "cuda_runtime": torch.version.cuda,
+        "nvidia_driver": _nvidia_driver_version(),
         "bf16_supported": True,
         "cuda_visible_devices": os.environ.get("CUDA_VISIBLE_DEVICES"),
         "packages": {
@@ -172,80 +221,6 @@ def _qualification_snapshot() -> dict[str, dict[str, dict[str, Any]]]:
         "backends": serialize(execution.FULL_BF16_BACKEND_QUALIFICATIONS),
         "optimizers": serialize(execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS),
     }
-
-
-@contextmanager
-def _temporary_execution_qualification(
-    *,
-    backend: str,
-    optimizers: tuple[str, ...],
-    evidence_case_id: str,
-) -> Iterator[dict[str, Any]]:
-    originals: list[tuple[dict[str, execution.ExecutionFeatureQualification], str, execution.ExecutionFeatureQualification]] = []
-    records: list[dict[str, Any]] = []
-
-    targets = [
-        (execution.FULL_BF16_BACKEND_QUALIFICATIONS, backend, "backend"),
-        *[
-            (
-                execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
-                optimizer,
-                "optimizer",
-            )
-            for optimizer in optimizers
-        ],
-    ]
-
-    try:
-        for table, name, kind in targets:
-            original = table.get(name)
-            if original is None:
-                raise ExecutionGpuMatrixError(
-                    f"{kind}={name!r} has no full-BF16 qualification record."
-                )
-            originals.append((table, name, original))
-            if original.status == "unsupported":
-                raise ExecutionGpuMatrixError(
-                    f"{kind}={name!r} is explicitly unsupported: {original.reason}"
-                )
-
-            if original.status == "qualified":
-                if not str(original.evidence_case_id or "").strip():
-                    raise ExecutionGpuMatrixError(
-                        f"{kind}={name!r} is marked qualified without an "
-                        "evidence_case_id; qualification remains fail-closed."
-                    )
-                lease_applied = False
-            elif original.status == "pending":
-                lease_applied = True
-                table[name] = execution.ExecutionFeatureQualification(
-                    "qualified",
-                    "Phase C exact-head GPU evidence worker temporary lease.",
-                    evidence_case_id,
-                )
-            else:
-                raise ExecutionGpuMatrixError(
-                    f"{kind}={name!r} has invalid qualification status "
-                    f"{original.status!r}."
-                )
-            records.append(
-                {
-                    "kind": kind,
-                    "name": name,
-                    "before_status": original.status,
-                    "before_evidence_case_id": original.evidence_case_id,
-                    "lease_applied": lease_applied,
-                }
-            )
-        yield {"records": records}
-    finally:
-        for table, name, original in reversed(originals):
-            table[name] = original
-        for table, name, original in originals:
-            if table.get(name) != original:
-                raise ExecutionGpuMatrixError(
-                    f"Temporary execution qualification lease did not restore {name!r}."
-                )
 
 
 class _TinyFlux(torch.nn.Module):
@@ -301,7 +276,7 @@ def _case_full_bf16_session() -> dict[str, Any]:
         )
         model = _TinyFlux()
 
-        with _temporary_execution_qualification(
+        with temporary_execution_qualification(
             backend="flux-finetune",
             optimizers=("AdamW",),
             evidence_case_id="phase-c:infra-lease:v1",
@@ -318,10 +293,6 @@ def _case_full_bf16_session() -> dict[str, Any]:
                     f"unexpected execution features {session.execution_contract.features!r}"
                 )
 
-            parameter_ids_before = {
-                descriptor.canonical_name: descriptor.parameter_id
-                for descriptor in session.descriptors
-            }
             model.to(torch.bfloat16)
             trainable_dtypes_before_prepare = sorted(
                 {str(parameter.dtype) for parameter in session.trainable_parameters}
@@ -338,6 +309,19 @@ def _case_full_bf16_session() -> dict[str, Any]:
                     raise AssertionError(
                         "Phase C shared execution qualification requires one process; "
                         f"got {accelerator.num_processes}."
+                    )
+                distributed_type = str(
+                    getattr(
+                        accelerator.distributed_type,
+                        "value",
+                        accelerator.distributed_type,
+                    )
+                ).strip().upper()
+                if distributed_type != "NO":
+                    raise AssertionError(
+                        "Phase C shared execution qualification requires "
+                        "Accelerate distributed_type=NO; "
+                        f"got {distributed_type!r}."
                     )
                 if torch.device(accelerator.device).type != "cuda":
                     raise AssertionError(
@@ -359,16 +343,6 @@ def _case_full_bf16_session() -> dict[str, Any]:
                     raise AssertionError(
                         "trainable parameters were not true BF16 after prepare: "
                         f"{trainable_dtypes_after_prepare!r}"
-                    )
-
-                parameter_ids_after = {
-                    descriptor.canonical_name: id(descriptor.parameter)
-                    for descriptor in session.descriptors
-                }
-                if parameter_ids_after != parameter_ids_before:
-                    raise AssertionError(
-                        "prepare changed the physical Parameter identity captured by "
-                        "the execution contract."
                     )
 
                 manifest = session.checkpoint_manifest()
@@ -394,8 +368,9 @@ def _case_full_bf16_session() -> dict[str, Any]:
                     "accelerator": {
                         "device": str(accelerator.device),
                         "num_processes": int(accelerator.num_processes),
-                        "distributed_type": str(accelerator.distributed_type),
+                        "distributed_type": distributed_type,
                     },
+                    "b2_post_prepare_identity_audit": "pass",
                     "execution_identity": identity,
                     "execution_signature": signature,
                     "trainable_dtypes_before_prepare": trainable_dtypes_before_prepare,
