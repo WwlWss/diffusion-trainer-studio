@@ -56,16 +56,22 @@ def _strict_expected_commit_from_argv(argv: list[str]) -> str | None:
     for index, value in enumerate(argv):
         if value == "--expected-commit":
             if index + 1 >= len(argv):
-                break
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--expected-commit requires a non-empty value."
+                )
             expected = argv[index + 1].strip()
-            if expected:
-                return expected
-            break
+            if not expected:
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--expected-commit requires a non-empty value."
+                )
+            return expected
         if value.startswith("--expected-commit="):
             expected = value.split("=", 1)[1].strip()
-            if expected:
-                return expected
-            break
+            if not expected:
+                raise ParameterPolicyGpuMatrixBootstrapError(
+                    "--expected-commit requires a non-empty value."
+                )
+            return expected
     return None
 
 
