@@ -357,6 +357,7 @@ def parameter_policy_execution_environment_blockers(
     contract: ParameterPolicyExecutionContract,
     *,
     num_processes: int,
+    distributed_type: str,
 ) -> list[str]:
     """Return runtime-environment blockers for an active execution contract.
 
@@ -378,14 +379,31 @@ def parameter_policy_execution_environment_blockers(
             "Parameter Policy execution environment requires num_processes "
             "to be a positive integer."
         )
+    if not isinstance(distributed_type, str) or not distributed_type.strip():
+        raise ValueError(
+            "Parameter Policy execution environment requires distributed_type "
+            "to be a non-empty string."
+        )
+    normalized_distributed_type = distributed_type.strip().upper()
 
+    blockers: list[str] = []
     if contract.features == ("full_bf16",) and num_processes != 1:
-        return [
+        blockers.append(
             "Parameter Policy full_bf16 execution is currently qualified only "
             "for single-process runtime; multi-process/DDP requires separate "
             f"exact-head CUDA qualification (num_processes={num_processes})."
-        ]
-    return []
+        )
+    if (
+        contract.features == ("full_bf16",)
+        and normalized_distributed_type != "NO"
+    ):
+        blockers.append(
+            "Parameter Policy full_bf16 execution is currently qualified only "
+            "for Accelerate distributed_type=NO; distributed runtimes require "
+            "separate exact-head CUDA qualification "
+            f"(distributed_type={normalized_distributed_type})."
+        )
+    return blockers
 
 
 def _qualification_is_released(
