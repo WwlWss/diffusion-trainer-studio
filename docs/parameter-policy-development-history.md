@@ -2907,26 +2907,68 @@ Phase C 入口条件：
 因此 Phase B 的最终产物是：**execution semantics 已可定义、审计、持久化和恢复验证，但 production capability 仍保持关闭。**
 ## Phase C — shared true-BF16 CUDA qualification
 
+### C0 — reachable execution state
+
+Phase C 首先冻结 shared full-BF16 qualification 的运行环境边界，不把单卡 CUDA evidence 外推到未经验证的 runtime modifier。
+
+已实现：
+
+- `parameter_policy_execution_environment_blockers()` 保持 torch-free / accelerate-free，只消费已经建立的 execution contract 与规范化 `num_processes`；
+- active `full_bf16` 当前只允许 `num_processes == 1`；multi-process/DDP 在独立 exact-head CUDA qualification 前 fail closed；
+- ordinary Component (`execution_contract=None`) 不受该限制，现有 multi-process Component 路径不被 C0 改写；
+- environment gate 在既有 trainable dtype audit 后、optimizer ownership/device audit 前执行，不重排 B2 live-root/requires-grad/dtype 语义；
+- compile / torch_compile / FP8 / full FP16 / fused optimizer / DeepSpeed / offload / block swap 等已有 runtime blocker 继续保持 fail closed；
+- `gradient_accumulation_steps > 1` 不在 C0 被禁止，留给 Phase C shared CUDA evidence。
+
+### C1 — exact-head execution CUDA evidence harness
+
 新增：
 
-- `tools/run_parameter_policy_execution_gpu_matrix.py`
+- `tools/run_parameter_policy_execution_gpu_matrix.py`；
+- host-side harness contract test；
+- existing Parameter Policy GPU workflow 中的 shared execution evidence step。
 
-修改：
+C1 runner contract：
 
-- GPU workflow；
-- Step6F/本开发文档 evidence 说明。
+- parent coordinator 与 worker subprocess 都要求 `--expected-commit`，实际 `git rev-parse HEAD` 必须完全一致；
+- tracked working tree 必须 clean；evidence JSON 等 untracked artifact 不影响该检查；
+- CUDA 不可用、无 visible GPU、或 `torch.cuda.is_bf16_supported()` 不成立时直接 FAIL，不允许 CPU fallback/skip；
+- 每个 case 使用 fresh `sys.executable` subprocess，`shell=False`，为 C2/C3 的 train/save 与 fresh resume phase 保留同一 protocol；
+- temporary qualification lease 只存在于 worker 进程内：`pending` 可临时 leased，正式 `qualified` 直接使用，`unsupported` 立即拒绝；退出时必须恢复原 qualification row；
+- 不增加 production bypass 环境变量，不修改 production qualification table。
 
-目标：
+C1 infrastructure cases：
 
-- AdamW；
-- Muon；
-- Muon + AdamW；
-- Accelerate BF16；
-- accumulation seam；
-- save/reload；
-- dtype/state evidence。
+1. `infra:cuda-bf16-capability:v1`：记录真实 CUDA/BF16 hardware/runtime/package evidence；
+2. `infra:full-bf16-session:v1`：使用 tiny Flux-shaped scaffold 走 `create session -> model.to(bfloat16) -> Accelerator(mixed_precision='bf16') -> prepare -> finalize_after_prepare -> B2 audit -> B3 execution manifest`。
 
-没有真实 CUDA evidence 前，不进入 backend qualification。
+两个 case 都明确：
+
+- `scope = infrastructure`；
+- `promotion_eligible = false`；
+- backend scaffold 不具备 backend qualification 资格；
+- AdamW scaffold 不具备 optimizer qualification 资格；
+- C1 不执行 optimizer step，不产生 C2 optimizer evidence。
+
+GPU workflow：
+
+- 继续先跑原 `run_parameter_policy_gpu_matrix.py` baseline matrix；
+- 再串行跑新的 execution infrastructure matrix，避免单 GPU runner 并发争抢；
+- optional real backend matrix 保持独立；
+- baseline + execution 两个 shared JSON artifact 均为 required，缺失即 error；
+- GPU workflow 仍仅 `workflow_dispatch`，不会让普通 PR 自动在 self-hosted GPU 上执行代码；
+- Windows 与 non-Windows 路径都调用同一 execution runner。
+
+C2 入口条件：
+
+1. C0 host/runtime regression 全绿；
+2. old shared GPU matrix exact-head PASS；
+3. C1 execution infrastructure matrix exact-head PASS；
+4. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
+5. B1 identity、B2 physical audit、B3 checkpoint schema 不为 GPU 测试放宽；
+6. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture。
+
+后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在对应 exact-head promotion PR 之前，不改变任何 optimizer qualification。
 
 ## Phase D — backend feature qualification
 
