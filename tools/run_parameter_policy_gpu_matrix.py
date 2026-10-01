@@ -25,17 +25,85 @@ import os
 from pathlib import Path
 import platform
 import subprocess
-import tempfile
 import sys
+import tempfile
 import time
 import traceback
-from types import SimpleNamespace
+
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+class ParameterPolicyGpuMatrixBootstrapError(RuntimeError):
+    pass
+
+
+def _git(*args: str) -> str:
+    try:
+        return subprocess.check_output(
+            ["git", *args],
+            cwd=REPO_ROOT,
+            text=True,
+            stderr=subprocess.STDOUT,
+        ).strip()
+    except subprocess.CalledProcessError as exc:
+        raise ParameterPolicyGpuMatrixBootstrapError(
+            f"git {' '.join(args)} failed: {exc.output.strip()}"
+        ) from exc
+
+
+def _strict_expected_commit_from_argv(argv: list[str]) -> str | None:
+    for index, value in enumerate(argv):
+        if value == "--expected-commit":
+            if index + 1 >= len(argv):
+                break
+            expected = argv[index + 1].strip()
+            if expected:
+                return expected
+            break
+        if value.startswith("--expected-commit="):
+            expected = value.split("=", 1)[1].strip()
+            if expected:
+                return expected
+            break
+    return None
+
+
+def _assert_exact_clean_head(expected_commit: str) -> str:
+    actual = _git("rev-parse", "HEAD")
+    expected = str(expected_commit or "").strip()
+    if not expected:
+        raise ParameterPolicyGpuMatrixBootstrapError(
+            "--expected-commit must be non-empty when strict qualification mode is used."
+        )
+    if actual != expected:
+        raise ParameterPolicyGpuMatrixBootstrapError(
+            "Parameter Policy GPU qualification must run on the requested exact head: "
+            f"expected={expected}, actual={actual}."
+        )
+    status = _git("status", "--porcelain=v1", "--untracked-files=all")
+    if status:
+        preview = "\n".join(status.splitlines()[:12])
+        raise ParameterPolicyGpuMatrixBootstrapError(
+            "Parameter Policy GPU qualification requires a completely clean workspace, "
+            "including untracked files. Remove or move evidence outputs outside "
+            f"the repository before running. git status:\n{preview}"
+        )
+    return actual
+
+
+_STRICT_EXPECTED_COMMIT = _strict_expected_commit_from_argv(sys.argv[1:])
+_STRICT_COMMIT = (
+    _assert_exact_clean_head(_STRICT_EXPECTED_COMMIT)
+    if _STRICT_EXPECTED_COMMIT is not None
+    else None
+)
+
 
 import torch
 from accelerate import Accelerator
 
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -51,9 +119,12 @@ from mikazuki.parameter_policy_trainer import create_parameter_policy_session
 
 
 def _git_sha() -> str | None:
+    if _STRICT_COMMIT is not None:
+        return _STRICT_COMMIT
     try:
         return subprocess.check_output(
             ["git", "rev-parse", "HEAD"],
+            cwd=REPO_ROOT,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
@@ -353,6 +424,14 @@ def _cases() -> list[tuple[str, list[str], str]]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--expected-commit",
+        default=None,
+        help=(
+            "Enable strict qualification provenance: require this exact HEAD and "
+            "a completely clean workspace before importing CUDA/runtime modules."
+        ),
+    )
     parser.add_argument("--output", default="parameter-policy-gpu-matrix.json")
     parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
@@ -373,6 +452,8 @@ def main() -> int:
     evidence = {
         "schema_version": 1,
         "commit": _git_sha(),
+        "expected_commit": args.expected_commit,
+        "strict_exact_head": args.expected_commit is not None,
         "python": platform.python_version(),
         "platform": platform.platform(),
         "torch": torch.__version__,
