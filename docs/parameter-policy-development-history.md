@@ -3000,6 +3000,8 @@ Final qualification / promotion gate：
 
 C2 source-development 目标是把 AdamW 从 C1 的 infrastructure scaffold推进到完整 lifecycle evidence，但仍不修改 production qualification table。
 
+C2 将 execution GPU evidence schema 从 v1 升为 v2，因为 `cases[]` 从单个 `phase/status/details` row扩展为 `case -> phases[]`。C1 的两个 infrastructure case仍保持单 `probe` phase，但输出统一采用 v2 phased shape；旧 v1 evidence不应与 C2 v2 evidence混用。
+
 新增稳定 evidence bundle：
 
 - `phase-c:adamw-full-bf16:v1`
