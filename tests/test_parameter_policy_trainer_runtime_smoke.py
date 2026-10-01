@@ -884,6 +884,10 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             torch.testing.assert_close(parameter, initial_parameter)
             self.assertEqual(session.optimizer.state_dict(), initial_optimizer_state)
             self.assertEqual(raw_scheduler.state_dict(), initial_scheduler_state)
+            self.assertEqual(
+                raw_scheduler.state_dict()["step_count"],
+                initial_scheduler_state["step_count"],
+            )
 
             with accelerator.accumulate(model):
                 loss = model(torch.ones(2, 4)).sum()
@@ -896,6 +900,22 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertFalse(torch.equal(parameter, initial_parameter))
             self.assertNotEqual(session.optimizer.state_dict(), initial_optimizer_state)
             self.assertNotEqual(raw_scheduler.state_dict(), initial_scheduler_state)
+            child_state = session.optimizer.state_dict()["children"]["main"]["state_dict"]["state"]
+            step_values = sorted(
+                int(
+                    state["step"].detach().cpu().item()
+                    if isinstance(state["step"], torch.Tensor)
+                    else state["step"]
+                )
+                for state in child_state.values()
+                if "step" in state
+            )
+            self.assertTrue(step_values)
+            self.assertTrue(all(value == 1 for value in step_values))
+            self.assertEqual(
+                raw_scheduler.state_dict()["step_count"],
+                initial_scheduler_state["step_count"] + 1,
+            )
             accelerator.end_training()
 
     def test_scheduler_mismatch_fails_before_optimizer_or_scheduler_state_mutation(self):
