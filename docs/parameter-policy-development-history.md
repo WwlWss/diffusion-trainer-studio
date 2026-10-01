@@ -2971,17 +2971,32 @@ python tools/run_parameter_policy_execution_gpu_matrix.py \
   --output ../parameter-policy-execution-gpu-matrix.json
 ```
 
-C2 入口条件：
+C2 source-development 入口条件：
 
 1. GitHub host/source/CPU/runtime CI exact-head 全绿；
-2. 同一 PR exact head 在已知可用 CUDA 环境以 `--expected-commit` strict mode 运行旧 shared GPU matrix并 PASS；
-3. 同一 PR exact head 直接运行 C1 execution infrastructure matrix并 PASS；
-4. 两份 standalone evidence JSON 均写在 repository 外，并对 commit/provenance/runtime/case结果完成 review；
-5. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
-6. B1 identity、B2 physical audit、B3 checkpoint schema 不为 GPU 测试放宽；
-7. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture。
+2. C0/C1 focused source review 无 P1/P2 blocker；
+3. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
+4. B1 identity、B2 physical audit、B3 checkpoint schema 不为后续实现放宽；
+5. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture；
+6. C2/C3/Phase D 可以继续完成源码、host contract、CPU/runtime smoke 与 UI/Preview/Start wiring；source-development 不要求此时 clone CUDA 环境或生成真实 GPU evidence。
 
-后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在对应 exact-head promotion PR 之前，不改变任何 optimizer qualification。
+因此，C1 standalone CUDA runner 是后续 final qualification 的 evidence infrastructure，不是继续开发 C2/C3/Phase D 源码的前置硬门槛。这样可以避免在完整 UI positive path 尚未形成时重复 clone / 配置 GPU 环境、反复生成很快会因源码继续变化而失效的中间态 evidence。
+
+Final qualification / promotion gate：
+
+1. 完整 UI positive path 已具备，能够从 UI 配置 full-BF16 / Component，经过 Preview 与 Start 进入真实 trainer lifecycle；
+2. 必须选择最终 candidate exact head，在已知可用 CUDA 环境 checkout 该 SHA；
+3. 旧 shared GPU matrix 以 `--expected-commit` strict mode PASS；
+4. C1 execution infrastructure matrix PASS；
+5. C2/C3/C4 对应的 AdamW、Muon、Muon + AdamW fallback 真实 step / accumulation / save / fresh-resume / second-step evidence PASS；
+6. Phase D 对目标 backend 的真实 forward/backward/step/save/resume evidence PASS；
+7. 完整 UI -> Preview -> Start -> train -> checkpoint -> resume -> second-step positive path 在相同 qualification candidate 上 PASS；
+8. 两类 standalone evidence JSON 均写在 repository 外，并完成 commit/provenance/runtime/case review；
+9. 在上述 evidence 完整之前，backend/optimizer production qualification 继续保持 pending/unsupported，不允许仅凭源码完成或 CPU CI 将 capability 切为 qualified。
+
+为了测试最终 UI positive path，允许后续设计一个显式、测试专用的 qualification session/lease，但必须保持以下边界：只用于 qualification 环境、进程内临时生效、退出自动恢复、普通 UI 用户不可触发、不能通过环境变量全局绕过、不能修改 production qualification table。现有 C1 temporary qualification lease 只属于 evidence tooling，不能直接当成 production UI bypass。
+
+后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在 final qualification / promotion gate 通过之前，不改变任何 optimizer qualification。
 
 ## Phase D — backend feature qualification
 
