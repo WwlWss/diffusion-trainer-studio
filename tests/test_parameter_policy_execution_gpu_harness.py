@@ -179,6 +179,117 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         )
         self.assertFalse(bad_result.exists())
 
+    def test_execution_worker_rejects_duplicate_worker_dir_before_cuda(self):
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        worker_dir = ROOT.parent / "c2-worker-duplicate-dir"
+        result_path = worker_dir / "result.json"
+        unsafe_dir = ROOT / "worker-temp-duplicate"
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--expected-commit",
+                    head,
+                    "--worker-case",
+                    "infra:cuda-bf16-capability:v1",
+                    "--worker-phase",
+                    "probe",
+                    "--worker-result",
+                    str(result_path),
+                    "--worker-dir",
+                    str(worker_dir),
+                    "--worker-dir",
+                    str(unsafe_dir),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "--worker-dir exactly once",
+                completed.stdout + completed.stderr,
+            )
+            self.assertFalse(result_path.exists())
+            self.assertFalse(unsafe_dir.exists())
+        finally:
+            result_path.unlink(missing_ok=True)
+            try:
+                worker_dir.rmdir()
+            except OSError:
+                pass
+
+    def test_execution_worker_rejects_duplicate_worker_result_before_cuda(self):
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        worker_dir = ROOT.parent / "c2-worker-duplicate-result"
+        result_path = worker_dir / "result.json"
+        unsafe_result = ROOT / "worker-result-duplicate.json"
+        try:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(RUNNER),
+                    "--expected-commit",
+                    head,
+                    "--worker-case",
+                    "infra:cuda-bf16-capability:v1",
+                    "--worker-phase",
+                    "probe",
+                    "--worker-result",
+                    str(result_path),
+                    "--worker-result",
+                    str(unsafe_result),
+                    "--worker-dir",
+                    str(worker_dir),
+                ],
+                cwd=ROOT,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertNotEqual(completed.returncode, 0)
+            self.assertIn(
+                "--worker-result exactly once",
+                completed.stdout + completed.stderr,
+            )
+            self.assertFalse(result_path.exists())
+            self.assertFalse(unsafe_result.exists())
+        finally:
+            result_path.unlink(missing_ok=True)
+            unsafe_result.unlink(missing_ok=True)
+            try:
+                worker_dir.rmdir()
+            except OSError:
+                pass
+
+    def test_execution_worker_uses_validated_bootstrap_paths(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("result_path = _BOOTSTRAP_WORKER_RESULT", source)
+        self.assertIn("case_dir = _BOOTSTRAP_WORKER_DIR", source)
+        self.assertNotIn("result_path = Path(args.worker_result)", source)
+        self.assertNotIn("case_dir = Path(args.worker_dir)", source)
+
+    def test_c2_scheduler_uses_production_provider(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('importlib.import_module("library.train_util")', source)
+        self.assertIn('"library.train_util.get_scheduler_fix"', source)
+        self.assertIn("_load_production_get_scheduler_fix()", source)
+        self.assertNotIn(
+            "def get_scheduler_fix(child_args, optimizer, num_processes):",
+            source,
+        )
+        self.assertNotIn("torch.optim.lr_scheduler.LambdaLR(", source)
+
     def test_baseline_runner_keeps_runtime_simplenamespace_import(self):
         source = BASELINE_RUNNER.read_text(encoding="utf-8")
         self.assertIn("from types import SimpleNamespace", source)
