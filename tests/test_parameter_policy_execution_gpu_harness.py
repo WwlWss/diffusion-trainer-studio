@@ -204,7 +204,18 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('"incomplete"', support)
         self.assertIn("summarize_adamw_full_bf16_bundle", source)
         self.assertIn("ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID", source)
-        self.assertIn('"qualification_evidence_component": True', source)
+        self.assertGreaterEqual(
+            source.count('"qualification_evidence_component": True'),
+            3,
+        )
+        self.assertGreaterEqual(
+            source.count('"optimizer_qualification_eligible": False'),
+            3,
+        )
+        self.assertNotIn(
+            '"optimizer_qualification_eligible": case_status == "pass"',
+            source,
+        )
         self.assertIn('"production_qualification_mutated": False', support)
         self.assertIn("--worker-dir", source)
         self.assertIn("_run_phase_subprocess", source)
