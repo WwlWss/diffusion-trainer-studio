@@ -216,7 +216,11 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             '"optimizer_qualification_eligible": case_status == "pass"',
             source,
         )
+        self.assertIn('"optimizer_evidence_complete": status == "pass"', support)
+        self.assertIn('"promotion_eligible": False', support)
+        self.assertIn('"optimizer_qualification_eligible": False', support)
         self.assertIn('"production_qualification_mutated": False', support)
+        self.assertIn("case selection contains duplicates", source)
         self.assertIn("--worker-dir", source)
         self.assertIn("_run_phase_subprocess", source)
         self.assertIn("sys.executable", source)
