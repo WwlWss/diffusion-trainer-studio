@@ -450,4 +450,5 @@ jobs:
             tests.test_parameter_policy_network_runtime_smoke \
             tests.test_parameter_policy_full_runtime_smoke \
             tests.test_parameter_policy_anima_runtime_smoke \
+            tests.test_parameter_policy_execution_gpu_runtime \
             -v
