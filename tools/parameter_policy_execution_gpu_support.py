@@ -15,6 +15,22 @@ class ExecutionGpuMatrixError(RuntimeError):
     pass
 
 
+ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:adamw-full-bf16:v1"
+
+EXECUTION_GPU_CASE_PHASES: dict[str, tuple[str, ...]] = {
+    "infra:cuda-bf16-capability:v1": ("probe",),
+    "infra:full-bf16-session:v1": ("probe",),
+    "optimizer:adamw:full-bf16:accum1:v1": (
+        "train_save",
+        "resume_second_step",
+    ),
+    "optimizer:adamw:full-bf16:accum2:v1": (
+        "train_save",
+        "resume_second_step",
+    ),
+}
+
+
 @contextmanager
 def temporary_execution_qualification(
     *,
@@ -104,6 +120,8 @@ def temporary_execution_qualification(
 
 
 __all__ = [
+    "ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID",
+    "EXECUTION_GPU_CASE_PHASES",
     "ExecutionGpuMatrixError",
     "temporary_execution_qualification",
 ]
