@@ -80,6 +80,7 @@ on:
       - "tools/run_parameter_policy_gpu_matrix.py"
       - "tools/run_parameter_policy_execution_gpu_matrix.py"
       - "tools/parameter_policy_execution_gpu_support.py"
+      - "tools/parameter_policy_execution_gpu_runtime.py"
       - "tools/run_parameter_policy_backend_gpu_matrix.py"
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
@@ -173,6 +174,7 @@ jobs:
             tools/run_parameter_policy_gpu_matrix.py \
             tools/run_parameter_policy_execution_gpu_matrix.py \
             tools/parameter_policy_execution_gpu_support.py \
+            tools/parameter_policy_execution_gpu_runtime.py \
             tools/run_parameter_policy_backend_gpu_matrix.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
