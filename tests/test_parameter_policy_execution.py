@@ -331,8 +331,20 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
                 for name, row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.items()
             },
             {
-                name: "pending"
-                for name in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS
+                "AdamW": "pending",
+                "AdamW8bit": "pending",
+                "PagedAdamW8bit": "pending",
+                "PagedAdamW": "pending",
+                "PagedAdamW32bit": "pending",
+                "Lion": "pending",
+                "Lion8bit": "pending",
+                "PagedLion8bit": "pending",
+                "SGDNesterov": "pending",
+                "SGDNesterov8bit": "pending",
+                "RAdamScheduleFree": "pending",
+                "AdamWScheduleFree": "pending",
+                "SGDScheduleFree": "pending",
+                "Muon": "pending",
             },
         )
 
