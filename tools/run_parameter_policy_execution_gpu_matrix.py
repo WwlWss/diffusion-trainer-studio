@@ -264,9 +264,11 @@ from tools.parameter_policy_execution_gpu_runtime import (
     scheduler_state_evidence,
 )
 from tools.parameter_policy_execution_gpu_support import (
+    ADAMW_FULL_BF16_CASE_IDS,
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    summarize_adamw_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -274,10 +276,7 @@ from tools.parameter_policy_execution_gpu_support import (
 EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
 EVIDENCE_VERSION = 2
 _CASES = tuple(EXECUTION_GPU_CASE_PHASES)
-_ADAMW_CASES = (
-    "optimizer:adamw:full-bf16:accum1:v1",
-    "optimizer:adamw:full-bf16:accum2:v1",
-)
+_ADAMW_CASES = ADAMW_FULL_BF16_CASE_IDS
 _STDIO_TAIL_LIMIT = 16000
 
 
@@ -1220,31 +1219,13 @@ def _coordinator_main(args: argparse.Namespace) -> int:
             if case_status != "pass":
                 failed = True
 
-    adamw_rows = {
-        row["case_id"]: row
-        for row in evidence["cases"]
-        if row["case_id"] in _ADAMW_CASES
-    }
-    if adamw_rows:
-        missing_cases = sorted(set(_ADAMW_CASES).difference(adamw_rows))
-        if missing_cases:
-            bundle_status = "incomplete"
-        elif all(row.get("status") == "pass" for row in adamw_rows.values()):
-            bundle_status = "pass"
-        else:
-            bundle_status = "fail"
+    adamw_bundle = summarize_adamw_full_bf16_bundle(evidence["cases"])
+    if adamw_bundle is not None:
         evidence["evidence_bundles"] = {
-            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID: {
-                "scope": "optimizer",
-                "optimizer": "AdamW",
-                "feature": "full_bf16",
-                "required_cases": list(_ADAMW_CASES),
-                "missing_cases": missing_cases,
-                "status": bundle_status,
-                "optimizer_qualification_eligible": bundle_status == "pass",
-                "production_qualification_mutated": False,
-            }
+            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID: adamw_bundle,
         }
+        if adamw_bundle["status"] != "pass":
+            failed = True
 
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
