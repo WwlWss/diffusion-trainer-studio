@@ -143,11 +143,37 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             fake_accelerator = SimpleNamespace(
                 num_processes=2,
+                distributed_type=SimpleNamespace(value="NO"),
                 device=torch.device("cpu"),
             )
             with self.assertRaisesRegex(
                 ParameterPolicyTrainerRuntimeError,
                 "(?s)post_prepare.*full_bf16.*single-process.*num_processes=2",
+            ):
+                session.assert_runtime_contract(
+                    phase="post_prepare",
+                    accelerator=fake_accelerator,
+                    optimizer=session.optimizer,
+                )
+
+    def test_full_bf16_non_no_distributed_type_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            model.double_blocks[0].weight.data = (
+                model.double_blocks[0].weight.data.to(torch.bfloat16)
+            )
+            fake_accelerator = SimpleNamespace(
+                num_processes=1,
+                distributed_type=SimpleNamespace(value="FSDP"),
+                device=torch.device("cpu"),
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "(?s)post_prepare.*distributed_type=NO.*distributed_type=FSDP",
             ):
                 session.assert_runtime_contract(
                     phase="post_prepare",
