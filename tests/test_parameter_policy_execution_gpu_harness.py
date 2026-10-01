@@ -24,7 +24,6 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('"--expected-commit"', source)
         self.assertIn('"status", "--porcelain=v1", "--untracked-files=all"', source)
         self.assertIn("_assert_output_outside_repo", source)
-        self.assertIn("_assert_output_outside_repo", source)
         self.assertLess(
             source.index("_BOOTSTRAP_COMMIT = _assert_exact_clean_head"),
             source.index("import torch"),
