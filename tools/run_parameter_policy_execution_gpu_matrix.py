@@ -98,6 +98,18 @@ def _assert_exact_clean_head(expected_commit: str) -> str:
     return actual
 
 
+def _assert_output_outside_repo(output: str) -> Path:
+    resolved = Path(output).expanduser().resolve(strict=False)
+    try:
+        resolved.relative_to(REPO_ROOT.resolve(strict=False))
+    except ValueError:
+        return resolved
+    raise ExecutionGpuMatrixBootstrapError(
+        "Execution GPU qualification requires --output outside the repository; "
+        f"received {resolved}."
+    )
+
+
 _BOOTSTRAP_EXPECTED_COMMIT = _expected_commit_from_argv(sys.argv[1:])
 _BOOTSTRAP_COMMIT = _assert_exact_clean_head(_BOOTSTRAP_EXPECTED_COMMIT)
 
@@ -484,6 +496,7 @@ def _run_case_subprocess(
 
 def _coordinator_main(args: argparse.Namespace) -> int:
     commit = _assert_exact_clean_head(args.expected_commit)
+    output_path = _assert_output_outside_repo(args.output)
     environment = _cuda_environment()
 
     selected = tuple(args.case) if args.case else _CASES
@@ -522,8 +535,8 @@ def _coordinator_main(args: argparse.Namespace) -> int:
             if row.get("status") != "pass":
                 failed = True
 
-    _write_json(Path(args.output), evidence)
-    print(f"wrote {args.output}")
+    _write_json(output_path, evidence)
+    print(f"wrote {output_path}")
     return 1 if failed else 0
 
 
