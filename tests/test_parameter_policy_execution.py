@@ -303,6 +303,7 @@ class ParameterPolicyExecutionEnvironmentTests(unittest.TestCase):
             execution.parameter_policy_execution_environment_blockers(
                 self._contract(),
                 num_processes=1,
+                distributed_type="NO",
             ),
             [],
         )
@@ -311,11 +312,34 @@ class ParameterPolicyExecutionEnvironmentTests(unittest.TestCase):
         blockers = execution.parameter_policy_execution_environment_blockers(
             self._contract(),
             num_processes=2,
+            distributed_type="NO",
         )
         self.assertEqual(len(blockers), 1)
         self.assertIn("full_bf16", blockers[0])
         self.assertIn("single-process", blockers[0])
         self.assertIn("num_processes=2", blockers[0])
+
+    def test_full_bf16_distributed_runtime_is_fail_closed(self):
+        blockers = execution.parameter_policy_execution_environment_blockers(
+            self._contract(),
+            num_processes=1,
+            distributed_type="FSDP",
+        )
+        self.assertEqual(len(blockers), 1)
+        self.assertIn("distributed_type=NO", blockers[0])
+        self.assertIn("distributed_type=FSDP", blockers[0])
+
+    def test_execution_environment_distributed_type_is_strict_nonempty_string(self):
+        for bad in (None, True, False, 0, 1.0, "", "   ", [], {}):
+            with self.subTest(bad=bad), self.assertRaisesRegex(
+                ValueError,
+                "distributed_type",
+            ):
+                execution.parameter_policy_execution_environment_blockers(
+                    self._contract(),
+                    num_processes=1,
+                    distributed_type=bad,
+                )
 
     def test_execution_environment_num_processes_is_strict_positive_integer(self):
         for bad in (None, True, False, 0, -1, 1.0, "1", [], {}):
@@ -326,6 +350,7 @@ class ParameterPolicyExecutionEnvironmentTests(unittest.TestCase):
                 execution.parameter_policy_execution_environment_blockers(
                     self._contract(),
                     num_processes=bad,
+                    distributed_type="NO",
                 )
 
 
