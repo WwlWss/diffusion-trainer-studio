@@ -166,8 +166,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from mikazuki import parameter_policy_execution as execution
-from mikazuki.parameter_policy_trainer import create_parameter_policy_session
+from mikazuki.parameter_policy_trainer import (
+    create_parameter_policy_session,
+    make_legacy_scheduler_factory,
+)
+from tools.parameter_policy_execution_gpu_runtime import (
+    gradient_evidence,
+    model_parameter_evidence,
+    optimizer_state_evidence,
+    scheduler_state_evidence,
+)
 from tools.parameter_policy_execution_gpu_support import (
+    ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
     temporary_execution_qualification,
 )
@@ -175,9 +186,10 @@ from tools.parameter_policy_execution_gpu_support import (
 
 EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
 EVIDENCE_VERSION = 1
-_CASES = (
-    "infra:cuda-bf16-capability:v1",
-    "infra:full-bf16-session:v1",
+_CASES = tuple(EXECUTION_GPU_CASE_PHASES)
+_ADAMW_CASES = (
+    "optimizer:adamw:full-bf16:accum1:v1",
+    "optimizer:adamw:full-bf16:accum2:v1",
 )
 _STDIO_TAIL_LIMIT = 16000
 
@@ -298,10 +310,405 @@ def _policy() -> dict[str, Any]:
             "transformer.double_stream": {
                 "train": True,
                 "optimizer_profile": "main",
-                "learning_rate": 1e-3,
+                "learning_rate": 1e-2,
             },
         },
     }
+
+
+def _scheduler_args(policy_path: Path) -> SimpleNamespace:
+    return SimpleNamespace(
+        parameter_policy_config=str(policy_path),
+        optimizer_type="AdamW",
+        full_bf16=True,
+        mixed_precision="bf16",
+        lr_scheduler="constant",
+        lr_scheduler_type="",
+        lr_scheduler_args=None,
+        lr_warmup_steps=0,
+        lr_decay_steps=0,
+        lr_scheduler_num_cycles=1,
+        lr_scheduler_power=1.0,
+        lr_scheduler_timescale=None,
+        lr_scheduler_min_lr_ratio=None,
+        max_train_steps=8,
+    )
+
+
+def _scheduler_factory(args: object):
+    def get_scheduler_fix(child_args, optimizer, num_processes):
+        del child_args, num_processes
+        return torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda=lambda _step: 1.0,
+        )
+
+    return make_legacy_scheduler_factory(
+        args=args,
+        get_scheduler_fix=get_scheduler_fix,
+        num_processes=1,
+    )
+
+
+def _assert_cuda_accelerator(accelerator: Accelerator) -> str:
+    if accelerator.num_processes != 1:
+        raise AssertionError(
+            "Phase C shared execution qualification requires one process; "
+            f"got {accelerator.num_processes}."
+        )
+    distributed_type = str(
+        getattr(
+            accelerator.distributed_type,
+            "value",
+            accelerator.distributed_type,
+        )
+    ).strip().upper()
+    if distributed_type != "NO":
+        raise AssertionError(
+            "Phase C shared execution qualification requires "
+            "Accelerate distributed_type=NO; "
+            f"got {distributed_type!r}."
+        )
+    if torch.device(accelerator.device).type != "cuda":
+        raise AssertionError(
+            "Phase C shared execution qualification requires CUDA; "
+            f"got accelerator.device={accelerator.device}."
+        )
+    return distributed_type
+
+
+def _adamw_accumulation_steps(case_id: str) -> int:
+    if case_id == "optimizer:adamw:full-bf16:accum1:v1":
+        return 1
+    if case_id == "optimizer:adamw:full-bf16:accum2:v1":
+        return 2
+    raise ExecutionGpuMatrixError(f"Unknown AdamW lifecycle case {case_id!r}.")
+
+
+def _trainable_dtypes(session) -> list[str]:
+    return sorted({str(parameter.dtype) for parameter in session.trainable_parameters})
+
+
+def _adamw_child_state_is_empty(session) -> bool:
+    payload = session.optimizer.state_dict()
+    child = payload["children"]["main"]["state_dict"]
+    return child["state"] == {}
+
+
+def _run_logical_step(
+    *,
+    accelerator: Accelerator,
+    model: torch.nn.Module,
+    optimizer: object,
+    scheduler: object,
+    raw_scheduler: object,
+    session: object,
+    accumulation_steps: int,
+    logical_step: int,
+) -> dict[str, Any]:
+    before_model = model_parameter_evidence(accelerator.unwrap_model(model))
+    before_optimizer = optimizer_state_evidence(session.optimizer)
+    before_scheduler = scheduler_state_evidence(raw_scheduler)
+    microsteps: list[dict[str, Any]] = []
+
+    for microstep in range(accumulation_steps):
+        model_before = model_parameter_evidence(accelerator.unwrap_model(model))
+        optimizer_before = optimizer_state_evidence(session.optimizer)
+        scheduler_before = scheduler_state_evidence(raw_scheduler)
+        with accelerator.accumulate(model):
+            value = torch.full(
+                (2, 8),
+                0.25 + 0.125 * (logical_step + microstep),
+                device=accelerator.device,
+                dtype=torch.bfloat16,
+            )
+            output = model(value)
+            loss = output.float().square().mean()
+            accelerator.backward(loss)
+            sync_gradients = bool(accelerator.sync_gradients)
+            gradients = gradient_evidence(list(session.trainable_parameters))
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+        model_after = model_parameter_evidence(accelerator.unwrap_model(model))
+        optimizer_after = optimizer_state_evidence(session.optimizer)
+        scheduler_after = scheduler_state_evidence(raw_scheduler)
+        microsteps.append(
+            {
+                "microstep": microstep + 1,
+                "sync_gradients": sync_gradients,
+                "loss": float(loss.detach().cpu()),
+                "gradients": gradients,
+                "model_changed": model_after != model_before,
+                "optimizer_state_changed": optimizer_after["sha256"]
+                != optimizer_before["sha256"],
+                "scheduler_state_changed": scheduler_after["sha256"]
+                != scheduler_before["sha256"],
+            }
+        )
+
+        if accumulation_steps > 1 and microstep < accumulation_steps - 1:
+            if sync_gradients:
+                raise AssertionError("Intermediate accumulation microstep unexpectedly synced.")
+            if model_after != model_before:
+                raise AssertionError("Intermediate accumulation microstep changed parameters.")
+            if optimizer_after["sha256"] != optimizer_before["sha256"]:
+                raise AssertionError("Intermediate accumulation microstep changed optimizer state.")
+            if scheduler_after["sha256"] != scheduler_before["sha256"]:
+                raise AssertionError("Intermediate accumulation microstep advanced scheduler.")
+
+    after_model = model_parameter_evidence(accelerator.unwrap_model(model))
+    after_optimizer = optimizer_state_evidence(session.optimizer)
+    after_scheduler = scheduler_state_evidence(raw_scheduler)
+    if before_model == after_model:
+        raise AssertionError("AdamW logical step did not update model parameters.")
+    if before_optimizer["sha256"] == after_optimizer["sha256"]:
+        raise AssertionError("AdamW logical step did not update optimizer state.")
+    if before_scheduler["sha256"] == after_scheduler["sha256"]:
+        raise AssertionError("AdamW logical step did not advance scheduler.")
+    if not microsteps[-1]["sync_gradients"]:
+        raise AssertionError("Final accumulation microstep did not synchronize gradients.")
+
+    return {
+        "logical_step": logical_step,
+        "accumulation_steps": accumulation_steps,
+        "before": {
+            "model": before_model,
+            "optimizer": before_optimizer,
+            "scheduler": before_scheduler,
+        },
+        "after": {
+            "model": after_model,
+            "optimizer": after_optimizer,
+            "scheduler": after_scheduler,
+        },
+        "microsteps": microsteps,
+    }
+
+
+def _build_adamw_runtime(case_dir: Path, *, accumulation_steps: int):
+    policy_path = case_dir / "policy.json"
+    policy_path.write_text(json.dumps(_policy(), sort_keys=True), encoding="utf-8")
+    args = _scheduler_args(policy_path)
+    model = _TinyFlux()
+    session = create_parameter_policy_session(
+        args=args,
+        train_type="flux-finetune",
+        roots={"transformer": model},
+    )
+    raw_scheduler = session.build_scheduler(_scheduler_factory(args))
+    if session.execution_contract is None:
+        raise AssertionError("AdamW full-BF16 session has no execution contract.")
+    model.to(torch.bfloat16)
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("AdamW trainable parameters are not true BF16 before prepare.")
+
+    accelerator = Accelerator(
+        mixed_precision="bf16",
+        gradient_accumulation_steps=accumulation_steps,
+    )
+    distributed_type = _assert_cuda_accelerator(accelerator)
+    model, optimizer, scheduler = accelerator.prepare(
+        model,
+        session.optimizer,
+        raw_scheduler,
+    )
+    session.finalize_after_prepare(
+        accelerator=accelerator,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("AdamW trainable parameters are not true BF16 after prepare.")
+    return (
+        args,
+        model,
+        optimizer,
+        scheduler,
+        raw_scheduler,
+        session,
+        accelerator,
+        distributed_type,
+    )
+
+
+def _adamw_handoff_path(case_dir: Path) -> Path:
+    return case_dir / "adamw-handoff.json"
+
+
+def _adamw_checkpoint_dir(case_dir: Path) -> Path:
+    return case_dir / "checkpoint"
+
+
+def _adamw_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
+    accumulation_steps = _adamw_accumulation_steps(case_id)
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("AdamW",),
+        evidence_case_id=ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            _args,
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+        ) = _build_adamw_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if not _adamw_child_state_is_empty(session):
+                raise AssertionError("Fresh AdamW optimizer state must start empty.")
+            step = _run_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=1,
+            )
+            checkpoint_dir = _adamw_checkpoint_dir(case_dir)
+            accelerator.save_state(checkpoint_dir)
+            saved = {
+                "schema": "dts.parameter-policy.adamw-full-bf16-handoff",
+                "version": 1,
+                "case_id": case_id,
+                "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "commit": _BOOTSTRAP_COMMIT,
+                "accumulation_steps": accumulation_steps,
+                "execution_identity": session.execution_contract.execution_identity(),
+                "execution_signature": session.execution_contract.execution_signature(),
+                "model": model_parameter_evidence(accelerator.unwrap_model(model)),
+                "optimizer": optimizer_state_evidence(session.optimizer),
+                "scheduler": scheduler_state_evidence(raw_scheduler),
+            }
+            _write_json(_adamw_handoff_path(case_dir), saved)
+            return {
+                "scope": "optimizer",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer",
+                    "name": "AdamW",
+                },
+                "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": True,
+                "optimizer_qualification_eligible": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "trainable_dtypes": _trainable_dtypes(session),
+                "step": step,
+                "handoff": saved,
+            }
+        finally:
+            accelerator.end_training()
+
+
+def _adamw_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
+    handoff_path = _adamw_handoff_path(case_dir)
+    if not handoff_path.is_file():
+        raise ExecutionGpuMatrixError("AdamW resume phase is missing train/save handoff.")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    accumulation_steps = _adamw_accumulation_steps(case_id)
+    expected = {
+        "schema": "dts.parameter-policy.adamw-full-bf16-handoff",
+        "version": 1,
+        "case_id": case_id,
+        "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+        "commit": _BOOTSTRAP_COMMIT,
+        "accumulation_steps": accumulation_steps,
+    }
+    for key, value in expected.items():
+        if handoff.get(key) != value:
+            raise ExecutionGpuMatrixError(
+                f"AdamW resume handoff mismatch for {key}: "
+                f"expected={value!r}, actual={handoff.get(key)!r}."
+            )
+
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("AdamW",),
+        evidence_case_id=ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            _args,
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+        ) = _build_adamw_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if not _adamw_child_state_is_empty(session):
+                raise AssertionError("Fresh resume AdamW optimizer state must start empty.")
+            accelerator.load_state(_adamw_checkpoint_dir(case_dir))
+            session.assert_runtime_contract(
+                phase="post_resume",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            restored_model = model_parameter_evidence(accelerator.unwrap_model(model))
+            restored_optimizer = optimizer_state_evidence(session.optimizer)
+            restored_scheduler = scheduler_state_evidence(raw_scheduler)
+            if restored_model != handoff.get("model"):
+                raise AssertionError("AdamW resumed model evidence does not match saved state.")
+            if restored_optimizer["sha256"] != handoff["optimizer"]["sha256"]:
+                raise AssertionError("AdamW resumed optimizer state does not match saved state.")
+            if restored_scheduler["sha256"] != handoff["scheduler"]["sha256"]:
+                raise AssertionError("AdamW resumed scheduler state does not match saved state.")
+            if session.execution_contract.execution_identity() != handoff.get("execution_identity"):
+                raise AssertionError("AdamW resumed execution identity changed.")
+            if session.execution_contract.execution_signature() != handoff.get("execution_signature"):
+                raise AssertionError("AdamW resumed execution signature changed.")
+
+            step = _run_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=2,
+            )
+            return {
+                "scope": "optimizer",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer",
+                    "name": "AdamW",
+                },
+                "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": True,
+                "optimizer_qualification_eligible": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "restored": {
+                    "model": restored_model,
+                    "optimizer": restored_optimizer,
+                    "scheduler": restored_scheduler,
+                },
+                "step": step,
+            }
+        finally:
+            accelerator.end_training()
 
 
 def _case_cuda_bf16_capability() -> dict[str, Any]:
@@ -361,30 +768,7 @@ def _case_full_bf16_session() -> dict[str, Any]:
 
             accelerator = Accelerator(mixed_precision="bf16")
             try:
-                if accelerator.num_processes != 1:
-                    raise AssertionError(
-                        "Phase C shared execution qualification requires one process; "
-                        f"got {accelerator.num_processes}."
-                    )
-                distributed_type = str(
-                    getattr(
-                        accelerator.distributed_type,
-                        "value",
-                        accelerator.distributed_type,
-                    )
-                ).strip().upper()
-                if distributed_type != "NO":
-                    raise AssertionError(
-                        "Phase C shared execution qualification requires "
-                        "Accelerate distributed_type=NO; "
-                        f"got {distributed_type!r}."
-                    )
-                if torch.device(accelerator.device).type != "cuda":
-                    raise AssertionError(
-                        "Phase C shared execution qualification requires CUDA; "
-                        f"got accelerator.device={accelerator.device}."
-                    )
-
+                distributed_type = _assert_cuda_accelerator(accelerator)
                 model, optimizer = accelerator.prepare(model, session.optimizer)
                 session.finalize_after_prepare(
                     accelerator=accelerator,
@@ -437,12 +821,24 @@ def _case_full_bf16_session() -> dict[str, Any]:
                 accelerator.end_training()
 
 
-def _run_worker_case(case_id: str) -> dict[str, Any]:
-    if case_id == "infra:cuda-bf16-capability:v1":
+def _run_worker_case(
+    case_id: str,
+    *,
+    phase: str,
+    case_dir: Path,
+) -> dict[str, Any]:
+    if case_id == "infra:cuda-bf16-capability:v1" and phase == "probe":
         return _case_cuda_bf16_capability()
-    if case_id == "infra:full-bf16-session:v1":
+    if case_id == "infra:full-bf16-session:v1" and phase == "probe":
         return _case_full_bf16_session()
-    raise ExecutionGpuMatrixError(f"Unknown execution GPU case {case_id!r}.")
+    if case_id in _ADAMW_CASES:
+        if phase == "train_save":
+            return _adamw_train_save(case_id, case_dir)
+        if phase == "resume_second_step":
+            return _adamw_resume_second_step(case_id, case_dir)
+    raise ExecutionGpuMatrixError(
+        f"Unknown execution GPU case/phase {case_id!r}/{phase!r}."
+    )
 
 
 def _write_json(path: Path, payload: object) -> None:
@@ -464,7 +860,13 @@ def _worker_main(args: argparse.Namespace) -> int:
     }
     try:
         payload["commit"] = _assert_exact_clean_head(args.expected_commit)
-        payload["details"] = _run_worker_case(args.worker_case)
+        case_dir = Path(args.worker_dir)
+        case_dir.mkdir(parents=True, exist_ok=True)
+        payload["details"] = _run_worker_case(
+            args.worker_case,
+            phase=args.worker_phase,
+            case_dir=case_dir,
+        )
         payload["status"] = "pass"
     except Exception as exc:
         payload["error"] = f"{type(exc).__name__}: {exc}"
@@ -478,15 +880,14 @@ def _subprocess_tail(value: str) -> str:
     return value[-_STDIO_TAIL_LIMIT:]
 
 
-def _run_case_subprocess(
+def _run_phase_subprocess(
     *,
     case_id: str,
+    phase: str,
     expected_commit: str,
-    work_dir: Path,
+    case_dir: Path,
 ) -> dict[str, Any]:
-    result_path = work_dir / (
-        case_id.replace(":", "_").replace("/", "_") + ".json"
-    )
+    result_path = case_dir / f"{phase}.json"
     command = [
         sys.executable,
         str(Path(__file__).resolve()),
@@ -495,9 +896,11 @@ def _run_case_subprocess(
         "--worker-case",
         case_id,
         "--worker-phase",
-        "probe",
+        phase,
         "--worker-result",
         str(result_path),
+        "--worker-dir",
+        str(case_dir),
     ]
     completed = subprocess.run(
         command,
@@ -514,14 +917,14 @@ def _run_case_subprocess(
         except (OSError, json.JSONDecodeError) as exc:
             result = {
                 "case_id": case_id,
-                "phase": "probe",
+                "phase": phase,
                 "status": "fail",
                 "error": f"Invalid worker result: {exc}",
             }
     else:
         result = {
             "case_id": case_id,
-            "phase": "probe",
+            "phase": phase,
             "status": "fail",
             "error": "Worker did not produce an evidence result.",
         }
@@ -568,20 +971,71 @@ def _coordinator_main(args: argparse.Namespace) -> int:
     with tempfile.TemporaryDirectory(prefix="dts-execution-gpu-") as temp_dir:
         work_dir = Path(temp_dir)
         for case_id in selected:
-            started = time.time()
-            row = _run_case_subprocess(
-                case_id=case_id,
-                expected_commit=args.expected_commit,
-                work_dir=work_dir,
+            case_started = time.time()
+            safe_case = case_id.replace(":", "_").replace("/", "_")
+            case_dir = work_dir / safe_case
+            case_dir.mkdir(parents=True, exist_ok=True)
+            phases: list[dict[str, Any]] = []
+            dependency_failed = False
+            for phase in EXECUTION_GPU_CASE_PHASES[case_id]:
+                if dependency_failed:
+                    phase_row = {
+                        "case_id": case_id,
+                        "phase": phase,
+                        "status": "not_run",
+                        "reason": "dependency_failed",
+                    }
+                else:
+                    phase_row = _run_phase_subprocess(
+                        case_id=case_id,
+                        phase=phase,
+                        expected_commit=args.expected_commit,
+                        case_dir=case_dir,
+                    )
+                    if phase_row.get("status") != "pass":
+                        dependency_failed = True
+                phases.append(phase_row)
+
+            case_status = (
+                "pass"
+                if phases and all(row.get("status") == "pass" for row in phases)
+                else "fail"
             )
-            row["coordinator_duration_seconds"] = round(
-                time.time() - started,
-                4,
-            )
+            row = {
+                "case_id": case_id,
+                "status": case_status,
+                "phases": phases,
+                "coordinator_duration_seconds": round(
+                    time.time() - case_started,
+                    4,
+                ),
+            }
             evidence["cases"].append(row)
-            print(f"{str(row.get('status', 'fail')).upper():4} {case_id}", flush=True)
-            if row.get("status") != "pass":
+            print(f"{case_status.upper():4} {case_id}", flush=True)
+            if case_status != "pass":
                 failed = True
+
+    adamw_rows = {
+        row["case_id"]: row
+        for row in evidence["cases"]
+        if row["case_id"] in _ADAMW_CASES
+    }
+    if adamw_rows:
+        evidence["evidence_bundles"] = {
+            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID: {
+                "scope": "optimizer",
+                "optimizer": "AdamW",
+                "feature": "full_bf16",
+                "required_cases": list(_ADAMW_CASES),
+                "status": (
+                    "pass"
+                    if set(adamw_rows) == set(_ADAMW_CASES)
+                    and all(row.get("status") == "pass" for row in adamw_rows.values())
+                    else "fail"
+                ),
+                "production_qualification_mutated": False,
+            }
+        }
 
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
@@ -599,13 +1053,22 @@ def main() -> int:
     parser.add_argument("--worker-case", default="")
     parser.add_argument("--worker-phase", default="")
     parser.add_argument("--worker-result", default="")
+    parser.add_argument("--worker-dir", default="")
     args = parser.parse_args()
 
-    worker_mode = bool(args.worker_case or args.worker_phase or args.worker_result)
+    worker_mode = bool(
+        args.worker_case or args.worker_phase or args.worker_result or args.worker_dir
+    )
     if worker_mode:
-        if not (args.worker_case and args.worker_phase and args.worker_result):
+        if not (
+            args.worker_case
+            and args.worker_phase
+            and args.worker_result
+            and args.worker_dir
+        ):
             raise SystemExit(
-                "Worker mode requires --worker-case, --worker-phase, and --worker-result."
+                "Worker mode requires --worker-case, --worker-phase, "
+                "--worker-result, and --worker-dir."
             )
         return _worker_main(args)
     return _coordinator_main(args)
