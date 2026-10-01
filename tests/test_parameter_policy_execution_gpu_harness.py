@@ -144,6 +144,41 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("--worker-dir outside", completed.stdout + completed.stderr)
         self.assertFalse(result_path.exists())
 
+    def test_execution_worker_result_must_stay_inside_worker_dir(self):
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        worker_dir = ROOT.parent / "c2-worker-temp"
+        bad_result = ROOT.parent / "c2-worker-result-outside.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--expected-commit",
+                head,
+                "--worker-case",
+                "infra:cuda-bf16-capability:v1",
+                "--worker-phase",
+                "probe",
+                "--worker-result",
+                str(bad_result),
+                "--worker-dir",
+                str(worker_dir),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn(
+            "--worker-result inside --worker-dir",
+            completed.stdout + completed.stderr,
+        )
+        self.assertFalse(bad_result.exists())
+
     def test_baseline_runner_keeps_runtime_simplenamespace_import(self):
         source = BASELINE_RUNNER.read_text(encoding="utf-8")
         self.assertIn("from types import SimpleNamespace", source)
