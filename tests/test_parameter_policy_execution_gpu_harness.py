@@ -33,6 +33,8 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertNotIn("os.environ[", source)
         self.assertNotIn('ExecutionFeatureQualification(\n        "qualified"', source)
         self.assertIn("_temporary_execution_qualification", source)
+        self.assertIn("marked qualified without an", source)
+        self.assertIn("evidence_case_id", source)
         self.assertIn("finally:", source)
 
     def test_gpu_workflow_keeps_baseline_and_execution_matrices_serial(self):
@@ -49,6 +51,11 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             workflow,
         )
         self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
+        self.assertIn("Verify required shared matrix evidence on Windows", workflow)
+        self.assertIn(
+            "Verify required shared matrix evidence on non-Windows runners",
+            workflow,
+        )
         self.assertIn("if-no-files-found: error", workflow)
 
     def test_host_review_tracks_and_compiles_execution_gpu_runner(self):
