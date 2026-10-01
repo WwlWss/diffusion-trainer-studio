@@ -29,6 +29,7 @@ import sys
 import tempfile
 import time
 import traceback
+from types import SimpleNamespace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -96,6 +97,18 @@ def _assert_exact_clean_head(expected_commit: str) -> str:
             f"the repository before running. git status:\n{preview}"
         )
     return actual
+
+
+def _assert_output_outside_repo(output: str) -> Path:
+    resolved = Path(output).expanduser().resolve(strict=False)
+    try:
+        resolved.relative_to(REPO_ROOT.resolve(strict=False))
+    except ValueError:
+        return resolved
+    raise ParameterPolicyGpuMatrixBootstrapError(
+        "Strict Parameter Policy GPU qualification requires --output outside "
+        f"the repository; received {resolved}."
+    )
 
 
 _STRICT_EXPECTED_COMMIT = _strict_expected_commit_from_argv(sys.argv[1:])
@@ -441,6 +454,9 @@ def main() -> int:
     parser.add_argument("--output", default="parameter-policy-gpu-matrix.json")
     parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
+
+    if args.expected_commit is not None:
+        _assert_output_outside_repo(args.output)
 
     if not torch.cuda.is_available() or torch.cuda.device_count() < 1:
         raise SystemExit("Parameter Policy GPU matrix requires a real CUDA device.")
