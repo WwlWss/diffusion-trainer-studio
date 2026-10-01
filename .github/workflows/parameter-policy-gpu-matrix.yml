@@ -120,6 +120,26 @@ jobs:
         if: runner.os != 'Windows' && inputs.backend_manifest != ''
         run: python tools/run_parameter_policy_backend_gpu_matrix.py --manifest "${{ inputs.backend_manifest }}" --output parameter-policy-backend-gpu-matrix.json
 
+      - name: Verify required shared matrix evidence on Windows
+        if: always() && runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $required = @(
+            "parameter-policy-gpu-matrix.json",
+            "parameter-policy-execution-gpu-matrix.json"
+          )
+          foreach ($path in $required) {
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              throw "Required shared GPU evidence is missing: $path"
+            }
+          }
+
+      - name: Verify required shared matrix evidence on non-Windows runners
+        if: always() && runner.os != 'Windows'
+        run: |
+          test -f parameter-policy-gpu-matrix.json
+          test -f parameter-policy-execution-gpu-matrix.json
+
       - name: Upload required shared matrix evidence
         if: always()
         uses: actions/upload-artifact@v4
