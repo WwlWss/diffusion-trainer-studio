@@ -23,6 +23,8 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('"infra:full-bf16-session:v1"', source)
         self.assertIn('"--expected-commit"', source)
         self.assertIn('"status", "--porcelain=v1", "--untracked-files=all"', source)
+        self.assertIn("_assert_output_outside_repo", source)
+        self.assertIn("_assert_output_outside_repo", source)
         self.assertLess(
             source.index("_BOOTSTRAP_COMMIT = _assert_exact_clean_head"),
             source.index("import torch"),
@@ -80,6 +82,42 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             probe.unlink(missing_ok=True)
             (ROOT.parent / "execution-probe.json").unlink(missing_ok=True)
             (ROOT.parent / "baseline-probe.json").unlink(missing_ok=True)
+
+    def test_strict_runners_reject_repository_internal_output_before_cuda(self):
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        cases = (
+            (RUNNER, ROOT / "execution-evidence.json"),
+            (BASELINE_RUNNER, ROOT / "baseline-evidence.json"),
+        )
+        for runner, output in cases:
+            with self.subTest(runner=runner.name):
+                completed = subprocess.run(
+                    [
+                        sys.executable,
+                        str(runner),
+                        "--expected-commit",
+                        head,
+                        "--output",
+                        str(output),
+                    ],
+                    cwd=ROOT,
+                    text=True,
+                    capture_output=True,
+                    check=False,
+                )
+                self.assertNotEqual(completed.returncode, 0)
+                combined = completed.stdout + completed.stderr
+                self.assertIn("--output outside", combined)
+                self.assertFalse(output.exists())
+
+    def test_baseline_runner_keeps_runtime_simplenamespace_import(self):
+        source = BASELINE_RUNNER.read_text(encoding="utf-8")
+        self.assertIn("from types import SimpleNamespace", source)
+        self.assertIn("SimpleNamespace(", source)
 
     def test_baseline_runner_strict_mode_checks_provenance_before_torch_import(self):
         source = BASELINE_RUNNER.read_text(encoding="utf-8")
