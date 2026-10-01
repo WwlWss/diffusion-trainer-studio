@@ -62,7 +62,9 @@ def summarize_adamw_full_bf16_bundle(
         "required_cases": list(ADAMW_FULL_BF16_CASE_IDS),
         "missing_cases": missing_cases,
         "status": status,
-        "optimizer_qualification_eligible": status == "pass",
+        "optimizer_evidence_complete": status == "pass",
+        "promotion_eligible": False,
+        "optimizer_qualification_eligible": False,
         "production_qualification_mutated": False,
     }
 
