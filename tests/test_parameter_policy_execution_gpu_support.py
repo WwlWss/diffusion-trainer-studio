@@ -5,9 +5,11 @@ from unittest import mock
 
 from mikazuki import parameter_policy_execution as execution
 from tools.parameter_policy_execution_gpu_support import (
+    ADAMW_FULL_BF16_CASE_IDS,
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    summarize_adamw_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -33,6 +35,46 @@ class ExecutionGpuCaseProtocolTests(unittest.TestCase):
         self.assertEqual(
             EXECUTION_GPU_CASE_PHASES["infra:full-bf16-session:v1"],
             ("probe",),
+        )
+
+
+class AdamWFullBf16BundleTests(unittest.TestCase):
+    def test_bundle_pass_requires_both_cases_to_pass(self):
+        rows = [
+            {"case_id": case_id, "status": "pass"}
+            for case_id in ADAMW_FULL_BF16_CASE_IDS
+        ]
+        bundle = summarize_adamw_full_bf16_bundle(rows)
+        self.assertEqual(bundle["status"], "pass")
+        self.assertEqual(bundle["missing_cases"], [])
+        self.assertTrue(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_is_incomplete_when_only_one_case_is_present(self):
+        bundle = summarize_adamw_full_bf16_bundle(
+            [{"case_id": ADAMW_FULL_BF16_CASE_IDS[0], "status": "pass"}]
+        )
+        self.assertEqual(bundle["status"], "incomplete")
+        self.assertEqual(
+            bundle["missing_cases"],
+            [ADAMW_FULL_BF16_CASE_IDS[1]],
+        )
+        self.assertFalse(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_fails_when_required_case_fails(self):
+        bundle = summarize_adamw_full_bf16_bundle(
+            [
+                {"case_id": ADAMW_FULL_BF16_CASE_IDS[0], "status": "pass"},
+                {"case_id": ADAMW_FULL_BF16_CASE_IDS[1], "status": "fail"},
+            ]
+        )
+        self.assertEqual(bundle["status"], "fail")
+        self.assertFalse(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_is_absent_without_adamw_cases(self):
+        self.assertIsNone(
+            summarize_adamw_full_bf16_bundle(
+                [{"case_id": "infra:cuda-bf16-capability:v1", "status": "pass"}]
+            )
         )
 
 
