@@ -5,9 +5,35 @@ from unittest import mock
 
 from mikazuki import parameter_policy_execution as execution
 from tools.parameter_policy_execution_gpu_support import (
+    ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
     temporary_execution_qualification,
 )
+
+
+class ExecutionGpuCaseProtocolTests(unittest.TestCase):
+    def test_adamw_evidence_bundle_and_phases_are_stable(self):
+        self.assertEqual(
+            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            "phase-c:adamw-full-bf16:v1",
+        )
+        self.assertEqual(
+            EXECUTION_GPU_CASE_PHASES["optimizer:adamw:full-bf16:accum1:v1"],
+            ("train_save", "resume_second_step"),
+        )
+        self.assertEqual(
+            EXECUTION_GPU_CASE_PHASES["optimizer:adamw:full-bf16:accum2:v1"],
+            ("train_save", "resume_second_step"),
+        )
+        self.assertEqual(
+            EXECUTION_GPU_CASE_PHASES["infra:cuda-bf16-capability:v1"],
+            ("probe",),
+        )
+        self.assertEqual(
+            EXECUTION_GPU_CASE_PHASES["infra:full-bf16-session:v1"],
+            ("probe",),
+        )
 
 
 class TemporaryExecutionQualificationTests(unittest.TestCase):
