@@ -2996,7 +2996,55 @@ Final qualification / promotion gate：
 
 为了测试最终 UI positive path，允许后续设计一个显式、测试专用的 qualification session/lease，但必须保持以下边界：只用于 qualification 环境、进程内临时生效、退出自动恢复、普通 UI 用户不可触发、不能通过环境变量全局绕过、不能修改 production qualification table。现有 C1 temporary qualification lease 只属于 evidence tooling，不能直接当成 production UI bypass。
 
-后续 C2/C3/C4 将分别加入 AdamW、Muon、Muon + AdamW fallback 的真实 step、accumulation、state dtype、save/resume 与 second-step evidence；在 final qualification / promotion gate 通过之前，不改变任何 optimizer qualification。
+### C2 — AdamW full-BF16 lifecycle evidence
+
+C2 source-development 目标是把 AdamW 从 C1 的 infrastructure scaffold推进到完整 lifecycle evidence，但仍不修改 production qualification table。
+
+C2 将 execution GPU evidence schema 从 v1 升为 v2，因为 `cases[]` 从单个 `phase/status/details` row扩展为 `case -> phases[]`。C1 的两个 infrastructure case仍保持单 `probe` phase，但输出统一采用 v2 phased shape；旧 v1 evidence不应与 C2 v2 evidence混用。
+
+新增稳定 evidence bundle：
+
+- `phase-c:adamw-full-bf16:v1`
+- `optimizer:adamw:full-bf16:accum1:v1`
+- `optimizer:adamw:full-bf16:accum2:v1`
+
+两个 AdamW case 都固定为：
+
+```text
+train_save
+→ fresh Python subprocess
+→ resume_second_step
+```
+
+若 `train_save` 失败，后续 phase 必须记录 `not_run / dependency_failed`，不得继续运行并形成部分假绿。只有 accum1 与 accum2 两个 case 的全部 phase 都 PASS 时，coordinator 才能把 evidence bundle标为 PASS。若只选择其中一个 AdamW case，bundle必须标为 `incomplete` 且 runner 返回非零；partial case仅用于诊断，不能被外层脚本误判为 qualification成功。
+
+C2 lifecycle contract：
+
+1. temporary qualification lease 仅在 worker进程内把 Flux scaffold与 AdamW 暂时视为可执行；backend始终 `backend_qualification_eligible=false`；
+2. model trainable parameters在 prepare前后都必须保持真实 `torch.bfloat16`；
+3. 使用 production `create_parameter_policy_session()`、`make_legacy_scheduler_factory()`、`Accelerator.prepare()`、`finalize_after_prepare()` 与 checkpoint hooks，不另造训练 runtime；
+4. accum1 一个 microstep完成一个 logical step；
+5. accum2 必须通过 `accelerator.accumulate(model)` 证明第一 microstep不更新参数、不建立/推进 optimizer state、不推进 scheduler，第二 microstep才真正 step；
+6. `train_save` 完成第一个 logical step后用 `accelerator.save_state()` 保存 checkpoint与 handoff evidence；
+7. `resume_second_step` 必须在 fresh subprocess中重新创建 model/session/optimizer/scheduler/Accelerator，先证明 optimizer state为空，再 `load_state()`；
+8. resume后执行 `post_resume` runtime audit，并验证 model、optimizer、scheduler、execution identity/signature与 handoff一致；
+9. resume后再执行第二个 logical step，证明参数、AdamW state和scheduler继续前进；
+10. optimizer state tensor dtype不预设必须BF16；C2记录真实 state schema/dtype/fingerprint，并验证 finite与save/resume一致性。
+
+新增 tooling-only runtime evidence helper负责 tensor/model/optimizer/scheduler/gradient fingerprint；production trainer/request不得引用该模块。
+
+C2 host CI同时增加 CPU accumulation smoke，使用真实 `Accelerator(cpu=True, gradient_accumulation_steps=2)` 验证 CompositeOptimizer/CompositeLRScheduler在第一 microstep被 Accelerate正确抑制。CPU smoke只验证 integration semantics，不替代最终 CUDA qualification。
+
+C2 source closeout后仍必须保持：
+
+```text
+AdamW full-BF16 production qualification = pending
+all backend full-BF16 qualification       = pending/unsupported
+```
+
+真实 CUDA execution与完整 UI positive path继续延后到 final qualification / promotion gate。
+
+后续 C3/C4 将分别加入 Muon、Muon + AdamW fallback 的对应 lifecycle evidence；在 final qualification / promotion gate 通过之前，不改变任何 optimizer qualification。
 
 ## Phase D — backend feature qualification
 
