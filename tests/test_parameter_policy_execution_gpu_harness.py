@@ -282,7 +282,7 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
     def test_c2_scheduler_uses_production_provider(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('importlib.import_module("library.train_util")', source)
-        self.assertIn('"library.train_util.get_scheduler_fix"', source)
+        self.assertIn("library.train_util.get_scheduler_fix", source)
         self.assertIn("_load_production_get_scheduler_fix()", source)
         self.assertNotIn(
             "def get_scheduler_fix(child_args, optimizer, num_processes):",
