@@ -18,7 +18,7 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
     def test_runner_is_exact_head_subprocess_evidence_harness(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"', source)
-        self.assertIn('EVIDENCE_VERSION = 1', source)
+        self.assertIn('EVIDENCE_VERSION = 2', source)
         self.assertIn('"infra:cuda-bf16-capability:v1"', source)
         self.assertIn('"infra:full-bf16-session:v1"', source)
         self.assertIn('"--expected-commit"', source)
@@ -113,6 +113,37 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
                 self.assertIn("--output outside", combined)
                 self.assertFalse(output.exists())
 
+    def test_execution_worker_rejects_repository_internal_worker_dir_before_cuda(self):
+        head = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=ROOT,
+            text=True,
+        ).strip()
+        result_path = ROOT.parent / "worker-result.json"
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--expected-commit",
+                head,
+                "--worker-case",
+                "infra:cuda-bf16-capability:v1",
+                "--worker-phase",
+                "probe",
+                "--worker-result",
+                str(result_path),
+                "--worker-dir",
+                str(ROOT / "worker-temp"),
+            ],
+            cwd=ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("--worker-dir outside", completed.stdout + completed.stderr)
+        self.assertFalse(result_path.exists())
+
     def test_baseline_runner_keeps_runtime_simplenamespace_import(self):
         source = BASELINE_RUNNER.read_text(encoding="utf-8")
         self.assertIn("from types import SimpleNamespace", source)
@@ -134,7 +165,9 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('"train_save"', source)
         self.assertIn('"resume_second_step"', source)
         self.assertIn('"dependency_failed"', source)
+        self.assertIn('"incomplete"', source)
         self.assertIn("ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID", source)
+        self.assertIn('"qualification_evidence_component": True', source)
         self.assertIn('"production_qualification_mutated": False', source)
         self.assertIn("--worker-dir", source)
         self.assertIn("_run_phase_subprocess", source)
