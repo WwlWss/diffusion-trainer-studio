@@ -209,16 +209,24 @@ def _temporary_execution_qualification(
                     f"{kind}={name!r} is explicitly unsupported: {original.reason}"
                 )
 
-            released = (
-                original.status == "qualified"
-                and bool(str(original.evidence_case_id or "").strip())
-            )
-            lease_applied = not released
-            if lease_applied:
+            if original.status == "qualified":
+                if not str(original.evidence_case_id or "").strip():
+                    raise ExecutionGpuMatrixError(
+                        f"{kind}={name!r} is marked qualified without an "
+                        "evidence_case_id; qualification remains fail-closed."
+                    )
+                lease_applied = False
+            elif original.status == "pending":
+                lease_applied = True
                 table[name] = execution.ExecutionFeatureQualification(
                     "qualified",
                     "Phase C exact-head GPU evidence worker temporary lease.",
                     evidence_case_id,
+                )
+            else:
+                raise ExecutionGpuMatrixError(
+                    f"{kind}={name!r} has invalid qualification status "
+                    f"{original.status!r}."
                 )
             records.append(
                 {
