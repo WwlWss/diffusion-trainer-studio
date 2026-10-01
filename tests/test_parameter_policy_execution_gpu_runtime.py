@@ -24,9 +24,15 @@ class ExecutionGpuRuntimeEvidenceTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first["dtype"], "torch.bfloat16")
         self.assertTrue(first["finite"])
+        self.assertTrue(first["nonzero"])
         changed = tensor.clone()
         changed[0, 0] = 3.0
         self.assertNotEqual(first["sha256"], tensor_fingerprint(changed)["sha256"])
+
+    def test_zero_tensor_records_nonzero_false(self):
+        evidence = tensor_fingerprint(torch.zeros(2, dtype=torch.float32))
+        self.assertTrue(evidence["finite"])
+        self.assertFalse(evidence["nonzero"])
 
     def test_state_fingerprint_is_mapping_order_independent(self):
         left = state_fingerprint({"b": 2, "a": torch.tensor([1.0])})
