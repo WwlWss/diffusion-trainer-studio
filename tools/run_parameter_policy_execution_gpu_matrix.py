@@ -1210,7 +1210,8 @@ def _coordinator_main(args: argparse.Namespace) -> int:
                             "name": "AdamW",
                         },
                         "evidence_bundle_id": ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
-                        "optimizer_qualification_eligible": case_status == "pass",
+                        "qualification_evidence_component": True,
+                        "optimizer_qualification_eligible": False,
                         "backend_qualification_eligible": False,
                     }
                 )
