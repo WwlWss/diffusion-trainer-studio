@@ -2913,8 +2913,8 @@ Phase C 首先冻结 shared full-BF16 qualification 的运行环境边界，不�
 
 已实现：
 
-- `parameter_policy_execution_environment_blockers()` 保持 torch-free / accelerate-free，只消费已经建立的 execution contract 与规范化 `num_processes`；
-- active `full_bf16` 当前只允许 `num_processes == 1`；multi-process/DDP 在独立 exact-head CUDA qualification 前 fail closed；
+- `parameter_policy_execution_environment_blockers()` 保持 torch-free / accelerate-free，只消费已经建立的 execution contract 与规范化 `num_processes` / `distributed_type`；
+- active `full_bf16` 当前只允许 `num_processes == 1` 且 `distributed_type == NO`；multi-process/DDP/FSDP 等 distributed runtime 在独立 exact-head CUDA qualification 前 fail closed；
 - ordinary Component (`execution_contract=None`) 不受该限制，现有 multi-process Component 路径不被 C0 改写；
 - environment gate 在既有 trainable dtype audit 后、optimizer ownership/device audit 前执行，不重排 B2 live-root/requires-grad/dtype 语义；
 - compile / torch_compile / FP8 / full FP16 / fused optimizer / DeepSpeed / offload / block swap 等已有 runtime blocker 继续保持 fail closed；
@@ -2930,16 +2930,16 @@ Phase C 首先冻结 shared full-BF16 qualification 的运行环境边界，不�
 
 C1 runner contract：
 
-- parent coordinator 与 worker subprocess 都要求 `--expected-commit`，实际 `git rev-parse HEAD` 必须完全一致；
-- tracked working tree 必须 clean；evidence JSON 等 untracked artifact 不影响该检查；
+- parent coordinator 与 worker subprocess 都要求 `--expected-commit`，并在 import torch / Accelerate / DTS runtime 之前验证实际 `git rev-parse HEAD` 完全一致；
+- qualification workspace 必须完全 clean，`git status --porcelain=v1 --untracked-files=all` 不能有任何输出；tracked/staged/untracked 污染都会 fail closed；evidence JSON 因此必须写到 repository 外；
 - CUDA 不可用、无 visible GPU、或 `torch.cuda.is_bf16_supported()` 不成立时直接 FAIL，不允许 CPU fallback/skip；
 - 每个 case 使用 fresh `sys.executable` subprocess，`shell=False`，为 C2/C3 的 train/save 与 fresh resume phase 保留同一 protocol；
-- temporary qualification lease 只存在于 worker 进程内：`pending` 可临时 leased，正式 `qualified` 直接使用，`unsupported` 立即拒绝；退出时必须恢复原 qualification row；
+- temporary qualification lease 只存在于 worker 进程内：`pending` 可临时 leased，正式 `qualified + evidence_case_id` 直接使用，malformed qualified / unsupported / invalid status 全部 fail closed；退出时必须恢复原 qualification row；该状态机有 CPU 行为测试覆盖正常退出与异常退出恢复；
 - 不增加 production bypass 环境变量，不修改 production qualification table。
 
 C1 infrastructure cases：
 
-1. `infra:cuda-bf16-capability:v1`：记录真实 CUDA/BF16 hardware/runtime/package evidence；
+1. `infra:cuda-bf16-capability:v1`：记录真实 CUDA/BF16 hardware/runtime/package evidence，包括 GPU、compute capability、VRAM、CUDA runtime、NVIDIA driver 与 pinned package versions；
 2. `infra:full-bf16-session:v1`：使用 tiny Flux-shaped scaffold 走 `create session -> model.to(bfloat16) -> Accelerator(mixed_precision='bf16') -> prepare -> finalize_after_prepare -> B2 audit -> B3 execution manifest`。
 
 两个 case 都明确：
@@ -2955,27 +2955,28 @@ CUDA evidence execution model：
 - GitHub Actions 只负责 host/source/CPU/runtime contract CI；真实 CUDA qualification 不依赖 GitHub self-hosted workflow；
 - 现有 `.github/workflows/parameter-policy-gpu-matrix.yml` 保持原样，不调用新的 execution qualification runner，也不作为 C1/C2 的 authoritative evidence gate；
 - 在已知可用的 CUDA 环境（本地 GPU 或云 GPU）直接 checkout PR exact SHA，并运行 standalone runner；
-- 旧 `tools/run_parameter_policy_gpu_matrix.py` 也可在同一 exact head 上直接运行，作为 ordinary Component GPU baseline regression；
-- 新 execution runner 通过 `--expected-commit` + tracked clean-tree 检查自行建立 exact-head provenance，不依赖 CI provider 注入的环境变量；
+- 旧 `tools/run_parameter_policy_gpu_matrix.py` 保持历史宽松调用兼容，但 Phase C qualification 必须显式传 `--expected-commit` 进入 strict mode；strict mode 同样在 import torch 前验证 exact HEAD + 完整 clean workspace；
+- 新 execution runner 强制 `--expected-commit`，两个 standalone runner 的 authoritative qualification evidence 因此使用同等级 provenance，不依赖 CI provider 注入的环境变量；
 - standalone evidence JSON 由运行者保留并提交 review；GitHub workflow 是否能成功调度不影响 qualification 结论。
 
 推荐 exact-head CUDA evidence 命令：
 
 ```text
 python tools/run_parameter_policy_gpu_matrix.py \
-  --output parameter-policy-gpu-matrix.json
+  --expected-commit <PR_EXACT_SHA> \
+  --output ../parameter-policy-gpu-matrix.json
 
 python tools/run_parameter_policy_execution_gpu_matrix.py \
   --expected-commit <PR_EXACT_SHA> \
-  --output parameter-policy-execution-gpu-matrix.json
+  --output ../parameter-policy-execution-gpu-matrix.json
 ```
 
 C2 入口条件：
 
 1. GitHub host/source/CPU/runtime CI exact-head 全绿；
-2. 同一 PR exact head 在已知可用 CUDA 环境直接运行旧 shared GPU matrix并 PASS；
+2. 同一 PR exact head 在已知可用 CUDA 环境以 `--expected-commit` strict mode 运行旧 shared GPU matrix并 PASS；
 3. 同一 PR exact head 直接运行 C1 execution infrastructure matrix并 PASS；
-4. 两份 standalone evidence JSON 的 commit/runtime/case结果经过 review；
+4. 两份 standalone evidence JSON 均写在 repository 外，并对 commit/provenance/runtime/case结果完成 review；
 5. backend/optimizer production qualification 状态仍保持 B4 closeout 的 pending/unsupported 状态；
 6. B1 identity、B2 physical audit、B3 checkpoint schema 不为 GPU 测试放宽；
 7. C2 只能在现有 evidence schema / subprocess protocol 上新增 AdamW train/save/fresh-resume/second-step cases，不重写 harness architecture。
