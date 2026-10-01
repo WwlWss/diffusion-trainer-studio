@@ -306,18 +306,46 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             supported,
         )
 
-    def test_b1_does_not_qualify_backend_or_optimizer(self):
-        self.assertFalse(
-            any(
-                row.status == "qualified"
-                for row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.values()
-            )
+    def test_phase_b_closeout_keeps_all_execution_qualifications_closed(self):
+        self.assertEqual(
+            {
+                name: row.status
+                for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
+            },
+            {
+                "sd-lora": "pending",
+                "sdxl-lora": "pending",
+                "sd-dreambooth": "unsupported",
+                "sdxl-finetune": "pending",
+                "sd3-lora": "pending",
+                "flux-lora": "pending",
+                "chroma-lora": "pending",
+                "flux-finetune": "pending",
+                "anima-lora": "pending",
+                "anima-finetune": "pending",
+            },
         )
-        self.assertFalse(
-            any(
-                row.status == "qualified"
-                for row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.values()
-            )
+        self.assertEqual(
+            {
+                name: row.status
+                for name, row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.items()
+            },
+            {
+                "AdamW": "pending",
+                "AdamW8bit": "pending",
+                "PagedAdamW8bit": "pending",
+                "PagedAdamW": "pending",
+                "PagedAdamW32bit": "pending",
+                "Lion": "pending",
+                "Lion8bit": "pending",
+                "PagedLion8bit": "pending",
+                "SGDNesterov": "pending",
+                "SGDNesterov8bit": "pending",
+                "RAdamScheduleFree": "pending",
+                "AdamWScheduleFree": "pending",
+                "SGDScheduleFree": "pending",
+                "Muon": "pending",
+            },
         )
 
     def test_sd_dreambooth_starts_explicitly_unsupported(self):
