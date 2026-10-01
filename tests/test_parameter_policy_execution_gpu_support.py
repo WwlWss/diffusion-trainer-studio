@@ -178,6 +178,39 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
             unrelated_before,
         )
 
+    def test_muon_pending_lease_restores_without_touching_adamw(self):
+        backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
+        muon_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"]
+        adamw_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
+
+        with temporary_execution_qualification(
+            backend="flux-finetune",
+            optimizers=("Muon",),
+            evidence_case_id="test:muon-lease",
+        ) as lease:
+            self.assertEqual(
+                execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"].status,
+                "qualified",
+            )
+            self.assertEqual(
+                execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"],
+                adamw_before,
+            )
+            self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
+
+        self.assertEqual(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"],
+            backend_before,
+        )
+        self.assertEqual(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"],
+            muon_before,
+        )
+        self.assertEqual(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"],
+            adamw_before,
+        )
+
     def test_exception_inside_lease_restores_rows(self):
         backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
         optimizer_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
