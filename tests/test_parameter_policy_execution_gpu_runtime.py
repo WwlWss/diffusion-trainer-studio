@@ -5,6 +5,7 @@ import unittest
 
 
 _TORCH_AVAILABLE = importlib.util.find_spec("torch") is not None
+_MUON_PROVIDER_AVAILABLE = importlib.util.find_spec("pytorch_optimizer") is not None
 
 if _TORCH_AVAILABLE:
     import torch
@@ -38,6 +39,59 @@ class ExecutionGpuRuntimeEvidenceTests(unittest.TestCase):
         left = state_fingerprint({"b": 2, "a": torch.tensor([1.0])})
         right = state_fingerprint({"a": torch.tensor([1.0]), "b": 2})
         self.assertEqual(left["sha256"], right["sha256"])
+
+    @unittest.skipUnless(
+        _MUON_PROVIDER_AVAILABLE,
+        "pytorch_optimizer is installed only in the dedicated runtime smoke job",
+    )
+    def test_muon_state_fingerprint_survives_fresh_optimizer_load(self):
+        import copy
+        import pytorch_optimizer
+
+        parameter = torch.nn.Parameter(
+            torch.arange(64, dtype=torch.float32).reshape(8, 8) / 64.0
+        )
+        optimizer = pytorch_optimizer.Muon(
+            [
+                {
+                    "params": [parameter],
+                    "lr": 2e-2,
+                    "use_muon": True,
+                }
+            ],
+            ns_steps=2,
+            ns_coeffs="original",
+            weight_decay=0.0,
+        )
+        parameter.grad = torch.ones_like(parameter)
+        optimizer.step()
+        saved = copy.deepcopy(optimizer.state_dict())
+        first = state_fingerprint(saved)
+
+        fresh_parameter = torch.nn.Parameter(
+            torch.arange(64, dtype=torch.float32).reshape(8, 8) / 64.0
+        )
+        fresh = pytorch_optimizer.Muon(
+            [
+                {
+                    "params": [fresh_parameter],
+                    "lr": 2e-2,
+                    "use_muon": True,
+                }
+            ],
+            ns_steps=2,
+            ns_coeffs="original",
+            weight_decay=0.0,
+        )
+        fresh.load_state_dict(saved)
+        second = state_fingerprint(fresh.state_dict())
+
+        self.assertEqual(first, second)
+        self.assertEqual(fresh.param_groups[0]["step"], 1)
+        self.assertIsInstance(fresh.param_groups[0]["ns_coeffs"], list)
+        self.assertIn("momentum_buffer", fresh.state[fresh_parameter])
+        self.assertNotIn("exp_avg", fresh.state[fresh_parameter])
+        self.assertNotIn("exp_avg_sq", fresh.state[fresh_parameter])
 
     def test_gradient_evidence_records_missing_and_present_gradients(self):
         first = torch.nn.Parameter(torch.tensor([1.0]))
