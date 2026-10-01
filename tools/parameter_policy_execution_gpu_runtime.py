@@ -19,15 +19,21 @@ def _tensor_bytes(tensor: torch.Tensor) -> bytes:
 def tensor_fingerprint(tensor: torch.Tensor) -> dict[str, Any]:
     if not isinstance(tensor, torch.Tensor):
         raise TypeError("tensor_fingerprint requires torch.Tensor.")
+    detached = tensor.detach()
+    finite = (
+        bool(torch.isfinite(detached).all().item())
+        if tensor.is_floating_point() or tensor.is_complex()
+        else True
+    )
+    nonzero = bool(torch.count_nonzero(detached).item()) if tensor.numel() else False
     return {
         "shape": list(tensor.shape),
         "dtype": str(tensor.dtype),
         "device_type": tensor.device.type,
         "numel": int(tensor.numel()),
         "sha256": hashlib.sha256(_tensor_bytes(tensor)).hexdigest(),
-        "finite": bool(torch.isfinite(tensor.detach()).all().item())
-        if tensor.is_floating_point() or tensor.is_complex()
-        else True,
+        "finite": finite,
+        "nonzero": nonzero,
     }
 
 
