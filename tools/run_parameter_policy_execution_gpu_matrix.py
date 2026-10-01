@@ -168,6 +168,43 @@ def _assert_worker_dir_outside_repo(worker_dir: str) -> Path:
     )
 
 
+def _worker_result_from_argv(argv: list[str]) -> str:
+    for index, value in enumerate(argv):
+        if value == "--worker-result":
+            if index + 1 >= len(argv):
+                raise ExecutionGpuMatrixBootstrapError(
+                    "--worker-result requires a non-empty value."
+                )
+            candidate = argv[index + 1].strip()
+            if candidate:
+                return candidate
+            raise ExecutionGpuMatrixBootstrapError(
+                "--worker-result requires a non-empty value."
+            )
+        if value.startswith("--worker-result="):
+            candidate = value.split("=", 1)[1].strip()
+            if candidate:
+                return candidate
+            raise ExecutionGpuMatrixBootstrapError(
+                "--worker-result requires a non-empty value."
+            )
+    raise ExecutionGpuMatrixBootstrapError(
+        "Worker mode requires --worker-result before runtime imports."
+    )
+
+
+def _assert_worker_result_in_dir(worker_result: str, worker_dir: Path) -> Path:
+    resolved = Path(worker_result).expanduser().resolve(strict=False)
+    try:
+        resolved.relative_to(worker_dir)
+    except ValueError as exc:
+        raise ExecutionGpuMatrixBootstrapError(
+            "Execution GPU qualification worker requires --worker-result "
+            f"inside --worker-dir; received {resolved}."
+        ) from exc
+    return resolved
+
+
 def _assert_output_outside_repo(output: str) -> Path:
     resolved = Path(output).expanduser().resolve(strict=False)
     try:
@@ -186,6 +223,14 @@ _BOOTSTRAP_WORKER_MODE = _worker_mode_from_argv(sys.argv[1:])
 _BOOTSTRAP_WORKER_DIR = (
     _assert_worker_dir_outside_repo(_worker_dir_from_argv(sys.argv[1:]))
     if _BOOTSTRAP_WORKER_MODE
+    else None
+)
+_BOOTSTRAP_WORKER_RESULT = (
+    _assert_worker_result_in_dir(
+        _worker_result_from_argv(sys.argv[1:]),
+        _BOOTSTRAP_WORKER_DIR,
+    )
+    if _BOOTSTRAP_WORKER_MODE and _BOOTSTRAP_WORKER_DIR is not None
     else None
 )
 _BOOTSTRAP_OUTPUT = (
@@ -472,6 +517,8 @@ def _scheduler_step_count(raw_scheduler: object) -> int:
 
 def _assert_tensor_evidence_finite(value: Any, *, label: str) -> None:
     if isinstance(value, dict):
+        if "finite" in value and value.get("finite") is not True:
+            raise AssertionError(f"{label} contains non-finite tensor evidence.")
         tensor = value.get("tensor")
         if isinstance(tensor, dict) and tensor.get("finite") is not True:
             raise AssertionError(f"{label} contains non-finite tensor evidence.")
@@ -510,6 +557,7 @@ def _run_logical_step(
     before_scheduler = scheduler_state_evidence(raw_scheduler)
     before_counters = _adamw_step_counters(session)
     before_scheduler_step = _scheduler_step_count(raw_scheduler)
+    _assert_tensor_evidence_finite(before_model, label="AdamW model state")
     _assert_tensor_evidence_finite(before_optimizer, label="AdamW optimizer state")
     _assert_tensor_evidence_finite(before_scheduler, label="AdamW scheduler state")
     microsteps: list[dict[str, Any]] = []
@@ -540,6 +588,7 @@ def _run_logical_step(
         scheduler_after = scheduler_state_evidence(raw_scheduler)
         counters_after = _adamw_step_counters(session)
         scheduler_step_after = _scheduler_step_count(raw_scheduler)
+        _assert_tensor_evidence_finite(model_after, label="AdamW model state")
         _assert_tensor_evidence_finite(optimizer_after, label="AdamW optimizer state")
         _assert_tensor_evidence_finite(scheduler_after, label="AdamW scheduler state")
         microsteps.append(
@@ -577,6 +626,7 @@ def _run_logical_step(
     after_scheduler = scheduler_state_evidence(raw_scheduler)
     after_counters = _adamw_step_counters(session)
     after_scheduler_step = _scheduler_step_count(raw_scheduler)
+    _assert_tensor_evidence_finite(after_model, label="AdamW model state")
     _assert_tensor_evidence_finite(after_optimizer, label="AdamW optimizer state")
     _assert_tensor_evidence_finite(after_scheduler, label="AdamW scheduler state")
     if before_model == after_model:
