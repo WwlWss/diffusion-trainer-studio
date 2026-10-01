@@ -122,6 +122,39 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             self.assertIsNone(session.execution_contract)
             self.assertEqual(session.execution_root_refs, ())
 
+    def test_baseline_execution_environment_is_noop_for_multi_process(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, _model, _bias, session, _scheduler = self._build_runtime(policy_path)
+            session.assert_execution_environment_contract(
+                SimpleNamespace(num_processes=8)
+            )
+
+    def test_full_bf16_multi_process_environment_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            _args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            model.double_blocks[0].weight.data = (
+                model.double_blocks[0].weight.data.to(torch.bfloat16)
+            )
+            fake_accelerator = SimpleNamespace(
+                num_processes=2,
+                device=torch.device("cpu"),
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "post_prepare.*full_bf16.*single-process.*num_processes=2",
+            ):
+                session.assert_runtime_contract(
+                    phase="post_prepare",
+                    accelerator=fake_accelerator,
+                    optimizer=session.optimizer,
+                )
+
     def test_mock_qualified_full_bf16_session_captures_contract_and_weak_roots(self):
         from mikazuki import parameter_policy_execution as execution
 
