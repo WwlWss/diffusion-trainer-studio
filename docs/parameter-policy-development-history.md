@@ -3016,7 +3016,7 @@ train_save
 → resume_second_step
 ```
 
-若 `train_save` 失败，后续 phase 必须记录 `not_run / dependency_failed`，不得继续运行并形成部分假绿。只有 accum1 与 accum2 两个 case 的全部 phase 都 PASS 时，coordinator 才能把 evidence bundle标为 PASS。
+若 `train_save` 失败，后续 phase 必须记录 `not_run / dependency_failed`，不得继续运行并形成部分假绿。只有 accum1 与 accum2 两个 case 的全部 phase 都 PASS 时，coordinator 才能把 evidence bundle标为 PASS。若只选择其中一个 AdamW case，bundle必须标为 `incomplete` 且 runner 返回非零；partial case仅用于诊断，不能被外层脚本误判为 qualification成功。
 
 C2 lifecycle contract：
 
