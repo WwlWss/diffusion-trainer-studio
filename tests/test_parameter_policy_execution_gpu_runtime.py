@@ -48,13 +48,18 @@ class ExecutionGpuRuntimeEvidenceTests(unittest.TestCase):
         import copy
         import pytorch_optimizer
 
-        parameter = torch.nn.Parameter(
-            torch.arange(64, dtype=torch.float32).reshape(8, 8) / 64.0
+        parameters = (
+            torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(12, 8) / 96.0
+            ),
+            torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(8, 12) / 128.0
+            ),
         )
         optimizer = pytorch_optimizer.Muon(
             [
                 {
-                    "params": [parameter],
+                    "params": list(parameters),
                     "lr": 2e-2,
                     "use_muon": True,
                 }
@@ -63,18 +68,24 @@ class ExecutionGpuRuntimeEvidenceTests(unittest.TestCase):
             ns_coeffs="original",
             weight_decay=0.0,
         )
-        parameter.grad = torch.ones_like(parameter)
+        for parameter in parameters:
+            parameter.grad = torch.ones_like(parameter)
         optimizer.step()
         saved = copy.deepcopy(optimizer.state_dict())
         first = state_fingerprint(saved)
 
-        fresh_parameter = torch.nn.Parameter(
-            torch.arange(64, dtype=torch.float32).reshape(8, 8) / 64.0
+        fresh_parameters = (
+            torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(12, 8) / 96.0
+            ),
+            torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(8, 12) / 128.0
+            ),
         )
         fresh = pytorch_optimizer.Muon(
             [
                 {
-                    "params": [fresh_parameter],
+                    "params": list(fresh_parameters),
                     "lr": 2e-2,
                     "use_muon": True,
                 }
@@ -89,9 +100,11 @@ class ExecutionGpuRuntimeEvidenceTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(fresh.param_groups[0]["step"], 1)
         self.assertIsInstance(fresh.param_groups[0]["ns_coeffs"], list)
-        self.assertIn("momentum_buffer", fresh.state[fresh_parameter])
-        self.assertNotIn("exp_avg", fresh.state[fresh_parameter])
-        self.assertNotIn("exp_avg_sq", fresh.state[fresh_parameter])
+        self.assertEqual(len(fresh.state), 2)
+        for fresh_parameter in fresh_parameters:
+            self.assertIn("momentum_buffer", fresh.state[fresh_parameter])
+            self.assertNotIn("exp_avg", fresh.state[fresh_parameter])
+            self.assertNotIn("exp_avg_sq", fresh.state[fresh_parameter])
 
     def test_gradient_evidence_records_missing_and_present_gradients(self):
         first = torch.nn.Parameter(torch.tensor([1.0]))
