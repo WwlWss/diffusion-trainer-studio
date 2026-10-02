@@ -1055,18 +1055,33 @@ def _c4_gradient_evidence(session) -> dict[str, Any]:
     return result
 
 
+def _c4_exact_nonnegative_step(value: Any, *, label: str) -> int:
+    raw = value
+    if isinstance(raw, torch.Tensor):
+        if raw.numel() != 1:
+            raise AssertionError(f"{label} tensor must be scalar.")
+        raw = raw.detach().cpu().item()
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        raise AssertionError(f"{label} must be a non-negative integer; got {raw!r}.")
+    number = int(raw)
+    if float(raw) != float(number) or number < 0:
+        raise AssertionError(f"{label} must be a non-negative integer; got {raw!r}.")
+    return number
+
+
 def _c4_muon_state_evidence(session) -> dict[str, Any]:
     child = _c4_child_entry(session, "muon", "Muon").optimizer
     groups = []
     for index, group in enumerate(child.param_groups):
         if group.get("use_muon") is not True:
             raise AssertionError(f"C4 Muon group {index} is not use_muon=True.")
-        raw_step = group.get("step", 0)
-        if isinstance(raw_step, torch.Tensor):
-            raw_step = raw_step.detach().cpu().item()
+        raw_step = _c4_exact_nonnegative_step(
+            group.get("step", 0),
+            label=f"C4 Muon group {index} step",
+        )
         groups.append({
             "index": index,
-            "step": int(raw_step),
+            "step": raw_step,
             "parameter_count": len(group["params"]),
             "use_muon": True,
         })
@@ -1102,10 +1117,12 @@ def _c4_adamw_state_evidence(session) -> dict[str, Any]:
                     raise AssertionError(
                         f"C4 AdamW fallback state lacks {required!r}: {keys!r}."
                     )
-            raw_step = state["step"]
-            if isinstance(raw_step, torch.Tensor):
-                raw_step = raw_step.detach().cpu().item()
-            counters.append(int(raw_step))
+            counters.append(
+                _c4_exact_nonnegative_step(
+                    state["step"],
+                    label="C4 AdamW fallback step",
+                )
+            )
     return {
         "child_class": f"{child.__class__.__module__}.{child.__class__.__qualname__}",
         "state_keys": rows,
@@ -1160,7 +1177,13 @@ def _c4_fresh_state_is_empty(session) -> bool:
     adamw = _c4_child_entry(session, "adamw_fallback", "AdamW").optimizer
     return (
         len(muon.state) == 0
-        and all(int(group.get("step", 0)) == 0 for group in muon.param_groups)
+        and all(
+            _c4_exact_nonnegative_step(
+                group.get("step", 0),
+                label=f"C4 fresh Muon group {index} step",
+            ) == 0
+            for index, group in enumerate(muon.param_groups)
+        )
         and len(adamw.state) == 0
     )
 
@@ -1867,6 +1890,18 @@ def _run_c4_logical_step(
     before_muon = _c4_muon_state_evidence(session)
     before_adamw = _c4_adamw_state_evidence(session)
     before_scheduler_children = _c4_scheduler_evidence(raw_scheduler, session)
+    _assert_tensor_evidence_finite(
+        before_profiles,
+        label="C4 routed parameter state",
+    )
+    _assert_tensor_evidence_finite(
+        before_optimizer,
+        label="C4 optimizer state",
+    )
+    _assert_tensor_evidence_finite(
+        before_scheduler,
+        label="C4 scheduler state",
+    )
     microsteps = []
 
     for microstep in range(accumulation_steps):
@@ -1896,6 +1931,18 @@ def _run_c4_logical_step(
         muon_after = _c4_muon_state_evidence(session)
         adamw_after = _c4_adamw_state_evidence(session)
         scheduler_children_after = _c4_scheduler_evidence(raw_scheduler, session)
+        _assert_tensor_evidence_finite(
+            profiles_after,
+            label="C4 routed parameter state",
+        )
+        _assert_tensor_evidence_finite(
+            optimizer_after,
+            label="C4 optimizer state",
+        )
+        _assert_tensor_evidence_finite(
+            scheduler_after,
+            label="C4 scheduler state",
+        )
 
         microsteps.append({
             "microstep": microstep + 1,
@@ -1928,6 +1975,18 @@ def _run_c4_logical_step(
     after_muon = _c4_muon_state_evidence(session)
     after_adamw = _c4_adamw_state_evidence(session)
     after_scheduler_children = _c4_scheduler_evidence(raw_scheduler, session)
+    _assert_tensor_evidence_finite(
+        after_profiles,
+        label="C4 routed parameter state",
+    )
+    _assert_tensor_evidence_finite(
+        after_optimizer,
+        label="C4 optimizer state",
+    )
+    _assert_tensor_evidence_finite(
+        after_scheduler,
+        label="C4 scheduler state",
+    )
 
     if not microsteps[-1]["sync_gradients"]:
         raise AssertionError("Final C4 accumulation microstep did not synchronize gradients.")
@@ -2030,6 +2089,12 @@ def _build_c4_runtime(case_dir: Path, *, accumulation_steps: int):
     if routing["primary_count"] != 2 or routing["fallback_count"] != 2:
         raise AssertionError("C4 must produce exactly 2 primary + 2 fallback routes.")
     ownership = _c4_child_ownership_evidence(session)
+    muon_path = _c4_muon_state_evidence(session)
+    if muon_path["child_class"] != provider["class"]:
+        raise AssertionError(
+            "C4 Muon runtime resolved a different provider class: "
+            f"{muon_path['child_class']!r} != {provider['class']!r}."
+        )
     qualification_contract = _c4_qualification_contract(session, provider)
     raw_scheduler = session.build_scheduler(_scheduler_factory(args))
     if session.execution_contract is None:
