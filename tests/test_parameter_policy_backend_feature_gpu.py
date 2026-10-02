@@ -455,6 +455,8 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("DTS_EVIDENCE_DIR", workflow)
         self.assertIn("runner.temp", workflow)
+        self.assertIn('rm -rf "$evidence_dir"', workflow)
+        self.assertIn("Remove-Item -Recurse -Force", workflow)
         self.assertIn("run_parameter_policy_execution_gpu_matrix.py", workflow)
         self.assertIn("run_parameter_policy_backend_feature_gpu_matrix.py", workflow)
         self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
