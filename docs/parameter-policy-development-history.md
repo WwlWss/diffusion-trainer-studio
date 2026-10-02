@@ -3226,7 +3226,7 @@ fresh_checkpoint_dir
 resume_checkpoint_dir
 ```
 
-两个 checkpoint目录必须不同且位于 repo之外，并且在对应命令运行前不得已经存在，防止旧 checkpoint/manifest 被误当成本轮 qualification evidence。resume argv还必须显式引用 `fresh_checkpoint_dir`，使“fresh → resume”来源可以被 runner审计，而不是接受两个互不相关的 fresh runs。runner要求 fresh命令真正生成 checkpoint-1，resume命令从fresh state继续并生成 checkpoint-2；两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
+两个 checkpoint目录必须不同且位于 repo之外，并且在对应命令运行前不得已经存在，防止旧 checkpoint/manifest 被误当成本轮 qualification evidence。qualification command contract固定要求 fresh显式 `--max_train_steps=1 --save_every_n_steps=1 --save_state`，resume显式 `--max_train_steps=2 --save_every_n_steps=1 --save_state`，且本地 `--resume` 必须精确指向 `fresh_checkpoint_dir`；因此 runner不会接受两个互不相关的 fresh runs或只恢复不继续step的伪resume。runner要求 fresh命令真正生成 checkpoint-1，resume命令从fresh state继续并生成 checkpoint-2；两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
 
 - policy hash；
 - runtime topology fingerprint；
