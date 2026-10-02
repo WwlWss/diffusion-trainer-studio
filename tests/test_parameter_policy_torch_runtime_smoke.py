@@ -31,6 +31,7 @@ if _RUNTIME_DEPS_AVAILABLE:
         build_parameter_routing_plan,
         scan_parameter_roots,
     )
+    from tools.parameter_policy_execution_gpu_runtime import state_fingerprint
 
 
 def _stats():
@@ -706,6 +707,15 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         )
         fresh_optimizer.load_state_dict(saved_optimizer)
         fresh_scheduler.load_state_dict(saved_scheduler)
+
+        self.assertEqual(
+            state_fingerprint(fresh_optimizer.state_dict()),
+            state_fingerprint(saved_optimizer),
+        )
+        self.assertEqual(
+            state_fingerprint(fresh_scheduler.state_dict()),
+            state_fingerprint(saved_scheduler),
+        )
 
         fresh_children = {
             entry.profile_name: entry.optimizer for entry in fresh_optimizer.entries
