@@ -31,6 +31,24 @@ def _resolved_outside_repo(path: str | Path, *, repo_root: Path, field: str) -> 
     )
 
 
+def _command_references_path(command: list[str], path: Path) -> bool:
+    expected = path.resolve(strict=False)
+    for item in command:
+        candidates = [item]
+        if "=" in item:
+            candidates.append(item.split("=", 1)[1])
+        for candidate in candidates:
+            raw = str(candidate or "").strip()
+            if not raw:
+                continue
+            try:
+                if Path(raw).expanduser().resolve(strict=False) == expected:
+                    return True
+            except (OSError, RuntimeError, ValueError):
+                continue
+    return False
+
+
 def load_backend_feature_manifest(
     path: str | Path,
     *,
@@ -146,6 +164,14 @@ def load_backend_feature_manifest(
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} requires distinct fresh/resume "
                 "checkpoint directories."
+            )
+        if not _command_references_path(
+            commands["resume_command"],
+            fresh_checkpoint,
+        ):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} resume_command must explicitly "
+                "reference fresh_checkpoint_dir so resume provenance is auditable."
             )
 
         normalized.append(
