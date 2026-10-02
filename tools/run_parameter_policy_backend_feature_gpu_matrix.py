@@ -215,6 +215,43 @@ def _tail(value: str) -> str:
     return value[-_STDIO_TAIL_LIMIT:]
 
 
+_SECRET_OPTION_MARKERS = ("token", "key", "secret", "password")
+
+
+def _redacted_argv(command: list[str]) -> list[str]:
+    redacted: list[str] = []
+    redact_next = False
+    for item in command:
+        if redact_next:
+            redacted.append("<redacted>")
+            redact_next = False
+            continue
+        if item.startswith("--"):
+            option, separator, value = item.partition("=")
+            normalized = option.lower().replace("-", "_")
+            is_secret = any(marker in normalized for marker in _SECRET_OPTION_MARKERS)
+            if is_secret:
+                if separator:
+                    redacted.append(f"{option}=<redacted>")
+                else:
+                    redacted.append(option)
+                    redact_next = True
+                continue
+        redacted.append(item)
+    return redacted
+
+
+def _command_contract(case: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "fresh_argv": _redacted_argv(case["fresh_command"]),
+        "resume_argv": _redacted_argv(case["resume_command"]),
+        "cwd": case["cwd"] or str(REPO_ROOT),
+        "environment_keys": sorted(case["environment"]),
+        "fresh_checkpoint_dir": case["fresh_checkpoint_dir"],
+        "resume_checkpoint_dir": case["resume_checkpoint_dir"],
+    }
+
+
 def _run_command(
     command: list[str],
     *,
@@ -279,6 +316,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "qualification_evidence_component": True,
         "backend_qualification_eligible": False,
         "production_qualification_mutated": False,
+        "command_contract": _command_contract(case),
         "status": "fail",
     }
     try:
