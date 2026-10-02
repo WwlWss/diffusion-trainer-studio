@@ -42,6 +42,7 @@ jobs:
         shell: powershell
         run: |
           $evidenceDir = Join-Path $env:RUNNER_TEMP "dts-parameter-policy-evidence"
+          Remove-Item -Recurse -Force -Path $evidenceDir -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Force -Path $evidenceDir | Out-Null
           "DTS_EVIDENCE_DIR=$evidenceDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
@@ -49,6 +50,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           evidence_dir="$RUNNER_TEMP/dts-parameter-policy-evidence"
+          rm -rf "$evidence_dir"
           mkdir -p "$evidence_dir"
           echo "DTS_EVIDENCE_DIR=$evidence_dir" >> "$GITHUB_ENV"
 
