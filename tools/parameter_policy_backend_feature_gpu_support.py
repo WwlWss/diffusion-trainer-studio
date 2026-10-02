@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any
@@ -279,6 +280,17 @@ def load_backend_feature_manifest(
     return normalized
 
 
+def _identity_signature(value: object) -> str:
+    canonical = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def validate_full_bf16_checkpoint_manifest(
     payload: Any,
     *,
@@ -340,10 +352,24 @@ def validate_full_bf16_checkpoint_manifest(
         raise BackendFeatureGpuMatrixError(
             "Checkpoint execution_signature must be non-empty."
         )
+    if signature != _identity_signature(identity):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint execution_signature does not match execution_identity."
+        )
+
+    scheduler_identity = payload.get("scheduler_identity")
+    if not isinstance(scheduler_identity, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint scheduler_identity must be an object."
+        )
     scheduler_signature = payload.get("scheduler_signature")
     if not isinstance(scheduler_signature, str) or not scheduler_signature:
         raise BackendFeatureGpuMatrixError(
             "Checkpoint scheduler_signature must be non-empty."
+        )
+    if scheduler_signature != _identity_signature(scheduler_identity):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint scheduler_signature does not match scheduler_identity."
         )
     return payload
 
