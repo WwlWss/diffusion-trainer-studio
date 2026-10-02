@@ -3100,6 +3100,63 @@ all backend full-BF16 qualification       = pending/unsupported
 
 真实 BF16/CUDA Muon evidence仍与 C1/C2 一样留到 final qualification exact-head candidate执行；CPU smoke只证明 integration/state semantics。C4 再单独验证 Muon eligible parameters与 Muon-ineligible parameters同时存在时，显式 Muon + AdamW fallback 的 multi-child ownership、scheduler与checkpoint lifecycle。
 
+### C4 — Muon + AdamW explicit fallback lifecycle evidence
+
+C4 在 C2 AdamW 与 C3 pure-Muon shared optimizer evidence 之上增加 multi-child composition evidence；不新增 production optimizer-topology qualification table，也不修改 Parameter Policy fallback semantics。稳定 evidence IDs：
+
+- `phase-c:muon-adamw-explicit-fallback-full-bf16:v1`
+- `optimizer:muon-adamw-explicit-fallback:full-bf16:accum1:v1`
+- `optimizer:muon-adamw-explicit-fallback:full-bf16:accum2:v1`
+
+两个 case继续固定：
+
+```text
+train_save
+→ fresh Python subprocess
+→ resume_second_step
+```
+
+C4 使用独立 Flux-shaped scaffold：`Linear(8, 12, bias=True) -> Linear(12, 8, bias=True)`。同一 `transformer.double_stream` component 内：
+
+- `[12, 8]` 与 `[8, 12]` matrix weights 必须通过 production Muon eligibility，并路由为 `primary -> muon`；
+- `[12]` 与 `[8]` biases 必须因 Muon eligibility 不成立而路由为 `fallback -> adamw_fallback`；
+- primary LR固定为 `2e-2`，explicit fallback LR固定为 `1e-2`，证明 Runtime Spec / child scheduler 保持独立 LR ownership；
+- Muon child必须继续全部 `use_muon=True`，禁止使用 provider internal AdamW fallback。
+
+C4 authoritative evidence新增以下 invariants：
+
+1. RoutingPlan必须恰好包含 2 primary matrix weights + 2 fallback biases，且 canonical name/shape/class/profile精确匹配 reference topology；
+2. actual Muon child parameter IDs必须与 Muon primary routing IDs完全相等，actual AdamW child IDs必须与 explicit fallback routing IDs完全相等；两 child physical ownership交集为空，并且并集等于全部 trainable parameter IDs；
+3. evidence handoff只持久化 canonical ownership names，不持久化跨 fresh Python process不稳定的 `id(parameter)`；
+4. route/profile-specific parameter fingerprints分别记录 `muon` 与 `adamw_fallback` 参数，synchronized logical step后四个 trainable parameter都必须真实变化，不能只靠 aggregate model hash判断两个 child都执行；
+5. 每个 trainable parameter都必须产生 finite/nonzero gradient；每次 optimizer/scheduler step后还必须递归审计 routed parameter、Composite optimizer state与scheduler state中的所有 tensor evidence仍为 finite，防止 full-BF16 step产生 NaN/Inf却仅凭 hash/counter变化假通过；
+6. Muon child actual provider class必须与 pinned `pytorch-optimizer==3.10.0` resolver记录的 provider class完全一致；同步 step后两个 weights均产生 `momentum_buffer`，不得出现 `exp_avg` / `exp_avg_sq`；
+7. Muon group step与 explicit AdamW per-parameter step必须严格解析为 non-negative integral counters，拒绝 bool、fractional或负值；AdamW child同步 step后两个 biases均产生 `step/exp_avg/exp_avg_sq`，step counters分别从 1推进到 fresh-resume后的 2；
+8. accumulation=2的第一 physical microstep必须同时 suppress两个 child：所有 routed parameters、两个 optimizer states、两个 external child schedulers与 Composite scheduler均不得推进；
+9. C4 是第一次 shared full-BF16 evidence同时运行两个 external child schedulers；必须验证每个 scheduler attached到对应 child optimizer、两个 scheduler step/epoch保持一致，并保留 profile LR `muon=2e-2` / `adamw_fallback=1e-2`；
+10. train/save handoff记录 routing、canonical ownership、qualification-family、execution identity/signature、scheduler identity/signature、profile parameter evidence、Composite optimizer/scheduler fingerprints、Muon/AdamW child state与per-profile scheduler evidence；
+11. fresh resume先证明两个 child state都为空，再通过 production `Accelerator.load_state()` 与 checkpoint hooks恢复；恢复后上述 evidence必须与 handoff精确一致，再完成第二 logical step。
+
+C4 bundle使用 `scope=optimizer_topology`，topology为 `muon_primary_adamw_explicit_fallback`，并记录 C2 AdamW与C3 Muon bundles为 promotion prerequisites；但 C4 本身不会创建 `FULL_BF16_OPTIMIZER_TOPOLOGY_QUALIFICATIONS` 或其它 production组合表。production release gate仍按单 optimizer qualification + final C2/C3/C4 evidence共同审查，避免随着 optimizer组合增加形成 topology qualification笛卡尔积。
+
+C4 host/runtime CI新增：
+
+- C4 bundle absent/incomplete/fail/pass contract；
+- Muon + AdamW dual pending temporary lease与 exact restoration；
+- real pinned Muon + torch AdamW + CompositeOptimizer + two external schedulers + Accelerate accumulation=2 CPU smoke；
+- dual-child optimizer/scheduler save/load round-trip与 second-step continuation；
+- source contract保证 C4不修改 production qualification table，也不新增 topology qualification table。
+
+C4 source closeout仍保持：
+
+```text
+Muon full-BF16 production qualification  = pending
+AdamW full-BF16 production qualification = pending
+all backend full-BF16 qualification       = pending/unsupported
+```
+
+真实 BF16/CUDA C4 lifecycle evidence继续留到 final qualification exact-head candidate执行。C4只证明 shared explicit-fallback composition；实际 Anima/Flux/SDXL 等 backend中 Mod/Base/Adapter/Qwen3 等复杂 parameter distribution与trainer-specific lifecycle继续属于 Phase D backend qualification。
+
 ## Phase D — backend feature qualification
 
 新增：

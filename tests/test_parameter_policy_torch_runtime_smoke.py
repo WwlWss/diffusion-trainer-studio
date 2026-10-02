@@ -28,7 +28,10 @@ if _RUNTIME_DEPS_AVAILABLE:
         RoutingAssignment,
         RoutingPlan,
         RoutingStats,
+        build_parameter_routing_plan,
+        scan_parameter_roots,
     )
+    from tools.parameter_policy_execution_gpu_runtime import state_fingerprint
 
 
 def _stats():
@@ -45,12 +48,21 @@ def _stats():
     )
 
 
-def _assignment(parameter, *, name, component, profile, lr, route="primary"):
+def _assignment(
+    parameter,
+    *,
+    name,
+    component,
+    profile,
+    lr,
+    route="primary",
+    parameter_class="matrix_weight",
+):
     return RoutingAssignment(
         parameter=parameter,
         parameter_id=id(parameter),
         canonical_name=name,
-        parameter_class="matrix_weight",
+        parameter_class=parameter_class,
         component_id=component,
         route_kind=route,
         optimizer_profile=profile,
@@ -387,6 +399,368 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         self.assertFalse(torch.equal(before, parameter.detach()))
         self.assertIn("momentum_buffer", child.state[parameter])
         self.assertNotIn("exp_avg", child.state[parameter])
+
+    def test_muon_adamw_explicit_fallback_uses_real_production_routing(self):
+        model = torch.nn.Module()
+        model.double_blocks = torch.nn.ModuleList(
+            [
+                torch.nn.Linear(8, 12, bias=True),
+                torch.nn.Linear(12, 8, bias=True),
+            ]
+        )
+        policy = {
+            "version": 1,
+            "optimizer_profiles": {
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "ns_steps": 2,
+                        "ns_coeffs": "original",
+                        "weight_decay": 0.0,
+                    },
+                },
+                "adamw_fallback": {
+                    "type": "AdamW",
+                    "args": {},
+                },
+            },
+            "components": {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-2,
+                    "fallback_optimizer_profile": "adamw_fallback",
+                    "fallback_learning_rate": 1e-2,
+                }
+            },
+        }
+        descriptors = scan_parameter_roots({"transformer": model})
+        plan = build_parameter_routing_plan(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+        self.assertTrue(plan.is_valid)
+        rows = {
+            assignment.canonical_name: (
+                assignment.route_kind,
+                assignment.optimizer_profile,
+                assignment.parameter_class,
+                tuple(assignment.parameter.shape),
+            )
+            for assignment in plan.assignments
+            if assignment.route_kind in {"primary", "fallback"}
+        }
+        self.assertEqual(
+            rows,
+            {
+                "transformer.double_blocks.0.weight": (
+                    "primary",
+                    "muon",
+                    "matrix_weight",
+                    (12, 8),
+                ),
+                "transformer.double_blocks.0.bias": (
+                    "fallback",
+                    "adamw_fallback",
+                    "bias",
+                    (12,),
+                ),
+                "transformer.double_blocks.1.weight": (
+                    "primary",
+                    "muon",
+                    "matrix_weight",
+                    (8, 12),
+                ),
+                "transformer.double_blocks.1.bias": (
+                    "fallback",
+                    "adamw_fallback",
+                    "bias",
+                    (8,),
+                ),
+            },
+        )
+
+    def test_muon_adamw_explicit_fallback_accumulation_on_cpu(self):
+        model = torch.nn.Sequential(
+            torch.nn.Linear(8, 12, bias=True),
+            torch.nn.Linear(12, 8, bias=True),
+        )
+        muon_lr = 2e-2
+        adamw_lr = 1e-2
+        assignments = (
+            _assignment(
+                model[0].weight,
+                name="model.hidden.expand.weight",
+                component="hidden",
+                profile="muon",
+                lr=muon_lr,
+            ),
+            _assignment(
+                model[0].bias,
+                name="model.hidden.expand.bias",
+                component="hidden",
+                profile="adamw_fallback",
+                lr=adamw_lr,
+                route="fallback",
+                parameter_class="bias",
+            ),
+            _assignment(
+                model[1].weight,
+                name="model.hidden.contract.weight",
+                component="hidden",
+                profile="muon",
+                lr=muon_lr,
+            ),
+            _assignment(
+                model[1].bias,
+                name="model.hidden.contract.bias",
+                component="hidden",
+                profile="adamw_fallback",
+                lr=adamw_lr,
+                route="fallback",
+                parameter_class="bias",
+            ),
+        )
+        spec = _compile(
+            assignments,
+            profiles={
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "ns_steps": 2,
+                        "ns_coeffs": "original",
+                        "weight_decay": 0.0,
+                    },
+                },
+                "adamw_fallback": {
+                    "type": "AdamW",
+                    "args": {},
+                },
+            },
+            components={
+                "hidden": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": muon_lr,
+                    "fallback_optimizer_profile": "adamw_fallback",
+                    "fallback_learning_rate": adamw_lr,
+                }
+            },
+        )
+        optimizer = build_parameter_policy_optimizer(spec)
+        scheduler = build_parameter_policy_scheduler(optimizer, _constant_scheduler)
+        children = {entry.profile_name: entry.optimizer for entry in optimizer.entries}
+        self.assertEqual(set(children), {"muon", "adamw_fallback"})
+
+        accelerator = Accelerator(cpu=True, gradient_accumulation_steps=2)
+        model, prepared_optimizer, prepared_scheduler = accelerator.prepare(
+            model,
+            optimizer,
+            scheduler,
+        )
+        raw_scheduler = prepared_scheduler.scheduler
+        before = {
+            name: parameter.detach().clone()
+            for name, parameter in model.named_parameters()
+        }
+        initial_scheduler_step = raw_scheduler._step_count
+
+        sync_pattern = []
+        for microstep in range(2):
+            with accelerator.accumulate(model):
+                value = torch.eye(8, dtype=model[0].weight.dtype) * (
+                    0.5 + 0.125 * microstep
+                )
+                loss = model(value).square().mean()
+                accelerator.backward(loss)
+                sync_pattern.append(bool(accelerator.sync_gradients))
+                prepared_optimizer.step()
+                prepared_scheduler.step()
+                prepared_optimizer.zero_grad(set_to_none=True)
+
+            if microstep == 0:
+                for name, parameter in model.named_parameters():
+                    self.assertTrue(torch.equal(before[name], parameter.detach()), msg=name)
+                self.assertEqual(len(children["muon"].state), 0)
+                self.assertEqual(len(children["adamw_fallback"].state), 0)
+                self.assertEqual(raw_scheduler._step_count, initial_scheduler_step)
+
+        self.assertEqual(sync_pattern, [False, True])
+        for name, parameter in model.named_parameters():
+            self.assertFalse(torch.equal(before[name], parameter.detach()), msg=name)
+
+        muon = children["muon"]
+        adamw = children["adamw_fallback"]
+        self.assertIs(muon.__class__, pytorch_optimizer.Muon)
+        self.assertEqual(len(muon.state), 2)
+        self.assertEqual(len(adamw.state), 2)
+        self.assertTrue(all(group["use_muon"] is True for group in muon.param_groups))
+        self.assertTrue(all(group.get("step") == 1 for group in muon.param_groups))
+        for parameter in model.parameters():
+            self.assertTrue(torch.isfinite(parameter).all())
+        for state in muon.state.values():
+            self.assertIn("momentum_buffer", state)
+            self.assertNotIn("exp_avg", state)
+            self.assertNotIn("exp_avg_sq", state)
+            self.assertTrue(torch.isfinite(state["momentum_buffer"]).all())
+        for state in adamw.state.values():
+            self.assertIn("step", state)
+            self.assertIn("exp_avg", state)
+            self.assertIn("exp_avg_sq", state)
+            self.assertTrue(torch.isfinite(state["exp_avg"]).all())
+            self.assertTrue(torch.isfinite(state["exp_avg_sq"]).all())
+            step = state["step"]
+            if isinstance(step, torch.Tensor):
+                step = step.item()
+            self.assertEqual(int(step), 1)
+
+        self.assertEqual(raw_scheduler._step_count, initial_scheduler_step + 1)
+        self.assertEqual(
+            set(raw_scheduler.get_last_lr_by_profile()),
+            {"muon", "adamw_fallback"},
+        )
+        accelerator.end_training()
+
+    def test_muon_adamw_explicit_fallback_state_round_trip(self):
+        def build():
+            weights = (
+                torch.nn.Parameter(
+                    torch.arange(96, dtype=torch.float32).reshape(12, 8) / 96.0
+                ),
+                torch.nn.Parameter(
+                    torch.arange(96, dtype=torch.float32).reshape(8, 12) / 128.0
+                ),
+            )
+            biases = (
+                torch.nn.Parameter(torch.zeros(12, dtype=torch.float32)),
+                torch.nn.Parameter(torch.zeros(8, dtype=torch.float32)),
+            )
+            muon_lr = 2e-2
+            adamw_lr = 1e-2
+            spec = _compile(
+                (
+                    _assignment(
+                        weights[0],
+                        name="model.hidden.expand.weight",
+                        component="hidden",
+                        profile="muon",
+                        lr=muon_lr,
+                    ),
+                    _assignment(
+                        biases[0],
+                        name="model.hidden.expand.bias",
+                        component="hidden",
+                        profile="adamw_fallback",
+                        lr=adamw_lr,
+                        route="fallback",
+                        parameter_class="bias",
+                    ),
+                    _assignment(
+                        weights[1],
+                        name="model.hidden.contract.weight",
+                        component="hidden",
+                        profile="muon",
+                        lr=muon_lr,
+                    ),
+                    _assignment(
+                        biases[1],
+                        name="model.hidden.contract.bias",
+                        component="hidden",
+                        profile="adamw_fallback",
+                        lr=adamw_lr,
+                        route="fallback",
+                        parameter_class="bias",
+                    ),
+                ),
+                profiles={
+                    "muon": {
+                        "type": "Muon",
+                        "args": {
+                            "ns_steps": 2,
+                            "ns_coeffs": "original",
+                            "weight_decay": 0.0,
+                        },
+                    },
+                    "adamw_fallback": {"type": "AdamW", "args": {}},
+                },
+                components={
+                    "hidden": {
+                        "train": True,
+                        "optimizer_profile": "muon",
+                        "learning_rate": muon_lr,
+                        "fallback_optimizer_profile": "adamw_fallback",
+                        "fallback_learning_rate": adamw_lr,
+                    }
+                },
+            )
+            optimizer = build_parameter_policy_optimizer(spec)
+            scheduler = build_parameter_policy_scheduler(optimizer, _constant_scheduler)
+            return weights, biases, optimizer, scheduler
+
+        weights, biases, optimizer, scheduler = build()
+        for parameter in (*weights, *biases):
+            parameter.grad = torch.ones_like(parameter)
+        optimizer.step()
+        scheduler.step()
+        saved_optimizer = copy.deepcopy(optimizer.state_dict())
+        saved_scheduler = copy.deepcopy(scheduler.state_dict())
+
+        fresh_weights, fresh_biases, fresh_optimizer, fresh_scheduler = build()
+        self.assertTrue(
+            all(len(entry.optimizer.state) == 0 for entry in fresh_optimizer.entries)
+        )
+        fresh_optimizer.load_state_dict(saved_optimizer)
+        fresh_scheduler.load_state_dict(saved_scheduler)
+
+        self.assertEqual(
+            state_fingerprint(fresh_optimizer.state_dict()),
+            state_fingerprint(saved_optimizer),
+        )
+        self.assertEqual(
+            state_fingerprint(fresh_scheduler.state_dict()),
+            state_fingerprint(saved_scheduler),
+        )
+
+        fresh_children = {
+            entry.profile_name: entry.optimizer for entry in fresh_optimizer.entries
+        }
+        self.assertIs(
+            fresh_children["muon"].__class__,
+            pytorch_optimizer.Muon,
+        )
+        self.assertEqual(len(fresh_children["muon"].state), 2)
+        self.assertEqual(len(fresh_children["adamw_fallback"].state), 2)
+        for state in fresh_children["muon"].state.values():
+            self.assertTrue(torch.isfinite(state["momentum_buffer"]).all())
+        for state in fresh_children["adamw_fallback"].state.values():
+            self.assertTrue(torch.isfinite(state["exp_avg"]).all())
+            self.assertTrue(torch.isfinite(state["exp_avg_sq"]).all())
+        self.assertEqual(
+            fresh_scheduler.state_dict()["step_count"],
+            saved_scheduler["step_count"],
+        )
+        self.assertEqual(
+            set(fresh_scheduler.get_last_lr_by_profile()),
+            {"muon", "adamw_fallback"},
+        )
+
+        for parameter in (*fresh_weights, *fresh_biases):
+            parameter.grad = torch.ones_like(parameter)
+        fresh_optimizer.step()
+        fresh_scheduler.step()
+
+        self.assertTrue(
+            all(group.get("step") == 2 for group in fresh_children["muon"].param_groups)
+        )
+        adamw_steps = []
+        for state in fresh_children["adamw_fallback"].state.values():
+            step = state["step"]
+            if isinstance(step, torch.Tensor):
+                step = step.item()
+            adamw_steps.append(int(step))
+        self.assertEqual(sorted(adamw_steps), [2, 2])
 
     def test_muon_accumulation_suppresses_unsynced_step_on_cpu(self):
         model = torch.nn.Sequential(

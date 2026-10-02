@@ -367,6 +367,94 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("MUON_FULL_BF16_ARGUMENT_FAMILY", source)
         self.assertIn('_PINNED_MUON_PROVIDER_VERSION = "3.10.0"', source)
 
+    def test_c4_explicit_fallback_uses_phased_multi_child_lifecycle(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        support = SUPPORT.read_text(encoding="utf-8")
+        self.assertIn(
+            '"optimizer:muon-adamw-explicit-fallback:full-bf16:accum1:v1"',
+            support,
+        )
+        self.assertIn(
+            '"optimizer:muon-adamw-explicit-fallback:full-bf16:accum2:v1"',
+            support,
+        )
+        self.assertIn(
+            "MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID",
+            source,
+        )
+        self.assertIn("class _TinyMuonAdamWFallbackFlux", source)
+        self.assertIn("torch.nn.Linear(8, 12, bias=True)", source)
+        self.assertIn("torch.nn.Linear(12, 8, bias=True)", source)
+        self.assertIn('"fallback_optimizer_profile": "adamw_fallback"', source)
+        self.assertIn('"fallback_learning_rate": 1e-2', source)
+        self.assertIn("def _c4_routing_evidence(", source)
+        self.assertIn("def _c4_child_ownership_evidence(", source)
+        self.assertIn("def _c4_profile_parameter_evidence(", source)
+        self.assertIn("def _c4_muon_state_evidence(", source)
+        self.assertIn("def _c4_adamw_state_evidence(", source)
+        self.assertIn("def _c4_scheduler_evidence(", source)
+        self.assertIn("def _run_c4_logical_step(", source)
+        self.assertIn("def _c4_train_save(", source)
+        self.assertIn("def _c4_resume_second_step(", source)
+        self.assertIn('optimizers=("Muon", "AdamW")', source)
+        self.assertIn('"scope": "optimizer_topology"', source)
+
+    def test_c4_hardening_fails_closed_on_nonfinite_state_and_invalid_steps(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        c4_step = source.split("def _run_c4_logical_step(", 1)[1].split(
+            "\ndef _build_c4_runtime", 1
+        )[0]
+        self.assertGreaterEqual(
+            c4_step.count("_assert_tensor_evidence_finite("),
+            9,
+        )
+        self.assertIn('label="C4 routed parameter state"', c4_step)
+        self.assertIn('label="C4 optimizer state"', c4_step)
+        self.assertIn('label="C4 scheduler state"', c4_step)
+
+        self.assertIn("def _c4_exact_nonnegative_step(", source)
+        muon_state = source.split("def _c4_muon_state_evidence(", 1)[1].split(
+            "\ndef _c4_adamw_state_evidence", 1
+        )[0]
+        adamw_state = source.split("def _c4_adamw_state_evidence(", 1)[1].split(
+            "\ndef _c4_scheduler_evidence", 1
+        )[0]
+        fresh_state = source.split("def _c4_fresh_state_is_empty(", 1)[1].split(
+            "\ndef _c4_qualification_contract", 1
+        )[0]
+        self.assertIn("_c4_exact_nonnegative_step(", muon_state)
+        self.assertIn("_c4_exact_nonnegative_step(", adamw_state)
+        self.assertIn("_c4_exact_nonnegative_step(", fresh_state)
+        self.assertNotIn("int(raw_step)", muon_state)
+        self.assertNotIn("int(raw_step)", adamw_state)
+
+    def test_c4_actual_muon_child_matches_pinned_provider_class(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        build = source.split("def _build_c4_runtime(", 1)[1].split(
+            "\ndef _c4_handoff_path", 1
+        )[0]
+        self.assertIn('muon_path = _c4_muon_state_evidence(session)', build)
+        self.assertIn('muon_path["child_class"] != provider["class"]', build)
+        self.assertIn(
+            "C4 Muon runtime resolved a different provider class",
+            build,
+        )
+
+    def test_c4_evidence_does_not_add_production_topology_qualification(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        production = (ROOT / "mikazuki" / "parameter_policy_execution.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("FULL_BF16_OPTIMIZER_TOPOLOGY_QUALIFICATIONS", production)
+        self.assertNotIn(
+            'FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"] =',
+            source,
+        )
+        self.assertNotIn(
+            'FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"] =',
+            source,
+        )
+
     def test_muon_evidence_does_not_mutate_production_qualification(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn('FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"] =', source)
