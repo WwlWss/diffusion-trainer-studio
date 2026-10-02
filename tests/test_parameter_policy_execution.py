@@ -637,6 +637,11 @@ class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
             "test-only release",
             "test:muon",
         )
+        adamw_pending = execution.ExecutionFeatureQualification(
+            "pending",
+            "test-only pending fallback",
+            None,
+        )
         policy = {
             "version": 1,
             "optimizer_profiles": {
@@ -658,7 +663,10 @@ class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
             {"anima-finetune": released},
         ), patch.dict(
             execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
-            {"Muon": muon_released},
+            {
+                "Muon": muon_released,
+                "AdamW": adamw_pending,
+            },
         ):
             blockers = execution.parameter_policy_execution_blockers(
                 policy,
