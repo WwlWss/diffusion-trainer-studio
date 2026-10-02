@@ -10,6 +10,7 @@ from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID,
     MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
     MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
@@ -18,6 +19,7 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_adamw_full_bf16_bundle,
     summarize_muon_full_bf16_bundle,
     summarize_muon_adamw_fallback_full_bf16_bundle,
+    summarize_shared_full_bf16_promotion,
     temporary_execution_qualification,
 )
 
@@ -227,8 +229,103 @@ class MuonAdamWExplicitFallbackFullBf16BundleTests(unittest.TestCase):
         )
 
 
+class SharedFullBf16PromotionTests(unittest.TestCase):
+    def _snapshot(self):
+        return {
+            "backends": {
+                name: {
+                    "status": row.status,
+                    "reason": row.reason,
+                    "evidence_case_id": row.evidence_case_id,
+                }
+                for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
+            },
+            "optimizers": {
+                name: {
+                    "status": row.status,
+                    "reason": row.reason,
+                    "evidence_case_id": row.evidence_case_id,
+                }
+                for name, row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.items()
+            },
+        }
+
+    def _passing_rows(self):
+        return [
+            {"case_id": case_id, "status": "pass"}
+            for case_id in EXECUTION_GPU_CASE_PHASES
+        ]
+
+    def test_complete_c1_c4_matrix_promotes_candidate_rows(self):
+        summary = summarize_shared_full_bf16_promotion(
+            self._passing_rows(),
+            self._snapshot(),
+        )
+        self.assertEqual(
+            summary["id"],
+            SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID,
+        )
+        self.assertEqual(summary["status"], "pass")
+        self.assertTrue(summary["promotion_eligible"])
+        self.assertTrue(summary["optimizer_qualification_eligible"])
+        self.assertTrue(summary["infra_complete"])
+        self.assertTrue(summary["target_rows_match"])
+        self.assertEqual(summary["unexpected_backend_promotions"], [])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], [])
+
+    def test_missing_or_failed_case_blocks_promotion(self):
+        rows = self._passing_rows()
+        missing = rows[:-1]
+        summary = summarize_shared_full_bf16_promotion(
+            missing,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["promotion_eligible"])
+        self.assertTrue(summary["missing_cases"])
+
+        failed = self._passing_rows()
+        failed[0] = dict(failed[0], status="fail")
+        summary = summarize_shared_full_bf16_promotion(
+            failed,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["failed_cases"])
+
+    def test_wrong_candidate_metadata_blocks_promotion(self):
+        snapshot = self._snapshot()
+        snapshot["optimizers"]["AdamW"]["evidence_case_id"] = "wrong:evidence"
+        summary = summarize_shared_full_bf16_promotion(
+            self._passing_rows(),
+            snapshot,
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["target_rows_match"])
+
+    def test_unexpected_backend_or_optimizer_promotion_blocks_d0(self):
+        snapshot = self._snapshot()
+        snapshot["backends"]["flux-finetune"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:backend",
+        }
+        snapshot["optimizers"]["Lion"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:optimizer",
+        }
+        summary = summarize_shared_full_bf16_promotion(
+            self._passing_rows(),
+            snapshot,
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["unexpected_backend_promotions"], ["flux-finetune"])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
+
+
 class TemporaryExecutionQualificationTests(unittest.TestCase):
-    def test_pending_rows_are_leased_then_restored_exactly(self):
+    def test_candidate_adamw_is_not_leased_while_pending_backend_is(self):
         backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
         optimizer_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
         unrelated_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"]
@@ -246,7 +343,10 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
                 execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"].status,
                 "qualified",
             )
-            self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
+            self.assertEqual(
+                [row["lease_applied"] for row in lease["records"]],
+                [True, False],
+            )
             self.assertEqual(
                 execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"],
                 unrelated_before,
@@ -265,7 +365,7 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
             unrelated_before,
         )
 
-    def test_muon_pending_lease_restores_without_touching_adamw(self):
+    def test_candidate_muon_is_not_leased_while_pending_backend_is(self):
         backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
         muon_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"]
         adamw_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
@@ -283,7 +383,10 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
                 execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"],
                 adamw_before,
             )
-            self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
+            self.assertEqual(
+                [row["lease_applied"] for row in lease["records"]],
+                [True, False],
+            )
 
         self.assertEqual(
             execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"],
@@ -298,7 +401,7 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
             adamw_before,
         )
 
-    def test_muon_adamw_pending_lease_restores_all_rows_exactly(self):
+    def test_candidate_muon_adamw_are_not_leased_with_pending_backend(self):
         backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
         muon_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"]
         adamw_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
@@ -324,7 +427,10 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
                 [row["name"] for row in lease["records"]],
                 ["flux-finetune", "Muon", "AdamW"],
             )
-            self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
+            self.assertEqual(
+                [row["lease_applied"] for row in lease["records"]],
+                [True, False, False],
+            )
 
         self.assertEqual(
             execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"],
