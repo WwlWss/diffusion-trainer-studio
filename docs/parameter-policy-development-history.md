@@ -3211,7 +3211,8 @@ backend-feature runner在 torch/runtime import之前必须验证：
 
 - `--expected-commit` 与 `HEAD` 完全相等；
 - repo tracked/untracked workspace完全 clean；
-- manifest与output均位于 repo之外。
+- manifest与output均位于 repo之外；
+- D0/D1 case的 `cwd` 必须是当前 exact-head repo root，fresh/resume必须引用同一个实际存在于该 repo内的 Python trainer entrypoint；不能用另一个 checkout或已安装副本冒充 exact-head backend evidence。Anima staged runtime provenance在 D2另行显式扩展。
 
 manifest v1允许按 case选择，不再强制一次覆盖全部10个 backend。每个 case至少包含：
 
