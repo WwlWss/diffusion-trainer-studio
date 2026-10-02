@@ -245,7 +245,8 @@ def _command_contract(case: dict[str, Any]) -> dict[str, Any]:
     return {
         "fresh_argv": _redacted_argv(case["fresh_command"]),
         "resume_argv": _redacted_argv(case["resume_command"]),
-        "cwd": case["cwd"] or str(REPO_ROOT),
+        "cwd": case["cwd"],
+        "entrypoint": case["entrypoint"],
         "environment_keys": sorted(case["environment"]),
         "fresh_checkpoint_dir": case["fresh_checkpoint_dir"],
         "resume_checkpoint_dir": case["resume_checkpoint_dir"],
