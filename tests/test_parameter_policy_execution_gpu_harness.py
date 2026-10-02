@@ -336,6 +336,66 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("_run_phase_subprocess", source)
         self.assertIn("sys.executable", source)
 
+    def test_muon_cases_use_pure_phased_lifecycle_protocol(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        support = SUPPORT.read_text(encoding="utf-8")
+        self.assertIn('"optimizer:muon:full-bf16:accum1:v1"', support)
+        self.assertIn('"optimizer:muon:full-bf16:accum2:v1"', support)
+        self.assertIn("MUON_FULL_BF16_EVIDENCE_BUNDLE_ID", source)
+        self.assertIn("summarize_muon_full_bf16_bundle", source)
+        self.assertIn("def _run_muon_logical_step(", source)
+        self.assertIn("def _muon_train_save(", source)
+        self.assertIn("def _muon_resume_second_step(", source)
+        self.assertIn("torch.nn.Linear(8, 12, bias=False)", source)
+        self.assertIn("torch.nn.Linear(12, 8, bias=False)", source)
+        self.assertIn('"matrix_shapes"', source)
+        self.assertIn('"covers_transpose_true"', source)
+        self.assertIn('"covers_transpose_false"', source)
+        self.assertIn('"fallback_count": sum(', source)
+        self.assertIn('"state_parameter_count"', source)
+        self.assertIn('"internal_adamw_state_present"', source)
+        self.assertIn('"momentum_buffer"', source)
+        self.assertIn('"exp_avg"', source)
+        self.assertIn('"use_muon"', source)
+        self.assertIn("def _muon_qualification_contract(", source)
+        self.assertIn(
+            '"dts.parameter-policy.muon-full-bf16-qualification-family"',
+            source,
+        )
+        self.assertIn('"reference_arguments"', source)
+        self.assertIn('"argument_family"', source)
+        self.assertIn("MUON_FULL_BF16_ARGUMENT_FAMILY", source)
+        self.assertIn('_PINNED_MUON_PROVIDER_VERSION = "3.10.0"', source)
+
+    def test_muon_evidence_does_not_mutate_production_qualification(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn('FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"] =', source)
+        self.assertNotIn("FULL_BF16_OPTIMIZER_QUALIFICATIONS.update", source)
+        self.assertIn(
+            'optimizers=("Muon",)',
+            source,
+        )
+
+    def test_optimizer_evidence_bundles_are_additive(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("evidence_bundles: dict[str, Any] = {}", source)
+        self.assertIn(
+            "evidence_bundles[ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID]",
+            source,
+        )
+        self.assertIn(
+            "evidence_bundles[MUON_FULL_BF16_EVIDENCE_BUNDLE_ID]",
+            source,
+        )
+        self.assertIn(
+            'evidence["evidence_bundles"] = evidence_bundles',
+            source,
+        )
+        self.assertNotIn(
+            'evidence["evidence_bundles"] = {\n            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID',
+            source,
+        )
+
     def test_adamw_evidence_does_not_modify_production_qualification_table(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertNotIn('FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"] =', source)

@@ -2,8 +2,10 @@
 """Exact-head CUDA evidence harness for Parameter Policy execution qualification.
 
 Phase C0/C1 established the strict exact-head CUDA/BF16 evidence infrastructure.
-Phase C2 extends that protocol with AdamW full-BF16 optimizer lifecycle evidence:
-train/save is followed by resume/second-step in a fresh Python subprocess.
+Phase C2 extends that protocol with AdamW full-BF16 optimizer lifecycle evidence.
+Phase C3 adds a separate pure-Muon lifecycle bundle that proves the pinned Muon
+provider uses only explicit Muon groups/state, without its internal AdamW fallback.
+Both train/save flows are followed by resume/second-step in a fresh subprocess.
 
 The coordinator launches every evidence phase in a fresh Python subprocess.
 Optimizer evidence remains non-promoting until the final qualification gate,
@@ -264,7 +266,11 @@ from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    MUON_FULL_BF16_ARGUMENT_FAMILY,
+    MUON_FULL_BF16_CASE_IDS,
+    MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
+    summarize_muon_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -273,6 +279,8 @@ EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
 EVIDENCE_VERSION = 2
 _CASES = tuple(EXECUTION_GPU_CASE_PHASES)
 _ADAMW_CASES = ADAMW_FULL_BF16_CASE_IDS
+_MUON_CASES = MUON_FULL_BF16_CASE_IDS
+_PINNED_MUON_PROVIDER_VERSION = "3.10.0"
 _STDIO_TAIL_LIMIT = 16000
 
 
@@ -386,6 +394,45 @@ class _TinyFlux(torch.nn.Module):
         return self.double_blocks[0](value)
 
 
+def _initialize_muon_linear(
+    layer: torch.nn.Linear,
+    *,
+    diagonal_scale: float,
+    fill_scale: float,
+) -> None:
+    with torch.no_grad():
+        value = torch.eye(
+            layer.out_features,
+            layer.in_features,
+            dtype=layer.weight.dtype,
+        )
+        value.mul_(diagonal_scale)
+        value.add_(torch.ones_like(value) * fill_scale)
+        layer.weight.copy_(value)
+
+
+class _TinyMuonFlux(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        expand = torch.nn.Linear(8, 12, bias=False)
+        contract = torch.nn.Linear(12, 8, bias=False)
+        _initialize_muon_linear(
+            expand,
+            diagonal_scale=0.125,
+            fill_scale=0.015625,
+        )
+        _initialize_muon_linear(
+            contract,
+            diagonal_scale=0.09375,
+            fill_scale=0.0078125,
+        )
+        self.double_blocks = torch.nn.ModuleList([expand, contract])
+
+    def forward(self, value):
+        value = self.double_blocks[0](value)
+        return self.double_blocks[1](value)
+
+
 def _policy() -> dict[str, Any]:
     return {
         "version": 1,
@@ -402,10 +449,41 @@ def _policy() -> dict[str, Any]:
     }
 
 
-def _scheduler_args(policy_path: Path) -> SimpleNamespace:
+def _muon_policy() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "optimizer_profiles": {
+            "main": {
+                "type": "Muon",
+                "args": {
+                    "momentum": 0.95,
+                    "weight_decay": 0.0,
+                    "weight_decouple": True,
+                    "nesterov": True,
+                    "ns_steps": 5,
+                    "ns_coeffs": "original",
+                    "use_adjusted_lr": False,
+                },
+            },
+        },
+        "components": {
+            "transformer.double_stream": {
+                "train": True,
+                "optimizer_profile": "main",
+                "learning_rate": 2e-2,
+            },
+        },
+    }
+
+
+def _scheduler_args(
+    policy_path: Path,
+    *,
+    optimizer_type: str = "AdamW",
+) -> SimpleNamespace:
     return SimpleNamespace(
         parameter_policy_config=str(policy_path),
-        optimizer_type="AdamW",
+        optimizer_type=optimizer_type,
         full_bf16=True,
         mixed_precision="bf16",
         lr_scheduler="constant",
@@ -500,6 +578,236 @@ def _adamw_accumulation_steps(case_id: str) -> int:
     if case_id == "optimizer:adamw:full-bf16:accum2:v1":
         return 2
     raise ExecutionGpuMatrixError(f"Unknown AdamW lifecycle case {case_id!r}.")
+
+
+def _muon_accumulation_steps(case_id: str) -> int:
+    if case_id == MUON_FULL_BF16_CASE_IDS[0]:
+        return 1
+    if case_id == MUON_FULL_BF16_CASE_IDS[1]:
+        return 2
+    raise ExecutionGpuMatrixError(f"Unknown Muon lifecycle case {case_id!r}.")
+
+
+def _assert_pinned_muon_provider() -> dict[str, str]:
+    version = _package_version("pytorch-optimizer")
+    if version != _PINNED_MUON_PROVIDER_VERSION:
+        raise ExecutionGpuMatrixError(
+            "Muon full-BF16 qualification requires pinned pytorch-optimizer "
+            f"{_PINNED_MUON_PROVIDER_VERSION}; found {version!r}."
+        )
+    try:
+        import pytorch_optimizer
+    except ImportError as exc:
+        raise ExecutionGpuMatrixError(
+            "Muon full-BF16 qualification could not import pytorch_optimizer."
+        ) from exc
+
+    muon_class = getattr(pytorch_optimizer, "Muon", None)
+    if muon_class is None:
+        raise ExecutionGpuMatrixError(
+            "Pinned pytorch_optimizer does not expose Muon."
+        )
+    provider_class = (
+        f"{muon_class.__module__}."
+        f"{getattr(muon_class, '__qualname__', muon_class.__name__)}"
+    )
+    return {
+        "package": "pytorch-optimizer",
+        "version": version,
+        "class": provider_class,
+    }
+
+
+def _muon_child(session):
+    entries = tuple(session.optimizer.entries)
+    if len(entries) != 1:
+        raise AssertionError(
+            f"Pure Muon evidence requires exactly one child optimizer; got {len(entries)}."
+        )
+    entry = entries[0]
+    if entry.profile_name != "main" or entry.optimizer_type != "Muon":
+        raise AssertionError(
+            "Pure Muon evidence resolved unexpected optimizer entry "
+            f"{entry.profile_name!r}/{entry.optimizer_type!r}."
+        )
+    return entry.optimizer
+
+
+def _muon_routing_evidence(session) -> dict[str, Any]:
+    rows = []
+    for assignment in session.routing_plan.assignments:
+        rows.append(
+            {
+                "canonical_name": assignment.canonical_name,
+                "component_id": assignment.component_id,
+                "route_kind": assignment.route_kind,
+                "optimizer_profile": assignment.optimizer_profile,
+                "parameter_class": assignment.parameter_class,
+                "shape": [int(dim) for dim in assignment.parameter.shape],
+            }
+        )
+    trainable = [
+        row for row in rows if row["route_kind"] in {"primary", "fallback"}
+    ]
+    if not trainable:
+        raise AssertionError("Pure Muon evidence produced no trainable routing assignments.")
+    if any(row["route_kind"] != "primary" for row in trainable):
+        raise AssertionError(
+            "Pure Muon evidence unexpectedly used fallback routing."
+        )
+    if any(row["optimizer_profile"] != "main" for row in trainable):
+        raise AssertionError(
+            "Pure Muon evidence routed a trainable parameter outside the Muon profile."
+        )
+    if any(row["parameter_class"] != "matrix_weight" for row in trainable):
+        raise AssertionError(
+            "Pure Muon evidence routed a non-matrix trainable parameter."
+        )
+
+    shapes = [tuple(row["shape"]) for row in trainable]
+    if len(trainable) != 2 or shapes != [(12, 8), (8, 12)]:
+        raise AssertionError(
+            "Pure Muon evidence must cover exactly the tall/wide reference shapes "
+            f"[(12, 8), (8, 12)]; got {shapes!r}."
+        )
+    if not any(rows_count > cols_count for rows_count, cols_count in shapes):
+        raise AssertionError("Pure Muon evidence does not cover transpose=True.")
+    if not any(rows_count < cols_count for rows_count, cols_count in shapes):
+        raise AssertionError("Pure Muon evidence does not cover transpose=False.")
+
+    return {
+        "assignments": rows,
+        "trainable_count": len(trainable),
+        "primary_count": sum(row["route_kind"] == "primary" for row in trainable),
+        "fallback_count": sum(row["route_kind"] == "fallback" for row in trainable),
+        "matrix_shapes": [list(shape) for shape in shapes],
+        "covers_transpose_true": any(
+            rows_count > cols_count for rows_count, cols_count in shapes
+        ),
+        "covers_transpose_false": any(
+            rows_count < cols_count for rows_count, cols_count in shapes
+        ),
+    }
+
+
+def _muon_group_step_counters(session) -> list[int]:
+    child = _muon_child(session)
+    counters: list[int] = []
+    for group in child.param_groups:
+        raw = group.get("step", 0)
+        if isinstance(raw, torch.Tensor):
+            if raw.numel() != 1:
+                raise AssertionError("Muon group step tensor must be scalar.")
+            raw = raw.detach().cpu().item()
+        if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+            raise AssertionError(f"Muon group step is not numeric: {raw!r}.")
+        number = int(raw)
+        if float(raw) != float(number) or number < 0:
+            raise AssertionError(f"Muon group step is invalid: {raw!r}.")
+        counters.append(number)
+    return counters
+
+
+def _muon_path_evidence(session) -> dict[str, Any]:
+    child = _muon_child(session)
+    groups = []
+    for index, group in enumerate(child.param_groups):
+        use_muon = group.get("use_muon")
+        if use_muon is not True:
+            raise AssertionError(
+                f"Muon group {index} is not explicitly use_muon=True."
+            )
+        groups.append(
+            {
+                "index": index,
+                "use_muon": True,
+                "step": _muon_group_step_counters(session)[index],
+                "parameter_count": len(group["params"]),
+            }
+        )
+
+    state_keys: list[list[str]] = []
+    for parameter_state in child.state.values():
+        keys = sorted(str(key) for key in parameter_state)
+        if "exp_avg" in keys or "exp_avg_sq" in keys:
+            raise AssertionError(
+                "Pure Muon evidence entered the provider's internal AdamW state path."
+            )
+        if parameter_state and "momentum_buffer" not in keys:
+            raise AssertionError(
+                f"Muon parameter state lacks momentum_buffer: {keys!r}."
+            )
+        state_keys.append(keys)
+
+    return {
+        "child_class": (
+            f"{child.__class__.__module__}."
+            f"{child.__class__.__qualname__}"
+        ),
+        "groups": groups,
+        "state_keys": state_keys,
+        "state_parameter_count": len(state_keys),
+        "internal_adamw_state_present": any(
+            "exp_avg" in keys or "exp_avg_sq" in keys
+            for keys in state_keys
+        ),
+    }
+
+
+def _muon_child_state_is_empty(session) -> bool:
+    child = _muon_child(session)
+    return len(child.state) == 0 and all(
+        int(group.get("step", 0)) == 0
+        for group in child.param_groups
+    )
+
+
+def _assert_muon_gradient_evidence(gradients: dict[str, Any]) -> None:
+    if not gradients:
+        raise AssertionError("Muon step produced no gradient evidence.")
+    for name, evidence in gradients.items():
+        if evidence is None:
+            raise AssertionError(f"Muon trainable parameter {name} has no gradient.")
+        if evidence.get("finite") is not True:
+            raise AssertionError(f"Muon trainable parameter {name} has non-finite gradient.")
+        if evidence.get("nonzero") is not True:
+            raise AssertionError(f"Muon trainable parameter {name} has zero gradient.")
+
+
+def _muon_qualification_contract(
+    session,
+    provider: dict[str, str],
+) -> dict[str, Any]:
+    optimizers = tuple(session.runtime_spec.optimizers)
+    if len(optimizers) != 1:
+        raise AssertionError(
+            "Muon qualification contract requires exactly one runtime optimizer spec."
+        )
+    spec = optimizers[0]
+    if spec.profile_name != "main" or spec.optimizer_type != "Muon":
+        raise AssertionError(
+            "Muon qualification contract resolved unexpected runtime optimizer "
+            f"{spec.profile_name!r}/{spec.optimizer_type!r}."
+        )
+
+    reference_arguments = spec.optimizer_arguments
+    expected_family = tuple(sorted(MUON_FULL_BF16_ARGUMENT_FAMILY))
+    actual_family = tuple(sorted(reference_arguments))
+    if actual_family != expected_family:
+        raise AssertionError(
+            "Muon reference arguments must explicitly cover the full C3 argument family: "
+            f"expected={expected_family!r}, actual={actual_family!r}."
+        )
+
+    return {
+        "schema": "dts.parameter-policy.muon-full-bf16-qualification-family",
+        "version": 1,
+        "provider": dict(provider),
+        "routing_family": "pure_muon",
+        "state_family": "momentum_buffer",
+        "argument_family": list(expected_family),
+        "reference_arguments": reference_arguments,
+    }
 
 
 def _trainable_dtypes(session) -> list[str]:
@@ -700,6 +1008,451 @@ def _run_logical_step(
         },
         "microsteps": microsteps,
     }
+
+
+def _run_muon_logical_step(
+    *,
+    accelerator: Accelerator,
+    model: torch.nn.Module,
+    optimizer: object,
+    scheduler: object,
+    raw_scheduler: object,
+    session: object,
+    accumulation_steps: int,
+    logical_step: int,
+) -> dict[str, Any]:
+    before_model = model_parameter_evidence(accelerator.unwrap_model(model))
+    before_optimizer = optimizer_state_evidence(session.optimizer)
+    before_scheduler = scheduler_state_evidence(raw_scheduler)
+    before_counters = _muon_group_step_counters(session)
+    before_scheduler_step = _scheduler_step_count(raw_scheduler)
+    before_path = _muon_path_evidence(session)
+    _assert_tensor_evidence_finite(before_model, label="Muon model state")
+    _assert_tensor_evidence_finite(before_optimizer, label="Muon optimizer state")
+    _assert_tensor_evidence_finite(before_scheduler, label="Muon scheduler state")
+    microsteps: list[dict[str, Any]] = []
+
+    for microstep in range(accumulation_steps):
+        model_before = model_parameter_evidence(accelerator.unwrap_model(model))
+        optimizer_before = optimizer_state_evidence(session.optimizer)
+        scheduler_before = scheduler_state_evidence(raw_scheduler)
+        counters_before = _muon_group_step_counters(session)
+        with accelerator.accumulate(model):
+            scale = 0.5 + 0.125 * (logical_step + microstep)
+            value = torch.eye(
+                8,
+                device=accelerator.device,
+                dtype=torch.bfloat16,
+            )
+            value.mul_(scale)
+            output = model(value)
+            loss = output.float().square().mean()
+            accelerator.backward(loss)
+            sync_gradients = bool(accelerator.sync_gradients)
+            gradients = gradient_evidence(list(session.trainable_parameters))
+            _assert_muon_gradient_evidence(gradients)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+        model_after = model_parameter_evidence(accelerator.unwrap_model(model))
+        optimizer_after = optimizer_state_evidence(session.optimizer)
+        scheduler_after = scheduler_state_evidence(raw_scheduler)
+        counters_after = _muon_group_step_counters(session)
+        scheduler_step_after = _scheduler_step_count(raw_scheduler)
+        path_after = _muon_path_evidence(session)
+        _assert_tensor_evidence_finite(model_after, label="Muon model state")
+        _assert_tensor_evidence_finite(optimizer_after, label="Muon optimizer state")
+        _assert_tensor_evidence_finite(scheduler_after, label="Muon scheduler state")
+        microsteps.append(
+            {
+                "microstep": microstep + 1,
+                "sync_gradients": sync_gradients,
+                "loss": float(loss.detach().cpu()),
+                "gradients": gradients,
+                "model_changed": model_after != model_before,
+                "optimizer_state_changed": optimizer_after["sha256"]
+                != optimizer_before["sha256"],
+                "scheduler_state_changed": scheduler_after["sha256"]
+                != scheduler_before["sha256"],
+                "muon_group_step_counters": counters_after,
+                "scheduler_step_count": scheduler_step_after,
+                "muon_path": path_after,
+            }
+        )
+
+        if accumulation_steps > 1 and microstep < accumulation_steps - 1:
+            if sync_gradients:
+                raise AssertionError("Intermediate Muon accumulation microstep unexpectedly synced.")
+            if model_after != model_before:
+                raise AssertionError("Intermediate Muon accumulation microstep changed parameters.")
+            if optimizer_after["sha256"] != optimizer_before["sha256"]:
+                raise AssertionError("Intermediate Muon accumulation microstep changed optimizer state.")
+            if scheduler_after["sha256"] != scheduler_before["sha256"]:
+                raise AssertionError("Intermediate Muon accumulation microstep advanced scheduler.")
+            if counters_after != counters_before:
+                raise AssertionError("Intermediate Muon accumulation microstep advanced group step.")
+            if scheduler_step_after != before_scheduler_step:
+                raise AssertionError("Intermediate Muon accumulation microstep advanced scheduler step count.")
+            if any(keys for keys in path_after["state_keys"]):
+                raise AssertionError("Intermediate Muon accumulation microstep created optimizer state.")
+
+    after_model = model_parameter_evidence(accelerator.unwrap_model(model))
+    after_optimizer = optimizer_state_evidence(session.optimizer)
+    after_scheduler = scheduler_state_evidence(raw_scheduler)
+    after_counters = _muon_group_step_counters(session)
+    after_scheduler_step = _scheduler_step_count(raw_scheduler)
+    after_path = _muon_path_evidence(session)
+    _assert_tensor_evidence_finite(after_model, label="Muon model state")
+    _assert_tensor_evidence_finite(after_optimizer, label="Muon optimizer state")
+    _assert_tensor_evidence_finite(after_scheduler, label="Muon scheduler state")
+
+    if before_model == after_model:
+        raise AssertionError("Muon logical step did not update model parameters.")
+    if before_optimizer["sha256"] == after_optimizer["sha256"]:
+        raise AssertionError("Muon logical step did not update optimizer state.")
+    if before_scheduler["sha256"] == after_scheduler["sha256"]:
+        raise AssertionError("Muon logical step did not advance scheduler.")
+    if not microsteps[-1]["sync_gradients"]:
+        raise AssertionError("Final Muon accumulation microstep did not synchronize gradients.")
+    if logical_step == 1:
+        if any(value != 0 for value in before_counters):
+            raise AssertionError(
+                f"Fresh Muon group steps are not zero: {before_counters!r}."
+            )
+    elif any(value != logical_step - 1 for value in before_counters):
+        raise AssertionError(
+            f"Muon resumed group steps are not at logical step {logical_step - 1}: "
+            f"{before_counters!r}."
+        )
+    if not after_counters or any(value != logical_step for value in after_counters):
+        raise AssertionError(
+            f"Muon group steps did not reach logical step {logical_step}: "
+            f"{after_counters!r}."
+        )
+    if after_scheduler_step != before_scheduler_step + 1:
+        raise AssertionError(
+            "Composite scheduler did not advance exactly one step for one Muon logical step."
+        )
+    if after_path["internal_adamw_state_present"]:
+        raise AssertionError("Muon logical step entered internal AdamW state path.")
+    expected_state_count = sum(
+        group["parameter_count"] for group in after_path["groups"]
+    )
+    if after_path["state_parameter_count"] != expected_state_count:
+        raise AssertionError(
+            "Muon logical step did not create state for every routed parameter: "
+            f"expected={expected_state_count}, "
+            f"actual={after_path['state_parameter_count']}."
+        )
+    if not after_path["state_keys"] or any(
+        "momentum_buffer" not in keys for keys in after_path["state_keys"]
+    ):
+        raise AssertionError("Muon logical step did not create momentum_buffer state.")
+
+    return {
+        "logical_step": logical_step,
+        "accumulation_steps": accumulation_steps,
+        "before": {
+            "model": before_model,
+            "optimizer": before_optimizer,
+            "scheduler": before_scheduler,
+            "muon_group_step_counters": before_counters,
+            "scheduler_step_count": before_scheduler_step,
+            "muon_path": before_path,
+        },
+        "after": {
+            "model": after_model,
+            "optimizer": after_optimizer,
+            "scheduler": after_scheduler,
+            "muon_group_step_counters": after_counters,
+            "scheduler_step_count": after_scheduler_step,
+            "muon_path": after_path,
+        },
+        "microsteps": microsteps,
+    }
+
+
+def _build_muon_runtime(case_dir: Path, *, accumulation_steps: int):
+    provider = _assert_pinned_muon_provider()
+    policy_path = case_dir / "muon-policy.json"
+    policy_path.write_text(
+        json.dumps(_muon_policy(), sort_keys=True),
+        encoding="utf-8",
+    )
+    args = _scheduler_args(policy_path, optimizer_type="Muon")
+    model = _TinyMuonFlux()
+    session = create_parameter_policy_session(
+        args=args,
+        train_type="flux-finetune",
+        roots={"transformer": model},
+    )
+    routing = _muon_routing_evidence(session)
+    if routing["primary_count"] != 2 or routing["fallback_count"] != 0:
+        raise AssertionError(
+            "Pure Muon runtime must contain exactly two primary assignments and no fallback."
+        )
+    qualification_contract = _muon_qualification_contract(session, provider)
+    raw_scheduler = session.build_scheduler(_scheduler_factory(args))
+    if session.execution_contract is None:
+        raise AssertionError("Muon full-BF16 session has no execution contract.")
+    path = _muon_path_evidence(session)
+    if path["internal_adamw_state_present"]:
+        raise AssertionError("Fresh Muon runtime already exposes internal AdamW state.")
+    if path["child_class"] != provider["class"]:
+        raise AssertionError(
+            "Muon runtime resolved a different provider class: "
+            f"{path['child_class']!r} != {provider['class']!r}."
+        )
+
+    model.to(torch.bfloat16)
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("Muon trainable parameters are not true BF16 before prepare.")
+
+    accelerator = Accelerator(
+        mixed_precision="bf16",
+        gradient_accumulation_steps=accumulation_steps,
+    )
+    distributed_type = _assert_cuda_accelerator(accelerator)
+    model, optimizer, scheduler = accelerator.prepare(
+        model,
+        session.optimizer,
+        raw_scheduler,
+    )
+    session.finalize_after_prepare(
+        accelerator=accelerator,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("Muon trainable parameters are not true BF16 after prepare.")
+    return (
+        args,
+        model,
+        optimizer,
+        scheduler,
+        raw_scheduler,
+        session,
+        accelerator,
+        distributed_type,
+        provider,
+        routing,
+        qualification_contract,
+    )
+
+
+def _muon_handoff_path(case_dir: Path) -> Path:
+    return case_dir / "muon-handoff.json"
+
+
+def _muon_checkpoint_dir(case_dir: Path) -> Path:
+    return case_dir / "muon-checkpoint"
+
+
+def _muon_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
+    accumulation_steps = _muon_accumulation_steps(case_id)
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("Muon",),
+        evidence_case_id=MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            _args,
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+            provider,
+            routing,
+            qualification_contract,
+        ) = _build_muon_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if not _muon_child_state_is_empty(session):
+                raise AssertionError("Fresh Muon optimizer state must start empty.")
+            step = _run_muon_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=1,
+            )
+            checkpoint_dir = _muon_checkpoint_dir(case_dir)
+            accelerator.save_state(checkpoint_dir)
+            saved = {
+                "schema": "dts.parameter-policy.muon-full-bf16-handoff",
+                "version": 1,
+                "case_id": case_id,
+                "evidence_bundle_id": MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "commit": _BOOTSTRAP_COMMIT,
+                "accumulation_steps": accumulation_steps,
+                "provider": provider,
+                "routing": routing,
+                "qualification_contract": qualification_contract,
+                "execution_identity": session.execution_contract.execution_identity(),
+                "execution_signature": session.execution_contract.execution_signature(),
+                "model": model_parameter_evidence(accelerator.unwrap_model(model)),
+                "optimizer": optimizer_state_evidence(session.optimizer),
+                "scheduler": scheduler_state_evidence(raw_scheduler),
+                "muon_path": _muon_path_evidence(session),
+            }
+            _write_json(_muon_handoff_path(case_dir), saved)
+            return {
+                "scope": "optimizer",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer",
+                    "name": "Muon",
+                },
+                "evidence_bundle_id": MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "provider": provider,
+                "routing": routing,
+                "qualification_contract": qualification_contract,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "trainable_dtypes": _trainable_dtypes(session),
+                "step": step,
+                "handoff": saved,
+            }
+        finally:
+            accelerator.end_training()
+
+
+def _muon_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
+    handoff_path = _muon_handoff_path(case_dir)
+    if not handoff_path.is_file():
+        raise ExecutionGpuMatrixError("Muon resume phase is missing train/save handoff.")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    accumulation_steps = _muon_accumulation_steps(case_id)
+    expected = {
+        "schema": "dts.parameter-policy.muon-full-bf16-handoff",
+        "version": 1,
+        "case_id": case_id,
+        "evidence_bundle_id": MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+        "commit": _BOOTSTRAP_COMMIT,
+        "accumulation_steps": accumulation_steps,
+    }
+    for key, value in expected.items():
+        if handoff.get(key) != value:
+            raise ExecutionGpuMatrixError(
+                f"Muon resume handoff mismatch for {key}: "
+                f"expected={value!r}, actual={handoff.get(key)!r}."
+            )
+
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("Muon",),
+        evidence_case_id=MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            _args,
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+            provider,
+            routing,
+            qualification_contract,
+        ) = _build_muon_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if provider != handoff.get("provider"):
+                raise AssertionError("Muon provider identity changed across fresh resume.")
+            if routing != handoff.get("routing"):
+                raise AssertionError("Muon routing identity changed across fresh resume.")
+            if qualification_contract != handoff.get("qualification_contract"):
+                raise AssertionError(
+                    "Muon qualification-family contract changed across fresh resume."
+                )
+            if not _muon_child_state_is_empty(session):
+                raise AssertionError("Fresh resume Muon optimizer state must start empty.")
+
+            accelerator.load_state(_muon_checkpoint_dir(case_dir))
+            session.assert_runtime_contract(
+                phase="post_resume",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+            restored_model = model_parameter_evidence(accelerator.unwrap_model(model))
+            restored_optimizer = optimizer_state_evidence(session.optimizer)
+            restored_scheduler = scheduler_state_evidence(raw_scheduler)
+            restored_path = _muon_path_evidence(session)
+
+            if restored_model != handoff.get("model"):
+                raise AssertionError("Muon resumed model evidence does not match saved state.")
+            if restored_optimizer["sha256"] != handoff["optimizer"]["sha256"]:
+                raise AssertionError("Muon resumed optimizer state does not match saved state.")
+            if restored_scheduler["sha256"] != handoff["scheduler"]["sha256"]:
+                raise AssertionError("Muon resumed scheduler state does not match saved state.")
+            if restored_path != handoff.get("muon_path"):
+                raise AssertionError("Muon resumed path/state evidence changed.")
+            if session.execution_contract.execution_identity() != handoff.get("execution_identity"):
+                raise AssertionError("Muon resumed execution identity changed.")
+            if session.execution_contract.execution_signature() != handoff.get("execution_signature"):
+                raise AssertionError("Muon resumed execution signature changed.")
+            if any(value != 1 for value in _muon_group_step_counters(session)):
+                raise AssertionError(
+                    "Muon resumed group steps did not restore logical step 1."
+                )
+
+            step = _run_muon_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=2,
+            )
+            return {
+                "scope": "optimizer",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer",
+                    "name": "Muon",
+                },
+                "evidence_bundle_id": MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "provider": provider,
+                "routing": routing,
+                "qualification_contract": qualification_contract,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "restored": {
+                    "model": restored_model,
+                    "optimizer": restored_optimizer,
+                    "scheduler": restored_scheduler,
+                    "muon_path": restored_path,
+                },
+                "step": step,
+            }
+        finally:
+            accelerator.end_training()
 
 
 def _build_adamw_runtime(case_dir: Path, *, accumulation_steps: int):
@@ -1053,6 +1806,11 @@ def _run_worker_case(
             return _adamw_train_save(case_id, case_dir)
         if phase == "resume_second_step":
             return _adamw_resume_second_step(case_id, case_dir)
+    if case_id in _MUON_CASES:
+        if phase == "train_save":
+            return _muon_train_save(case_id, case_dir)
+        if phase == "resume_second_step":
+            return _muon_resume_second_step(case_id, case_dir)
     raise ExecutionGpuMatrixError(
         f"Unknown execution GPU case/phase {case_id!r}/{phase!r}."
     )
@@ -1250,18 +2008,42 @@ def _coordinator_main(args: argparse.Namespace) -> int:
                         "backend_qualification_eligible": False,
                     }
                 )
+            if case_id in _MUON_CASES:
+                row.update(
+                    {
+                        "scope": "optimizer",
+                        "qualification_target": {
+                            "feature": "full_bf16",
+                            "kind": "optimizer",
+                            "name": "Muon",
+                        },
+                        "evidence_bundle_id": MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                        "qualification_evidence_component": True,
+                        "optimizer_qualification_eligible": False,
+                        "backend_qualification_eligible": False,
+                    }
+                )
             evidence["cases"].append(row)
             print(f"{case_status.upper():4} {case_id}", flush=True)
             if case_status != "pass":
                 failed = True
 
+    evidence_bundles: dict[str, Any] = {}
+
     adamw_bundle = summarize_adamw_full_bf16_bundle(evidence["cases"])
     if adamw_bundle is not None:
-        evidence["evidence_bundles"] = {
-            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID: adamw_bundle,
-        }
+        evidence_bundles[ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID] = adamw_bundle
         if adamw_bundle["status"] != "pass":
             failed = True
+
+    muon_bundle = summarize_muon_full_bf16_bundle(evidence["cases"])
+    if muon_bundle is not None:
+        evidence_bundles[MUON_FULL_BF16_EVIDENCE_BUNDLE_ID] = muon_bundle
+        if muon_bundle["status"] != "pass":
+            failed = True
+
+    if evidence_bundles:
+        evidence["evidence_bundles"] = evidence_bundles
 
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")

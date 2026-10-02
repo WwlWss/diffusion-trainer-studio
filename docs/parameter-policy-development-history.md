@@ -3046,6 +3046,60 @@ all backend full-BF16 qualification       = pending/unsupported
 
 后续 C3/C4 将分别加入 Muon、Muon + AdamW fallback 的对应 lifecycle evidence；在 final qualification / promotion gate 通过之前，不改变任何 optimizer qualification。
 
+### C3 — Muon full-BF16 lifecycle evidence
+
+C3 在 C2 phased evidence protocol 上新增 pure-Muon lifecycle，不修改 production optimizer/trainer/runtime semantics，也不提前实现 Muon + AdamW fallback。稳定 evidence IDs：
+
+- `phase-c:muon-full-bf16:v1`
+- `optimizer:muon:full-bf16:accum1:v1`
+- `optimizer:muon:full-bf16:accum2:v1`
+
+两个 Muon case 与 C2 一样固定为：
+
+```text
+train_save
+→ fresh Python subprocess
+→ resume_second_step
+```
+
+C3 使用独立 Flux-shaped scaffold：`Linear(8, 12, bias=False) -> Linear(12, 8, bias=False)`。它只产生 `transformer.double_stream` 下两个 approved hidden 2D matrix weights，shape 分别为 `[12, 8]` 与 `[8, 12]`。这样同一 pure-Muon lifecycle 同时覆盖 pinned Muon Newton-Schulz 的 `rows > cols -> transpose=True` 与 `rows < cols -> transpose=False` 两条矩形执行路径，同时仍不引入 bias/norm 等 Muon-ineligible 参数；显式 AdamW fallback 保留给 C4。
+
+C3 在通用 C2 lifecycle assertions 之外增加 Muon-specific evidence：
+
+1. evidence worker要求 `pytorch-optimizer==3.10.0`，并记录真实 provider class；
+2. production routing 必须恰好产生两个 Muon profile 的 `primary` matrix assignments，shape 为 `[12, 8]` 与 `[8, 12]`，`fallback_count == 0`，并显式记录 transpose true/false coverage；
+3. CompositeOptimizer 必须只有一个 `Muon` child，所有 provider param group 都必须 `use_muon=True`；
+4. fresh optimizer state 必须为空，Muon group step从 0 开始；
+5. accumulation>1 的非同步 microstep不得创建 momentum state、推进 group step、修改参数或推进 scheduler；
+6. synchronized Muon step后两个 routed parameters 都必须建立 `momentum_buffer`，state parameter count 必须等于 routed parameter count，不得出现 provider内部 AdamW path的 `exp_avg` / `exp_avg_sq`；
+7. Muon step counter读取 provider真实的 `param_groups[*]["step"]`，而不是沿用 AdamW per-parameter step semantics；
+8. optimizer state仍记录真实 tensor dtype/schema/fingerprint，不把 momentum state dtype写成 production ABI；
+9. train/save handoff记录 provider、routing、Muon qualification-family contract、Muon path、execution identity/signature与 model/optimizer/scheduler evidence；
+10. fresh resume必须先证明新 Muon state为空，再 load checkpoint；load后 provider/routing/qualification-family/path/state fingerprint必须与 handoff一致，group step恢复到 1，随后第二 logical step推进到 2。
+
+C3 v1 将当前 DTS production `MUON_ARGUMENTS` 视为同一个 pure-Muon execution/state family，而不是把 reference run 的一组具体数值误解为唯一允许配置。该 family 当前包括 `momentum`、`weight_decay`、`weight_decouple`、`nesterov`、`ns_steps`、`ns_coeffs` 与 `use_adjusted_lr`：这些参数可以改变算法数值行为，但当前不会改变 provider class、`use_muon=True` ownership、`momentum_buffer` state family、external scheduler ownership、checkpoint topology model或 distributed/fallback execution family。
+
+tooling 中的 `MUON_FULL_BF16_ARGUMENT_FAMILY` 必须通过 host test 与 production `MUON_ARGUMENTS` exact equality。C3 reference policy仍显式提供当前 family 的全部参数，并从真实 `session.runtime_spec.optimizers[0].optimizer_arguments` 生成 `dts.parameter-policy.muon-full-bf16-qualification-family` evidence，记录 provider、argument family 与 canonical reference arguments。任何未来 production Muon argument surface 变化都必须先使 host CI fail closed，再显式判断该参数是否仍属于已有 C3 execution/state family；如果新参数会改变 provider、state topology、fallback、distributed/fused/foreach 等 execution path，则必须增加新的 blocker/evidence，不能静默继承旧 qualification。
+
+C3 host/runtime CI同时增加：
+
+- real pinned Muon + CompositeOptimizer/CompositeLRScheduler + Accelerate accumulation=2 CPU smoke，并使用 `[12, 8]` + `[8, 12]` 两个矩形参数覆盖两种 Newton-Schulz orientation；
+- fresh two-parameter Muon optimizer state round-trip，验证 group step、两个 `momentum_buffer`、normalized `ns_coeffs` 与 parameter-state mapping；
+- tooling two-parameter state fingerprint round-trip，防止 provider state中出现跨进程不稳定表示或 multi-parameter load ordering漂移；
+- C3 Muon argument-family 与 production `MUON_ARGUMENTS` exact-parity host contract；
+- Muon bundle的 absent/incomplete/fail/pass contract；
+- AdamW 与 Muon evidence bundles additive coexistence source contract。
+
+C3 source closeout仍保持：
+
+```text
+Muon full-BF16 production qualification  = pending
+AdamW full-BF16 production qualification = pending
+all backend full-BF16 qualification       = pending/unsupported
+```
+
+真实 BF16/CUDA Muon evidence仍与 C1/C2 一样留到 final qualification exact-head candidate执行；CPU smoke只证明 integration/state semantics。C4 再单独验证 Muon eligible parameters与 Muon-ineligible parameters同时存在时，显式 Muon + AdamW fallback 的 multi-child ownership、scheduler与checkpoint lifecycle。
+
 ## Phase D — backend feature qualification
 
 新增：
