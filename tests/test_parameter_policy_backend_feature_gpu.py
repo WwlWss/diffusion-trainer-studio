@@ -30,7 +30,7 @@ def _case(root: Path) -> dict:
             "python",
             "fresh.py",
             "--max_train_steps",
-            "1",
+            "2",
             "--save_every_n_steps",
             "1",
             "--save_state",
@@ -226,7 +226,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             )
         self.assertEqual(len(loaded), 1)
 
-    def test_qualification_commands_require_one_step_then_second_step(self):
+    def test_qualification_commands_keep_two_step_scheduler_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _case(temp)
@@ -234,14 +234,14 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 "python",
                 "fresh.py",
                 "--max_train_steps",
-                "2",
+                "1",
                 "--save_every_n_steps",
                 "1",
                 "--save_state",
             ]
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "--max_train_steps exactly once to '1'",
+                "--max_train_steps exactly once to '2'",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
