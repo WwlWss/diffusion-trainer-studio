@@ -346,12 +346,25 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("def _run_muon_logical_step(", source)
         self.assertIn("def _muon_train_save(", source)
         self.assertIn("def _muon_resume_second_step(", source)
-        self.assertIn("torch.nn.Linear(8, 8, bias=False)", source)
+        self.assertIn("torch.nn.Linear(8, 12, bias=False)", source)
+        self.assertIn("torch.nn.Linear(12, 8, bias=False)", source)
+        self.assertIn('"matrix_shapes"', source)
+        self.assertIn('"covers_transpose_true"', source)
+        self.assertIn('"covers_transpose_false"', source)
         self.assertIn('"fallback_count": sum(', source)
+        self.assertIn('"state_parameter_count"', source)
         self.assertIn('"internal_adamw_state_present"', source)
         self.assertIn('"momentum_buffer"', source)
         self.assertIn('"exp_avg"', source)
         self.assertIn('"use_muon"', source)
+        self.assertIn("def _muon_qualification_contract(", source)
+        self.assertIn(
+            '"dts.parameter-policy.muon-full-bf16-qualification-family"',
+            source,
+        )
+        self.assertIn('"reference_arguments"', source)
+        self.assertIn('"argument_family"', source)
+        self.assertIn("MUON_FULL_BF16_ARGUMENT_FAMILY", source)
         self.assertIn('_PINNED_MUON_PROVIDER_VERSION = "3.10.0"', source)
 
     def test_muon_evidence_does_not_mutate_production_qualification(self):
