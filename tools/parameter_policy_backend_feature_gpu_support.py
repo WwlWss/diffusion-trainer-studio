@@ -31,22 +31,113 @@ def _resolved_outside_repo(path: str | Path, *, repo_root: Path, field: str) -> 
     )
 
 
-def _command_references_path(command: list[str], path: Path) -> bool:
-    expected = path.resolve(strict=False)
-    for item in command:
-        candidates = [item]
-        if "=" in item:
-            candidates.append(item.split("=", 1)[1])
-        for candidate in candidates:
-            raw = str(candidate or "").strip()
-            if not raw:
-                continue
-            try:
-                if Path(raw).expanduser().resolve(strict=False) == expected:
-                    return True
-            except (OSError, RuntimeError, ValueError):
-                continue
-    return False
+def _option_values(command: list[str], option: str) -> list[str]:
+    values: list[str] = []
+    prefix = option + "="
+    for index, item in enumerate(command):
+        if item == option:
+            if index + 1 >= len(command):
+                raise BackendFeatureGpuMatrixError(
+                    f"{option} requires an explicit value in qualification commands."
+                )
+            values.append(command[index + 1])
+        elif item.startswith(prefix):
+            values.append(item.split("=", 1)[1])
+    return values
+
+
+def _require_single_option_value(
+    command: list[str],
+    option: str,
+    *,
+    expected: str,
+    case_id: str,
+    phase: str,
+) -> None:
+    values = _option_values(command, option)
+    if values != [expected]:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must set "
+            f"{option} exactly once to {expected!r}; got {values!r}."
+        )
+
+
+def _require_resume_source(
+    command: list[str],
+    *,
+    fresh_checkpoint: Path,
+    case_id: str,
+) -> None:
+    values = _option_values(command, "--resume")
+    if len(values) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} resume_command must set "
+            "--resume exactly once."
+        )
+    try:
+        actual = Path(values[0]).expanduser().resolve(strict=False)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} has invalid --resume path."
+        ) from exc
+    if actual != fresh_checkpoint.resolve(strict=False):
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} --resume must point exactly to "
+            "fresh_checkpoint_dir."
+        )
+    if "--resume_from_huggingface" in command:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} must use local checkpoint resume "
+            "for exact-head qualification."
+        )
+
+
+def _validate_lifecycle_command_contract(
+    *,
+    case_id: str,
+    fresh_command: list[str],
+    resume_command: list[str],
+    fresh_checkpoint: Path,
+) -> None:
+    if _option_values(fresh_command, "--resume"):
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh_command must not resume."
+        )
+    _require_single_option_value(
+        fresh_command,
+        "--max_train_steps",
+        expected="1",
+        case_id=case_id,
+        phase="fresh",
+    )
+    _require_single_option_value(
+        resume_command,
+        "--max_train_steps",
+        expected="2",
+        case_id=case_id,
+        phase="resume",
+    )
+    for phase, command in (
+        ("fresh", fresh_command),
+        ("resume", resume_command),
+    ):
+        _require_single_option_value(
+            command,
+            "--save_every_n_steps",
+            expected="1",
+            case_id=case_id,
+            phase=phase,
+        )
+        if "--save_state" not in command:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command must include "
+                "--save_state so optimizer/scheduler state is checkpointed."
+            )
+    _require_resume_source(
+        resume_command,
+        fresh_checkpoint=fresh_checkpoint,
+        case_id=case_id,
+    )
 
 
 def load_backend_feature_manifest(
@@ -165,14 +256,12 @@ def load_backend_feature_manifest(
                 f"Backend feature case {case_id!r} requires distinct fresh/resume "
                 "checkpoint directories."
             )
-        if not _command_references_path(
-            commands["resume_command"],
-            fresh_checkpoint,
-        ):
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} resume_command must explicitly "
-                "reference fresh_checkpoint_dir so resume provenance is auditable."
-            )
+        _validate_lifecycle_command_contract(
+            case_id=case_id,
+            fresh_command=commands["fresh_command"],
+            resume_command=commands["resume_command"],
+            fresh_checkpoint=fresh_checkpoint,
+        )
 
         normalized.append(
             {
