@@ -389,13 +389,23 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         self.assertNotIn("exp_avg", child.state[parameter])
 
     def test_muon_accumulation_suppresses_unsynced_step_on_cpu(self):
-        model = torch.nn.Linear(8, 8, bias=False)
+        model = torch.nn.Sequential(
+            torch.nn.Linear(8, 12, bias=False),
+            torch.nn.Linear(12, 8, bias=False),
+        )
         lr = 2e-2
         spec = _compile(
             (
                 _assignment(
-                    model.weight,
-                    name="model.hidden.weight",
+                    model[0].weight,
+                    name="model.hidden.expand.weight",
+                    component="hidden",
+                    profile="muon",
+                    lr=lr,
+                ),
+                _assignment(
+                    model[1].weight,
+                    name="model.hidden.contract.weight",
                     component="hidden",
                     profile="muon",
                     lr=lr,
@@ -424,13 +434,18 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
             scheduler,
         )
         raw_scheduler = prepared_scheduler.scheduler
-        initial_weight = model.weight.detach().clone()
+        initial_weights = [
+            model[0].weight.detach().clone(),
+            model[1].weight.detach().clone(),
+        ]
         initial_scheduler_step = raw_scheduler._step_count
         sync_pattern = []
 
         for index in range(2):
             with accelerator.accumulate(model):
-                value = torch.eye(8, dtype=model.weight.dtype) * (0.5 + 0.125 * index)
+                value = torch.eye(8, dtype=model[0].weight.dtype) * (
+                    0.5 + 0.125 * index
+                )
                 loss = model(value).square().mean()
                 accelerator.backward(loss)
                 sync_pattern.append(bool(accelerator.sync_gradients))
@@ -439,7 +454,12 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
                 prepared_optimizer.zero_grad(set_to_none=True)
 
             if index == 0:
-                self.assertTrue(torch.equal(model.weight.detach(), initial_weight))
+                self.assertTrue(
+                    torch.equal(model[0].weight.detach(), initial_weights[0])
+                )
+                self.assertTrue(
+                    torch.equal(model[1].weight.detach(), initial_weights[1])
+                )
                 self.assertEqual(len(child.state), 0)
                 self.assertTrue(
                     all(int(group.get("step", 0)) == 0 for group in child.param_groups)
@@ -447,11 +467,12 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
                 self.assertEqual(raw_scheduler._step_count, initial_scheduler_step)
 
         self.assertEqual(sync_pattern, [False, True])
-        self.assertFalse(torch.equal(model.weight.detach(), initial_weight))
+        self.assertFalse(torch.equal(model[0].weight.detach(), initial_weights[0]))
+        self.assertFalse(torch.equal(model[1].weight.detach(), initial_weights[1]))
         self.assertTrue(all(group["use_muon"] is True for group in child.param_groups))
         self.assertTrue(all(group.get("step") == 1 for group in child.param_groups))
         self.assertEqual(raw_scheduler._step_count, initial_scheduler_step + 1)
-        self.assertTrue(child.state)
+        self.assertEqual(len(child.state), 2)
         for state in child.state.values():
             self.assertIn("momentum_buffer", state)
             self.assertNotIn("exp_avg", state)
@@ -460,15 +481,25 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
 
     def test_muon_state_round_trip_restores_group_step_and_coefficients(self):
         def build():
-            parameter = torch.nn.Parameter(
-                torch.arange(64, dtype=torch.float32).reshape(8, 8) / 64.0
+            expand = torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(12, 8) / 96.0
+            )
+            contract = torch.nn.Parameter(
+                torch.arange(96, dtype=torch.float32).reshape(8, 12) / 128.0
             )
             lr = 2e-2
             spec = _compile(
                 (
                     _assignment(
-                        parameter,
-                        name="model.hidden.weight",
+                        expand,
+                        name="model.hidden.expand.weight",
+                        component="hidden",
+                        profile="muon",
+                        lr=lr,
+                    ),
+                    _assignment(
+                        contract,
+                        name="model.hidden.contract.weight",
                         component="hidden",
                         profile="muon",
                         lr=lr,
@@ -487,33 +518,44 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
                 components={"hidden": _train("muon", lr)},
             )
             optimizer = build_parameter_policy_optimizer(spec)
-            return parameter, optimizer, optimizer.entries[0].optimizer
+            return (
+                (expand, contract),
+                optimizer,
+                optimizer.entries[0].optimizer,
+            )
 
-        parameter, optimizer, child = build()
-        parameter.grad = torch.ones_like(parameter)
+        parameters, optimizer, child = build()
+        for parameter in parameters:
+            parameter.grad = torch.ones_like(parameter)
         optimizer.step()
         saved = copy.deepcopy(optimizer.state_dict())
         saved_coeffs = copy.deepcopy(child.param_groups[0]["ns_coeffs"])
-        saved_momentum = child.state[parameter]["momentum_buffer"].detach().clone()
+        saved_momenta = [
+            child.state[parameter]["momentum_buffer"].detach().clone()
+            for parameter in parameters
+        ]
 
-        fresh_parameter, fresh_optimizer, fresh_child = build()
+        fresh_parameters, fresh_optimizer, fresh_child = build()
         self.assertEqual(len(fresh_child.state), 0)
         self.assertEqual(int(fresh_child.param_groups[0].get("step", 0)), 0)
         fresh_optimizer.load_state_dict(saved)
 
         self.assertEqual(fresh_child.param_groups[0]["step"], 1)
         self.assertEqual(fresh_child.param_groups[0]["ns_coeffs"], saved_coeffs)
-        self.assertIn("momentum_buffer", fresh_child.state[fresh_parameter])
-        self.assertNotIn("exp_avg", fresh_child.state[fresh_parameter])
-        self.assertNotIn("exp_avg_sq", fresh_child.state[fresh_parameter])
-        self.assertTrue(
-            torch.equal(
-                fresh_child.state[fresh_parameter]["momentum_buffer"],
-                saved_momentum,
+        self.assertEqual(len(fresh_child.state), 2)
+        for index, fresh_parameter in enumerate(fresh_parameters):
+            self.assertIn("momentum_buffer", fresh_child.state[fresh_parameter])
+            self.assertNotIn("exp_avg", fresh_child.state[fresh_parameter])
+            self.assertNotIn("exp_avg_sq", fresh_child.state[fresh_parameter])
+            self.assertTrue(
+                torch.equal(
+                    fresh_child.state[fresh_parameter]["momentum_buffer"],
+                    saved_momenta[index],
+                )
             )
-        )
 
-        fresh_parameter.grad = torch.ones_like(fresh_parameter)
+        for fresh_parameter in fresh_parameters:
+            fresh_parameter.grad = torch.ones_like(fresh_parameter)
         fresh_optimizer.step()
         self.assertEqual(fresh_child.param_groups[0]["step"], 2)
 
