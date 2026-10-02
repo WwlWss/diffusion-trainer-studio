@@ -299,6 +299,14 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
             4,
         )
 
+    def test_runner_records_redacted_command_contract(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("def _redacted_argv(", source)
+        self.assertIn("_SECRET_OPTION_MARKERS", source)
+        self.assertIn('"<redacted>"', source)
+        self.assertIn('"command_contract": _command_contract(case)', source)
+        self.assertIn('"environment_keys": sorted(case["environment"])', source)
+
     def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('field="Backend feature --manifest"', source)
