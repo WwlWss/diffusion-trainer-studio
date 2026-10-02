@@ -18,6 +18,16 @@ class ExecutionGpuMatrixError(RuntimeError):
 ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:adamw-full-bf16:v1"
 MUON_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:muon-full-bf16:v1"
 
+MUON_FULL_BF16_ARGUMENT_FAMILY = (
+    "momentum",
+    "nesterov",
+    "ns_coeffs",
+    "ns_steps",
+    "use_adjusted_lr",
+    "weight_decay",
+    "weight_decouple",
+)
+
 ADAMW_FULL_BF16_CASE_IDS = (
     "optimizer:adamw:full-bf16:accum1:v1",
     "optimizer:adamw:full-bf16:accum2:v1",
@@ -209,6 +219,7 @@ __all__ = [
     "ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID",
     "EXECUTION_GPU_CASE_PHASES",
     "ExecutionGpuMatrixError",
+    "MUON_FULL_BF16_ARGUMENT_FAMILY",
     "MUON_FULL_BF16_CASE_IDS",
     "MUON_FULL_BF16_EVIDENCE_BUNDLE_ID",
     "summarize_adamw_full_bf16_bundle",
