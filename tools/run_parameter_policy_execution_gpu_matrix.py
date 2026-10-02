@@ -1178,6 +1178,11 @@ def _c4_qualification_contract(session, provider: dict[str, str]) -> dict[str, A
     adamw_args = specs["adamw_fallback"].optimizer_arguments
     if adamw_args != {}:
         raise AssertionError("C4 AdamW fallback must use the reference empty args variant.")
+    adamw_child = _c4_child_entry(session, "adamw_fallback", "AdamW").optimizer
+    adamw_provider = (
+        f"{adamw_child.__class__.__module__}."
+        f"{adamw_child.__class__.__qualname__}"
+    )
     return {
         "schema": "dts.parameter-policy.muon-adamw-explicit-fallback-qualification-family",
         "version": 1,
@@ -1188,7 +1193,7 @@ def _c4_qualification_contract(session, provider: dict[str, str]) -> dict[str, A
             "reference_arguments": muon_args,
         },
         "adamw": {
-            "provider": "torch.optim.AdamW",
+            "provider": adamw_provider,
             "reference_arguments": adamw_args,
         },
         "learning_rates": {
