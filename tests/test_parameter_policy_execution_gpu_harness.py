@@ -501,23 +501,43 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("evidence_case_id", support)
         self.assertIn("finally:", support)
 
-    def test_execution_qualification_is_not_coupled_to_github_gpu_workflow(self):
+    def test_d0_execution_qualification_is_wired_to_gpu_workflow(self):
         workflow = GPU_WORKFLOW.read_text(encoding="utf-8")
-        self.assertNotIn(
+        self.assertIn(
             "run_parameter_policy_execution_gpu_matrix.py",
             workflow,
         )
-        self.assertNotIn(
+        self.assertIn(
             "parameter-policy-execution-gpu-matrix.json",
             workflow,
         )
+        self.assertIn("--expected-commit", workflow)
+        self.assertIn("${{ github.sha }}", workflow)
+        self.assertIn("DTS_EVIDENCE_DIR", workflow)
+        self.assertIn("runner.temp", workflow)
 
-    def test_host_review_tracks_and_compiles_execution_gpu_runner(self):
+    def test_host_review_tracks_and_compiles_execution_and_backend_feature_runners(self):
         workflow = HOST_WORKFLOW.read_text(encoding="utf-8")
         self.assertGreaterEqual(
             workflow.count("tools/run_parameter_policy_execution_gpu_matrix.py"),
             2,
         )
+        self.assertGreaterEqual(
+            workflow.count("tools/run_parameter_policy_backend_feature_gpu_matrix.py"),
+            2,
+        )
+        self.assertGreaterEqual(
+            workflow.count("tools/parameter_policy_backend_feature_gpu_support.py"),
+            2,
+        )
+
+    def test_d0_runner_emits_shared_optimizer_promotion_summary(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        support = SUPPORT.read_text(encoding="utf-8")
+        self.assertIn("summarize_shared_full_bf16_promotion", source)
+        self.assertIn('evidence["shared_optimizer_promotion"] = promotion', source)
+        self.assertIn("SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID", support)
+        self.assertIn("phase-d0:shared-adamw-muon-full-bf16:v1", support)
 
     def test_runner_remains_standalone_provider_independent(self):
         source = RUNNER.read_text(encoding="utf-8")
