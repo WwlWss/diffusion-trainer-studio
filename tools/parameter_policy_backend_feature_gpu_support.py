@@ -107,7 +107,7 @@ def _validate_lifecycle_command_contract(
     _require_single_option_value(
         fresh_command,
         "--max_train_steps",
-        expected="1",
+        expected="2",
         case_id=case_id,
         phase="fresh",
     )
