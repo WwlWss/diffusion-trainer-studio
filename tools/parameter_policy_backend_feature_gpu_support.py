@@ -266,6 +266,17 @@ def load_backend_feature_manifest(
                 "a string mapping."
             )
 
+        forbidden_environment = sorted(
+            key
+            for key in environment
+            if key.upper() in {"PATH", "PYTHONHOME", "PYTHONPATH"}
+        )
+        if forbidden_environment:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} may not override Python/runtime "
+                f"resolution environment keys: {forbidden_environment!r}."
+            )
+
         cwd_raw = case.get("cwd")
         cwd_path = (
             repo_root.resolve(strict=False)
