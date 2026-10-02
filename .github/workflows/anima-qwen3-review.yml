@@ -113,6 +113,7 @@ on:
       - "Dockerfile-for-Mainland-China"
       - ".dockerignore"
       - ".github/workflows/anima-qwen3-review.yml"
+      - ".github/workflows/parameter-policy-gpu-matrix.yml"
 
 jobs:
   validate:
