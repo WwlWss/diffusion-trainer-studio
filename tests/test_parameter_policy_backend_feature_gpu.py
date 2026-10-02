@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -52,7 +53,34 @@ def _case(root: Path) -> dict:
     }
 
 
+def _signature(value: object) -> str:
+    canonical = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def _checkpoint(train_type: str = "flux-finetune") -> dict:
+    scheduler_identity = {
+        "schema": "dts.parameter-policy.scheduler-identity",
+        "version": 1,
+        "provider": "sd-scripts.get_scheduler_fix",
+    }
+    execution_identity = {
+        "schema": "dts.parameter-policy.execution-identity",
+        "version": 1,
+        "train_type": train_type,
+        "features": {
+            "full_bf16": {
+                "mixed_precision": "bf16",
+                "trainable_parameter_dtype": "bfloat16",
+            }
+        },
+    }
     return {
         "version": 2,
         "train_type": train_type,
@@ -68,8 +96,8 @@ def _checkpoint(train_type: str = "flux-finetune") -> dict:
                 "topology_fingerprint": "optimizer",
             }
         ],
-        "scheduler_identity": {"schema": "scheduler"},
-        "scheduler_signature": "scheduler-signature",
+        "scheduler_identity": scheduler_identity,
+        "scheduler_signature": _signature(scheduler_identity),
         "schedulers": [
             {
                 "profile_name": "main",
@@ -78,18 +106,8 @@ def _checkpoint(train_type: str = "flux-finetune") -> dict:
                 "topology_fingerprint": "scheduler-topology",
             }
         ],
-        "execution_identity": {
-            "schema": "dts.parameter-policy.execution-identity",
-            "version": 1,
-            "train_type": train_type,
-            "features": {
-                "full_bf16": {
-                    "mixed_precision": "bf16",
-                    "trainable_parameter_dtype": "bfloat16",
-                }
-            },
-        },
-        "execution_signature": "execution-signature",
+        "execution_identity": execution_identity,
+        "execution_signature": _signature(execution_identity),
     }
 
 
@@ -322,6 +340,31 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
         with self.assertRaisesRegex(
             BackendFeatureGpuMatrixError,
             "full-BF16 contract",
+        ):
+            validate_full_bf16_checkpoint_manifest(
+                payload,
+                train_type="flux-finetune",
+                manifest_version=2,
+            )
+
+    def test_identity_signatures_must_match_their_payloads(self):
+        payload = _checkpoint()
+        payload["execution_signature"] = "wrong"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "execution_signature does not match",
+        ):
+            validate_full_bf16_checkpoint_manifest(
+                payload,
+                train_type="flux-finetune",
+                manifest_version=2,
+            )
+
+        payload = _checkpoint()
+        payload["scheduler_signature"] = "wrong"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "scheduler_signature does not match",
         ):
             validate_full_bf16_checkpoint_manifest(
                 payload,
