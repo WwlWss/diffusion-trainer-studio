@@ -194,7 +194,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "resume.py",
+                "tools/run_parameter_policy_gpu_matrix.py",
                 "--max_train_steps",
                 "2",
                 "--save_every_n_steps",
@@ -216,7 +216,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "resume.py",
+                "tools/run_parameter_policy_gpu_matrix.py",
                 f"--resume={case['fresh_checkpoint_dir']}",
                 "--max_train_steps=2",
                 "--save_every_n_steps=1",
@@ -234,7 +234,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["fresh_command"] = [
                 "python",
-                "fresh.py",
+                "tools/run_parameter_policy_gpu_matrix.py",
                 "--max_train_steps",
                 "1",
                 "--save_every_n_steps",
@@ -255,7 +255,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "resume.py",
+                "tools/run_parameter_policy_gpu_matrix.py",
                 "--resume",
                 case["fresh_checkpoint_dir"],
                 "--max_train_steps",
