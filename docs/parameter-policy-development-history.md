@@ -3129,9 +3129,9 @@ C4 authoritative evidence新增以下 invariants：
 2. actual Muon child parameter IDs必须与 Muon primary routing IDs完全相等，actual AdamW child IDs必须与 explicit fallback routing IDs完全相等；两 child physical ownership交集为空，并且并集等于全部 trainable parameter IDs；
 3. evidence handoff只持久化 canonical ownership names，不持久化跨 fresh Python process不稳定的 `id(parameter)`；
 4. route/profile-specific parameter fingerprints分别记录 `muon` 与 `adamw_fallback` 参数，synchronized logical step后四个 trainable parameter都必须真实变化，不能只靠 aggregate model hash判断两个 child都执行；
-5. 每个 trainable parameter都必须产生 finite/nonzero gradient；
-6. Muon child同步 step后两个 weights均产生 `momentum_buffer`，不得出现 `exp_avg` / `exp_avg_sq`；
-7. explicit AdamW child同步 step后两个 biases均产生 `step/exp_avg/exp_avg_sq`，step counters分别从 1推进到 fresh-resume后的 2；
+5. 每个 trainable parameter都必须产生 finite/nonzero gradient；每次 optimizer/scheduler step后还必须递归审计 routed parameter、Composite optimizer state与scheduler state中的所有 tensor evidence仍为 finite，防止 full-BF16 step产生 NaN/Inf却仅凭 hash/counter变化假通过；
+6. Muon child actual provider class必须与 pinned `pytorch-optimizer==3.10.0` resolver记录的 provider class完全一致；同步 step后两个 weights均产生 `momentum_buffer`，不得出现 `exp_avg` / `exp_avg_sq`；
+7. Muon group step与 explicit AdamW per-parameter step必须严格解析为 non-negative integral counters，拒绝 bool、fractional或负值；AdamW child同步 step后两个 biases均产生 `step/exp_avg/exp_avg_sq`，step counters分别从 1推进到 fresh-resume后的 2；
 8. accumulation=2的第一 physical microstep必须同时 suppress两个 child：所有 routed parameters、两个 optimizer states、两个 external child schedulers与 Composite scheduler均不得推进；
 9. C4 是第一次 shared full-BF16 evidence同时运行两个 external child schedulers；必须验证每个 scheduler attached到对应 child optimizer、两个 scheduler step/epoch保持一致，并保留 profile LR `muon=2e-2` / `adamw_fallback=1e-2`；
 10. train/save handoff记录 routing、canonical ownership、qualification-family、execution identity/signature、scheduler identity/signature、profile parameter evidence、Composite optimizer/scheduler fingerprints、Muon/AdamW child state与per-profile scheduler evidence；
