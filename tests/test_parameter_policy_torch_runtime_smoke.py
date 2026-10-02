@@ -593,18 +593,24 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
 
         muon = children["muon"]
         adamw = children["adamw_fallback"]
+        self.assertIs(muon.__class__, pytorch_optimizer.Muon)
         self.assertEqual(len(muon.state), 2)
         self.assertEqual(len(adamw.state), 2)
         self.assertTrue(all(group["use_muon"] is True for group in muon.param_groups))
         self.assertTrue(all(group.get("step") == 1 for group in muon.param_groups))
+        for parameter in model.parameters():
+            self.assertTrue(torch.isfinite(parameter).all())
         for state in muon.state.values():
             self.assertIn("momentum_buffer", state)
             self.assertNotIn("exp_avg", state)
             self.assertNotIn("exp_avg_sq", state)
+            self.assertTrue(torch.isfinite(state["momentum_buffer"]).all())
         for state in adamw.state.values():
             self.assertIn("step", state)
             self.assertIn("exp_avg", state)
             self.assertIn("exp_avg_sq", state)
+            self.assertTrue(torch.isfinite(state["exp_avg"]).all())
+            self.assertTrue(torch.isfinite(state["exp_avg_sq"]).all())
             step = state["step"]
             if isinstance(step, torch.Tensor):
                 step = step.item()
@@ -720,8 +726,17 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         fresh_children = {
             entry.profile_name: entry.optimizer for entry in fresh_optimizer.entries
         }
+        self.assertIs(
+            fresh_children["muon"].__class__,
+            pytorch_optimizer.Muon,
+        )
         self.assertEqual(len(fresh_children["muon"].state), 2)
         self.assertEqual(len(fresh_children["adamw_fallback"].state), 2)
+        for state in fresh_children["muon"].state.values():
+            self.assertTrue(torch.isfinite(state["momentum_buffer"]).all())
+        for state in fresh_children["adamw_fallback"].state.values():
+            self.assertTrue(torch.isfinite(state["exp_avg"]).all())
+            self.assertTrue(torch.isfinite(state["exp_avg_sq"]).all())
         self.assertEqual(
             fresh_scheduler.state_dict()["step_count"],
             saved_scheduler["step_count"],
