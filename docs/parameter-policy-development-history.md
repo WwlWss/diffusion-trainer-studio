@@ -3159,33 +3159,135 @@ all backend full-BF16 qualification       = pending/unsupported
 
 ## Phase D — backend feature qualification
 
-新增：
-
-- `tools/run_parameter_policy_backend_feature_gpu_matrix.py`
-
-按 backend family 分 PR，但状态按 backend 单独切换。
-
-推荐顺序：
-
-1. `sdxl-finetune` / `flux-finetune`
-2. `sdxl-lora` / `flux-lora` / `chroma-lora`
-3. `sd3-lora`
-4. `anima-lora`
-5. `anima-finetune` + Stage 1 Muon/AdamW reference
-6. `sd-lora`
-7. `sd-dreambooth` 单独实现/决策
-
-顺序不是 capability ranking，只是为了先覆盖更明确的现有 BF16 trainer path。
-
-每个 PR：
+Phase D压缩为三个主要开发阶段：
 
 ```text
-pending → qualified
-→ exact-head feature GPU matrix
-→ source-level review
-→ evidence artifact
-→ PASS 才 merge
+D0 — qualification infrastructure + shared AdamW/Muon CUDA promotion
+D1 — all non-Anima backend qualification
+D2 — Anima LoRA/Full + final UI closure
 ```
+
+### D0 — qualification infrastructure + shared AdamW/Muon promotion
+
+D0 candidate将 `AdamW` 与 `Muon` 的 production full-BF16 qualification row切为 `qualified`，二者共同引用：
+
+- `phase-d0:shared-adamw-muon-full-bf16:v1`
+
+这不是单独复用某个 C2/C3 bundle，而是要求同一 exact head上的完整 C1-C4 matrix全部 PASS：
+
+- `infra:cuda-bf16-capability:v1`
+- `infra:full-bf16-session:v1`
+- AdamW accum1 / accum2
+- Muon accum1 / accum2
+- Muon + AdamW explicit fallback accum1 / accum2
+
+`summarize_shared_full_bf16_promotion()` 同时验证：
+
+- 8个 required cases全部 PASS；
+- AdamW/Muon source rows均为 `qualified` 且 evidence id完全一致；
+- 其它 optimizer没有被 D0意外 promotion；
+- 所有 backend仍保持 `pending/unsupported`，D0不开放真实 backend训练能力。
+
+Phase C原 bundle继续保持 `promotion_eligible=false`；只有 D0 shared promotion summary可以得到 `promotion_eligible=true`。
+
+D0 将 strict C1-C4 execution runner正式接入 `.github/workflows/parameter-policy-gpu-matrix.yml`。所有 GPU evidence统一写入 `$RUNNER_TEMP/dts-parameter-policy-evidence`，避免旧 runner输出污染 repo clean-tree contract。运行顺序固定为：
+
+```text
+checkout exact head
+→ install pinned runtime
+→ strict C1-C4 execution qualification
+→ legacy synthetic CUDA regression
+→ optional legacy all-backend regression
+→ optional Phase D backend-feature runner
+→ upload external evidence directory
+```
+
+D0同时新增：
+
+- `tools/parameter_policy_backend_feature_gpu_support.py`
+- `tools/run_parameter_policy_backend_feature_gpu_matrix.py`
+
+backend-feature runner在 torch/runtime import之前必须验证：
+
+- `--expected-commit` 与 `HEAD` 完全相等；
+- repo tracked/untracked workspace完全 clean；
+- manifest与output均位于 repo之外。
+
+manifest v1允许按 case选择，不再强制一次覆盖全部10个 backend。每个 case至少包含：
+
+```text
+case_id
+train_type
+feature=full_bf16
+fresh_command
+resume_command
+cwd/environment
+fresh_checkpoint_dir
+resume_checkpoint_dir
+```
+
+两个 checkpoint目录必须不同且位于 repo之外。runner要求 fresh命令真正生成 checkpoint-1，resume命令从fresh state继续并生成 checkpoint-2；两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
+
+- policy hash；
+- runtime topology fingerprint；
+- trainable/frozen components；
+- optimizer topology；
+- scheduler identity/signature；
+- full-BF16 execution identity/signature。
+
+D0 backend-feature runner只建立 D1 execution infrastructure，所有 case仍输出：
+
+```text
+backend_qualification_eligible=false
+production_qualification_mutated=false
+```
+
+不会临时 lease、修改或绕过 production backend qualification。
+
+D0 merge gate：
+
+```text
+host CI PASS
+→ strict source review
+→ same exact SHA real-CUDA C1-C4 PASS
+→ shared_optimizer_promotion.status=pass
+→ verification review
+→ PASS才merge
+```
+
+D0完成后预期 production状态：
+
+```text
+AdamW full-BF16 = qualified
+Muon  full-BF16 = qualified
+
+all backends = pending / unsupported
+```
+
+### D1 — non-Anima backend qualification
+
+D1使用 D0 backend-feature runner一次处理非Anima backend，各 backend保持独立 evidence bundle/status；某一 backend失败时只保持该 row为 pending，不阻塞其它已通过 backend。目标包括：
+
+- `sdxl-finetune`
+- `flux-finetune`
+- `sdxl-lora`
+- `flux-lora`
+- `chroma-lora`
+- `sd3-lora`
+- `sd-lora`
+
+`sd-dreambooth`继续保持 `unsupported`，除非后续单独实现等价 full-BF16 cast contract。
+
+### D2 — Anima + final UI closure
+
+D2处理：
+
+- `anima-lora`
+- `anima-finetune`
+- Anima Full Stage-1 Muon + AdamW explicit fallback reference topology；
+- final GUI → Preview → Start → checkpoint → fresh resume → second step positive path。
+
+Anima Stage-1 reference默认保持 Qwen3 frozen；未单独 qualification的 Qwen3 training variant继续 fail-closed。
 
 ## Phase E — optimizer expansion
 
