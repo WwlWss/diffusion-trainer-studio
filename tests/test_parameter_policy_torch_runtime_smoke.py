@@ -28,6 +28,8 @@ if _RUNTIME_DEPS_AVAILABLE:
         RoutingAssignment,
         RoutingPlan,
         RoutingStats,
+        build_parameter_routing_plan,
+        scan_parameter_roots,
     )
 
 
@@ -396,6 +398,88 @@ class ParameterPolicyTorchRuntimeSmokeTests(unittest.TestCase):
         self.assertFalse(torch.equal(before, parameter.detach()))
         self.assertIn("momentum_buffer", child.state[parameter])
         self.assertNotIn("exp_avg", child.state[parameter])
+
+    def test_muon_adamw_explicit_fallback_uses_real_production_routing(self):
+        model = torch.nn.Module()
+        model.double_blocks = torch.nn.ModuleList(
+            [
+                torch.nn.Linear(8, 12, bias=True),
+                torch.nn.Linear(12, 8, bias=True),
+            ]
+        )
+        policy = {
+            "version": 1,
+            "optimizer_profiles": {
+                "muon": {
+                    "type": "Muon",
+                    "args": {
+                        "ns_steps": 2,
+                        "ns_coeffs": "original",
+                        "weight_decay": 0.0,
+                    },
+                },
+                "adamw_fallback": {
+                    "type": "AdamW",
+                    "args": {},
+                },
+            },
+            "components": {
+                "transformer.double_stream": {
+                    "train": True,
+                    "optimizer_profile": "muon",
+                    "learning_rate": 2e-2,
+                    "fallback_optimizer_profile": "adamw_fallback",
+                    "fallback_learning_rate": 1e-2,
+                }
+            },
+        }
+        descriptors = scan_parameter_roots({"transformer": model})
+        plan = build_parameter_routing_plan(
+            policy,
+            train_type="flux-finetune",
+            effective_config={},
+            descriptors=descriptors,
+        )
+        self.assertTrue(plan.is_valid)
+        rows = {
+            assignment.canonical_name: (
+                assignment.route_kind,
+                assignment.optimizer_profile,
+                assignment.parameter_class,
+                tuple(assignment.parameter.shape),
+            )
+            for assignment in plan.assignments
+            if assignment.route_kind in {"primary", "fallback"}
+        }
+        self.assertEqual(
+            rows,
+            {
+                "transformer.double_blocks.0.weight": (
+                    "primary",
+                    "muon",
+                    "matrix_weight",
+                    (12, 8),
+                ),
+                "transformer.double_blocks.0.bias": (
+                    "fallback",
+                    "adamw_fallback",
+                    "bias",
+                    (12,),
+                ),
+                "transformer.double_blocks.1.weight": (
+                    "primary",
+                    "muon",
+                    "matrix_weight",
+                    (8, 12),
+                ),
+                "transformer.double_blocks.1.bias": (
+                    "fallback",
+                    "adamw_fallback",
+                    "bias",
+                    (8,),
+                ),
+            },
+        )
 
     def test_muon_adamw_explicit_fallback_accumulation_on_cpu(self):
         model = torch.nn.Sequential(
