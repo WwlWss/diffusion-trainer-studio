@@ -4,11 +4,13 @@ import unittest
 from unittest import mock
 
 from mikazuki import parameter_policy_execution as execution
+from mikazuki.optimizer_profiles import MUON_ARGUMENTS
 from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_CASE_IDS,
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
     MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
@@ -50,6 +52,12 @@ class ExecutionGpuCaseProtocolTests(unittest.TestCase):
                 EXECUTION_GPU_CASE_PHASES[case_id],
                 ("train_save", "resume_second_step"),
             )
+
+    def test_muon_qualification_argument_family_tracks_production_surface(self):
+        self.assertEqual(
+            frozenset(MUON_FULL_BF16_ARGUMENT_FAMILY),
+            MUON_ARGUMENTS,
+        )
 
 
 class AdamWFullBf16BundleTests(unittest.TestCase):
