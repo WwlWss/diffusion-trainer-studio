@@ -25,12 +25,25 @@ def _case(root: Path) -> dict:
         "case_id": "backend:flux-finetune:full-bf16:reference:v1",
         "train_type": "flux-finetune",
         "feature": "full_bf16",
-        "fresh_command": ["python", "fresh.py"],
+        "fresh_command": [
+            "python",
+            "fresh.py",
+            "--max_train_steps",
+            "1",
+            "--save_every_n_steps",
+            "1",
+            "--save_state",
+        ],
         "resume_command": [
             "python",
             "resume.py",
             "--resume",
             str(root / "checkpoint-1"),
+            "--max_train_steps",
+            "2",
+            "--save_every_n_steps",
+            "1",
+            "--save_state",
         ],
         "cwd": str(ROOT),
         "environment": {"DTS_TEST": "1"},
@@ -159,10 +172,18 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _case(temp)
-            case["resume_command"] = ["python", "resume.py"]
+            case["resume_command"] = [
+                "python",
+                "resume.py",
+                "--max_train_steps",
+                "2",
+                "--save_every_n_steps",
+                "1",
+                "--save_state",
+            ]
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "resume_command must explicitly reference fresh_checkpoint_dir",
+                "--resume exactly once",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
@@ -177,12 +198,74 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 "python",
                 "resume.py",
                 f"--resume={case['fresh_checkpoint_dir']}",
+                "--max_train_steps=2",
+                "--save_every_n_steps=1",
+                "--save_state",
             ]
             loaded = load_backend_feature_manifest(
                 self._write(temp, [case]),
                 repo_root=ROOT,
             )
         self.assertEqual(len(loaded), 1)
+
+    def test_qualification_commands_require_one_step_then_second_step(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["fresh_command"] = [
+                "python",
+                "fresh.py",
+                "--max_train_steps",
+                "2",
+                "--save_every_n_steps",
+                "1",
+                "--save_state",
+            ]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--max_train_steps exactly once to '1'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["resume_command"] = [
+                "python",
+                "resume.py",
+                "--resume",
+                case["fresh_checkpoint_dir"],
+                "--max_train_steps",
+                "1",
+                "--save_every_n_steps",
+                "1",
+                "--save_state",
+            ]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--max_train_steps exactly once to '2'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_qualification_commands_require_state_save_each_step(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["fresh_command"].remove("--save_state")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--save_state",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
 
     def test_checkpoint_directories_must_be_distinct_and_external(self):
         with tempfile.TemporaryDirectory() as temp_dir:
