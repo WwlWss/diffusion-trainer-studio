@@ -13,8 +13,11 @@ from tools.parameter_policy_execution_gpu_support import (
     MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
     MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS,
+    MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
     summarize_muon_full_bf16_bundle,
+    summarize_muon_adamw_fallback_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -48,6 +51,17 @@ class ExecutionGpuCaseProtocolTests(unittest.TestCase):
             "phase-c:muon-full-bf16:v1",
         )
         for case_id in MUON_FULL_BF16_CASE_IDS:
+            self.assertEqual(
+                EXECUTION_GPU_CASE_PHASES[case_id],
+                ("train_save", "resume_second_step"),
+            )
+
+    def test_c4_explicit_fallback_bundle_and_phases_are_stable(self):
+        self.assertEqual(
+            MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            "phase-c:muon-adamw-explicit-fallback-full-bf16:v1",
+        )
+        for case_id in MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS:
             self.assertEqual(
                 EXECUTION_GPU_CASE_PHASES[case_id],
                 ("train_save", "resume_second_step"),
@@ -148,6 +162,71 @@ class MuonFullBf16BundleTests(unittest.TestCase):
         )
 
 
+class MuonAdamWExplicitFallbackFullBf16BundleTests(unittest.TestCase):
+    def test_bundle_pass_requires_both_cases(self):
+        rows = [
+            {"case_id": case_id, "status": "pass"}
+            for case_id in MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS
+        ]
+        bundle = summarize_muon_adamw_fallback_full_bf16_bundle(rows)
+        self.assertEqual(bundle["status"], "pass")
+        self.assertEqual(bundle["scope"], "optimizer_topology")
+        self.assertEqual(
+            bundle["topology"],
+            "muon_primary_adamw_explicit_fallback",
+        )
+        self.assertEqual(bundle["optimizers"], ["Muon", "AdamW"])
+        self.assertEqual(
+            bundle["prerequisite_bundles"],
+            [
+                ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            ],
+        )
+        self.assertTrue(bundle["topology_evidence_complete"])
+        self.assertFalse(bundle["promotion_eligible"])
+        self.assertFalse(bundle["optimizer_qualification_eligible"])
+
+    def test_bundle_is_incomplete_when_only_one_case_is_present(self):
+        bundle = summarize_muon_adamw_fallback_full_bf16_bundle(
+            [
+                {
+                    "case_id": MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[0],
+                    "status": "pass",
+                }
+            ]
+        )
+        self.assertEqual(bundle["status"], "incomplete")
+        self.assertEqual(
+            bundle["missing_cases"],
+            [MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[1]],
+        )
+        self.assertFalse(bundle["topology_evidence_complete"])
+
+    def test_bundle_fails_when_required_case_fails(self):
+        bundle = summarize_muon_adamw_fallback_full_bf16_bundle(
+            [
+                {
+                    "case_id": MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[0],
+                    "status": "pass",
+                },
+                {
+                    "case_id": MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[1],
+                    "status": "fail",
+                },
+            ]
+        )
+        self.assertEqual(bundle["status"], "fail")
+        self.assertFalse(bundle["topology_evidence_complete"])
+
+    def test_bundle_is_absent_without_c4_cases(self):
+        self.assertIsNone(
+            summarize_muon_adamw_fallback_full_bf16_bundle(
+                [{"case_id": MUON_FULL_BF16_CASE_IDS[0], "status": "pass"}]
+            )
+        )
+
+
 class TemporaryExecutionQualificationTests(unittest.TestCase):
     def test_pending_rows_are_leased_then_restored_exactly(self):
         backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
@@ -203,6 +282,47 @@ class TemporaryExecutionQualificationTests(unittest.TestCase):
             self.assertEqual(
                 execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"],
                 adamw_before,
+            )
+            self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
+
+        self.assertEqual(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"],
+            backend_before,
+        )
+        self.assertEqual(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"],
+            muon_before,
+        )
+        self.assertEqual(
+            execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"],
+            adamw_before,
+        )
+
+    def test_muon_adamw_pending_lease_restores_all_rows_exactly(self):
+        backend_before = execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"]
+        muon_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"]
+        adamw_before = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"]
+
+        with temporary_execution_qualification(
+            backend="flux-finetune",
+            optimizers=("Muon", "AdamW"),
+            evidence_case_id="test:c4-lease",
+        ) as lease:
+            self.assertEqual(
+                execution.FULL_BF16_BACKEND_QUALIFICATIONS["flux-finetune"].status,
+                "qualified",
+            )
+            self.assertEqual(
+                execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["Muon"].status,
+                "qualified",
+            )
+            self.assertEqual(
+                execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS["AdamW"].status,
+                "qualified",
+            )
+            self.assertEqual(
+                [row["name"] for row in lease["records"]],
+                ["flux-finetune", "Muon", "AdamW"],
             )
             self.assertTrue(all(row["lease_applied"] for row in lease["records"]))
 
