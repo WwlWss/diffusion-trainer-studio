@@ -88,6 +88,8 @@ def _checkpoint(train_type: str = "flux-finetune") -> dict:
         "runtime_topology_fingerprint": "topology",
         "trainable_components": ["transformer.double_stream"],
         "frozen_components": ["transformer.single_stream"],
+        "trainable_parameter_tensors": 2,
+        "trainable_parameter_elements": 96,
         "optimizer_profiles": {"main": "AdamW"},
         "optimizers": [
             {
@@ -391,6 +393,16 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
                         train_type="flux-finetune",
                         manifest_version=2,
                     )
+
+    def test_fresh_resume_trainable_counts_must_match(self):
+        fresh = _checkpoint()
+        resumed = _checkpoint()
+        resumed["trainable_parameter_elements"] += 1
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "trainable_parameter_elements",
+        ):
+            compare_backend_checkpoint_contracts(fresh, resumed)
 
     def test_fresh_resume_contract_must_match(self):
         fresh = _checkpoint()
