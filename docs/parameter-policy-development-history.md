@@ -3062,26 +3062,31 @@ train_save
 → resume_second_step
 ```
 
-C3 使用独立 Flux-shaped scaffold：`Linear(8, 8, bias=False)`，只产生 `transformer.double_stream` 下的 approved hidden 2D matrix weight。这样 C3 只证明 Muon 本身，不把 bias/norm 等 Muon-ineligible 参数和显式 AdamW fallback 提前混入；Muon + AdamW fallback 保留给 C4。
+C3 使用独立 Flux-shaped scaffold：`Linear(8, 12, bias=False) -> Linear(12, 8, bias=False)`。它只产生 `transformer.double_stream` 下两个 approved hidden 2D matrix weights，shape 分别为 `[12, 8]` 与 `[8, 12]`。这样同一 pure-Muon lifecycle 同时覆盖 pinned Muon Newton-Schulz 的 `rows > cols -> transpose=True` 与 `rows < cols -> transpose=False` 两条矩形执行路径，同时仍不引入 bias/norm 等 Muon-ineligible 参数；显式 AdamW fallback 保留给 C4。
 
 C3 在通用 C2 lifecycle assertions 之外增加 Muon-specific evidence：
 
 1. evidence worker要求 `pytorch-optimizer==3.10.0`，并记录真实 provider class；
-2. production routing 必须全部为 Muon profile 的 `primary` assignment，`fallback_count == 0`；
+2. production routing 必须恰好产生两个 Muon profile 的 `primary` matrix assignments，shape 为 `[12, 8]` 与 `[8, 12]`，`fallback_count == 0`，并显式记录 transpose true/false coverage；
 3. CompositeOptimizer 必须只有一个 `Muon` child，所有 provider param group 都必须 `use_muon=True`；
 4. fresh optimizer state 必须为空，Muon group step从 0 开始；
 5. accumulation>1 的非同步 microstep不得创建 momentum state、推进 group step、修改参数或推进 scheduler；
-6. synchronized Muon step后必须出现 `momentum_buffer`，不得出现 provider内部 AdamW path的 `exp_avg` / `exp_avg_sq`；
+6. synchronized Muon step后两个 routed parameters 都必须建立 `momentum_buffer`，state parameter count 必须等于 routed parameter count，不得出现 provider内部 AdamW path的 `exp_avg` / `exp_avg_sq`；
 7. Muon step counter读取 provider真实的 `param_groups[*]["step"]`，而不是沿用 AdamW per-parameter step semantics；
 8. optimizer state仍记录真实 tensor dtype/schema/fingerprint，不把 momentum state dtype写成 production ABI；
-9. train/save handoff记录 provider、routing、Muon path、execution identity/signature与 model/optimizer/scheduler evidence；
-10. fresh resume必须先证明新 Muon state为空，再 load checkpoint；load后 provider/routing/path/state fingerprint必须与 handoff一致，group step恢复到 1，随后第二 logical step推进到 2。
+9. train/save handoff记录 provider、routing、Muon qualification-family contract、Muon path、execution identity/signature与 model/optimizer/scheduler evidence；
+10. fresh resume必须先证明新 Muon state为空，再 load checkpoint；load后 provider/routing/qualification-family/path/state fingerprint必须与 handoff一致，group step恢复到 1，随后第二 logical step推进到 2。
+
+C3 v1 将当前 DTS production `MUON_ARGUMENTS` 视为同一个 pure-Muon execution/state family，而不是把 reference run 的一组具体数值误解为唯一允许配置。该 family 当前包括 `momentum`、`weight_decay`、`weight_decouple`、`nesterov`、`ns_steps`、`ns_coeffs` 与 `use_adjusted_lr`：这些参数可以改变算法数值行为，但当前不会改变 provider class、`use_muon=True` ownership、`momentum_buffer` state family、external scheduler ownership、checkpoint topology model或 distributed/fallback execution family。
+
+tooling 中的 `MUON_FULL_BF16_ARGUMENT_FAMILY` 必须通过 host test 与 production `MUON_ARGUMENTS` exact equality。C3 reference policy仍显式提供当前 family 的全部参数，并从真实 `session.runtime_spec.optimizers[0].optimizer_arguments` 生成 `dts.parameter-policy.muon-full-bf16-qualification-family` evidence，记录 provider、argument family 与 canonical reference arguments。任何未来 production Muon argument surface 变化都必须先使 host CI fail closed，再显式判断该参数是否仍属于已有 C3 execution/state family；如果新参数会改变 provider、state topology、fallback、distributed/fused/foreach 等 execution path，则必须增加新的 blocker/evidence，不能静默继承旧 qualification。
 
 C3 host/runtime CI同时增加：
 
-- real pinned Muon + CompositeOptimizer/CompositeLRScheduler + Accelerate accumulation=2 CPU smoke；
-- fresh Muon optimizer state round-trip，验证 group step、`momentum_buffer`、normalized `ns_coeffs`；
-- tooling state fingerprint round-trip，防止 provider state中出现跨进程不稳定表示；
+- real pinned Muon + CompositeOptimizer/CompositeLRScheduler + Accelerate accumulation=2 CPU smoke，并使用 `[12, 8]` + `[8, 12]` 两个矩形参数覆盖两种 Newton-Schulz orientation；
+- fresh two-parameter Muon optimizer state round-trip，验证 group step、两个 `momentum_buffer`、normalized `ns_coeffs` 与 parameter-state mapping；
+- tooling two-parameter state fingerprint round-trip，防止 provider state中出现跨进程不稳定表示或 multi-parameter load ordering漂移；
+- C3 Muon argument-family 与 production `MUON_ARGUMENTS` exact-parity host contract；
 - Muon bundle的 absent/incomplete/fail/pass contract；
 - AdamW 与 Muon evidence bundles additive coexistence source contract。
 
