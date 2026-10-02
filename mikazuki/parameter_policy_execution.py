@@ -154,6 +154,11 @@ class ExecutionFeatureQualification:
     evidence_case_id: str | None = None
 
 
+FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID = (
+    "phase-d0:shared-adamw-muon-full-bf16:v1"
+)
+
+
 FULL_BF16_BACKEND_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
     "sd-lora": ExecutionFeatureQualification(
         "pending",
@@ -200,8 +205,9 @@ FULL_BF16_BACKEND_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
 
 FULL_BF16_OPTIMIZER_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
     "AdamW": ExecutionFeatureQualification(
-        "pending",
-        "AdamW true-BF16 Parameter Policy execution has not completed shared CUDA qualification.",
+        "qualified",
+        "AdamW true-BF16 Parameter Policy execution is qualified by the D0 shared exact-head CUDA gate.",
+        FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID,
     ),
     "AdamW8bit": ExecutionFeatureQualification(
         "pending",
@@ -252,8 +258,9 @@ FULL_BF16_OPTIMIZER_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
         "SGDScheduleFree true-BF16 Parameter Policy execution has not completed shared CUDA qualification.",
     ),
     "Muon": ExecutionFeatureQualification(
-        "pending",
-        "Muon true-BF16 Parameter Policy execution has not completed shared CUDA qualification.",
+        "qualified",
+        "Muon true-BF16 Parameter Policy execution is qualified by the D0 shared exact-head CUDA gate.",
+        FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID,
     ),
 }
 
