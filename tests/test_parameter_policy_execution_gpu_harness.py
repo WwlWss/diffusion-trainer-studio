@@ -537,7 +537,17 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn("summarize_shared_full_bf16_promotion", source)
         self.assertIn('evidence["shared_optimizer_promotion"] = promotion', source)
         self.assertIn("SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID", support)
-        self.assertIn("phase-d0:shared-adamw-muon-full-bf16:v1", support)
+        self.assertIn(
+            "execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID",
+            support,
+        )
+        production = (
+            ROOT / "mikazuki" / "parameter_policy_execution.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            "phase-d0:shared-adamw-muon-full-bf16:v1",
+            production,
+        )
 
     def test_runner_remains_standalone_provider_independent(self):
         source = RUNNER.read_text(encoding="utf-8")
