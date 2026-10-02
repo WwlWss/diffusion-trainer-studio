@@ -28,7 +28,7 @@ def _case(root: Path) -> dict:
         "feature": "full_bf16",
         "fresh_command": [
             "python",
-            "fresh.py",
+            "tools/run_parameter_policy_gpu_matrix.py",
             "--max_train_steps",
             "2",
             "--save_every_n_steps",
@@ -37,7 +37,7 @@ def _case(root: Path) -> dict:
         ],
         "resume_command": [
             "python",
-            "resume.py",
+            "tools/run_parameter_policy_gpu_matrix.py",
             "--resume",
             str(root / "checkpoint-1"),
             "--max_train_steps",
@@ -287,6 +287,49 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
+    def test_commands_must_use_exact_repo_cwd_and_entrypoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["cwd"] = str(temp)
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "cwd must be the exact qualification repository root",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            external_script = temp / "external.py"
+            external_script.write_text("pass\n", encoding="utf-8")
+            case = _case(temp)
+            case["fresh_command"][1] = str(external_script)
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "existing Python entrypoint from this repository",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_fresh_resume_must_use_same_repo_entrypoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["resume_command"][1] = "tools/run_parameter_policy_backend_gpu_matrix.py"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "same exact repository trainer entrypoint",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
     def test_checkpoint_directories_must_be_distinct_and_external(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -437,6 +480,14 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
             source.count("_assert_checkpoint_dir_absent("),
             4,
         )
+
+    def test_manifest_support_binds_commands_to_repo_entrypoint(self):
+        support = (
+            ROOT / "tools" / "parameter_policy_backend_feature_gpu_support.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("def _repo_python_entrypoint(", support)
+        self.assertIn("cwd must be the exact", support)
+        self.assertIn("same exact repository trainer entrypoint", support)
 
     def test_runner_records_redacted_command_contract(self):
         source = RUNNER.read_text(encoding="utf-8")
