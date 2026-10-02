@@ -1,0 +1,293 @@
+from __future__ import annotations
+
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+from tools.parameter_policy_backend_feature_gpu_support import (
+    BACKEND_FEATURE_EVIDENCE_SCHEMA,
+    BACKEND_FEATURE_MANIFEST_SCHEMA,
+    BackendFeatureGpuMatrixError,
+    compare_backend_checkpoint_contracts,
+    load_backend_feature_manifest,
+    validate_full_bf16_checkpoint_manifest,
+)
+
+
+ROOT = Path(__file__).resolve().parents[1]
+RUNNER = ROOT / "tools" / "run_parameter_policy_backend_feature_gpu_matrix.py"
+WORKFLOW = ROOT / ".github" / "workflows" / "parameter-policy-gpu-matrix.yml"
+
+
+def _case(root: Path) -> dict:
+    return {
+        "case_id": "backend:flux-finetune:full-bf16:reference:v1",
+        "train_type": "flux-finetune",
+        "feature": "full_bf16",
+        "fresh_command": ["python", "fresh.py"],
+        "resume_command": ["python", "resume.py"],
+        "cwd": str(ROOT),
+        "environment": {"DTS_TEST": "1"},
+        "fresh_checkpoint_dir": str(root / "checkpoint-1"),
+        "resume_checkpoint_dir": str(root / "checkpoint-2"),
+    }
+
+
+def _checkpoint(train_type: str = "flux-finetune") -> dict:
+    return {
+        "version": 2,
+        "train_type": train_type,
+        "policy_hash": "policy",
+        "runtime_topology_fingerprint": "topology",
+        "trainable_components": ["transformer.double_stream"],
+        "frozen_components": ["transformer.single_stream"],
+        "optimizer_profiles": {"main": "AdamW"},
+        "optimizers": [
+            {
+                "profile_name": "main",
+                "optimizer_type": "AdamW",
+                "topology_fingerprint": "optimizer",
+            }
+        ],
+        "scheduler_identity": {"schema": "scheduler"},
+        "scheduler_signature": "scheduler-signature",
+        "schedulers": [
+            {
+                "profile_name": "main",
+                "mode": "external",
+                "scheduler_type": "constant",
+                "topology_fingerprint": "scheduler-topology",
+            }
+        ],
+        "execution_identity": {
+            "schema": "dts.parameter-policy.execution-identity",
+            "version": 1,
+            "train_type": train_type,
+            "features": {
+                "full_bf16": {
+                    "mixed_precision": "bf16",
+                    "trainable_parameter_dtype": "bfloat16",
+                }
+            },
+        },
+        "execution_signature": "execution-signature",
+    }
+
+
+class BackendFeatureManifestTests(unittest.TestCase):
+    def _write(self, temp: Path, cases: list[dict], **overrides) -> Path:
+        payload = {
+            "schema": BACKEND_FEATURE_MANIFEST_SCHEMA,
+            "version": 1,
+            "cases": cases,
+        }
+        payload.update(overrides)
+        path = temp / "manifest.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        return path
+
+    def test_valid_partial_manifest_is_allowed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            cases = load_backend_feature_manifest(
+                self._write(temp, [_case(temp)]),
+                repo_root=ROOT,
+            )
+        self.assertEqual(len(cases), 1)
+        self.assertEqual(cases[0]["train_type"], "flux-finetune")
+        self.assertEqual(cases[0]["feature"], "full_bf16")
+
+    def test_manifest_must_live_outside_repository(self):
+        internal = ROOT / "backend-feature-manifest-test.json"
+        try:
+            internal.write_text("{}", encoding="utf-8")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "outside the repository",
+            ):
+                load_backend_feature_manifest(internal, repo_root=ROOT)
+        finally:
+            internal.unlink(missing_ok=True)
+
+    def test_duplicate_case_id_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "Duplicate",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case, dict(case)]),
+                    repo_root=ROOT,
+                )
+
+    def test_unknown_backend_and_feature_fail_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            bad_backend = _case(temp)
+            bad_backend["train_type"] = "future-backend"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "unknown train_type",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [bad_backend]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            bad_feature = _case(temp)
+            bad_feature["feature"] = "future_feature"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "feature='full_bf16'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [bad_feature]),
+                    repo_root=ROOT,
+                )
+
+    def test_checkpoint_directories_must_be_distinct_and_external(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            same = _case(temp)
+            same["resume_checkpoint_dir"] = same["fresh_checkpoint_dir"]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "distinct fresh/resume",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [same]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            internal = _case(temp)
+            internal["fresh_checkpoint_dir"] = str(ROOT / "checkpoint-1")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "outside the repository",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [internal]),
+                    repo_root=ROOT,
+                )
+
+
+class BackendFeatureCheckpointTests(unittest.TestCase):
+    def test_full_bf16_manifest_contract_passes(self):
+        payload = _checkpoint()
+        self.assertIs(
+            validate_full_bf16_checkpoint_manifest(
+                payload,
+                train_type="flux-finetune",
+                manifest_version=2,
+            ),
+            payload,
+        )
+
+    def test_wrong_manifest_version_or_execution_identity_fails(self):
+        with self.assertRaisesRegex(BackendFeatureGpuMatrixError, "version"):
+            validate_full_bf16_checkpoint_manifest(
+                _checkpoint(),
+                train_type="flux-finetune",
+                manifest_version=3,
+            )
+
+        payload = _checkpoint()
+        payload["execution_identity"]["features"]["full_bf16"][
+            "trainable_parameter_dtype"
+        ] = "float32"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "full-BF16 contract",
+        ):
+            validate_full_bf16_checkpoint_manifest(
+                payload,
+                train_type="flux-finetune",
+                manifest_version=2,
+            )
+
+    def test_missing_scheduler_or_execution_identity_fails_closed(self):
+        for key in (
+            "scheduler_identity",
+            "scheduler_signature",
+            "execution_identity",
+            "execution_signature",
+        ):
+            with self.subTest(key=key):
+                payload = _checkpoint()
+                del payload[key]
+                with self.assertRaisesRegex(
+                    BackendFeatureGpuMatrixError,
+                    "missing required",
+                ):
+                    validate_full_bf16_checkpoint_manifest(
+                        payload,
+                        train_type="flux-finetune",
+                        manifest_version=2,
+                    )
+
+    def test_fresh_resume_contract_must_match(self):
+        fresh = _checkpoint()
+        resumed = _checkpoint()
+        compare_backend_checkpoint_contracts(fresh, resumed)
+
+        resumed = _checkpoint()
+        resumed["runtime_topology_fingerprint"] = "different"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "runtime_topology_fingerprint",
+        ):
+            compare_backend_checkpoint_contracts(fresh, resumed)
+
+
+class BackendFeatureRunnerSourceTests(unittest.TestCase):
+    def test_runner_checks_exact_clean_head_before_torch_import(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('"--expected-commit"', source)
+        self.assertIn('"status", "--porcelain=v1", "--untracked-files=all"', source)
+        self.assertLess(
+            source.index("_BOOTSTRAP_COMMIT = _assert_clean_head"),
+            source.index("import torch"),
+        )
+
+    def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('field="Backend feature --manifest"', source)
+        self.assertIn('field="Backend feature --output"', source)
+        self.assertIn('"fresh_checkpoint_dir"', source)
+        self.assertIn('"resume_checkpoint_dir"', source)
+        self.assertIn("compare_backend_checkpoint_contracts", source)
+
+    def test_runner_never_promotes_or_bypasses_production_qualification(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertNotIn("FULL_BF16_BACKEND_QUALIFICATIONS", source)
+        self.assertNotIn("FULL_BF16_OPTIMIZER_QUALIFICATIONS", source)
+        self.assertNotIn("temporary_execution_qualification", source)
+        self.assertNotIn("DTS_FULL_BF16_BYPASS", source)
+        self.assertIn('"backend_qualification_eligible": False', source)
+        self.assertIn('"production_qualification_mutated": False', source)
+
+    def test_workflow_uses_external_evidence_directory(self):
+        workflow = WORKFLOW.read_text(encoding="utf-8")
+        self.assertIn("DTS_EVIDENCE_DIR", workflow)
+        self.assertIn("runner.temp", workflow)
+        self.assertIn("run_parameter_policy_execution_gpu_matrix.py", workflow)
+        self.assertIn("run_parameter_policy_backend_feature_gpu_matrix.py", workflow)
+        self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
+        self.assertIn("parameter-policy-backend-feature-gpu-matrix.json", workflow)
+
+    def test_evidence_schema_is_stable(self):
+        self.assertEqual(
+            BACKEND_FEATURE_EVIDENCE_SCHEMA,
+            "dts.parameter-policy.backend-feature-gpu-matrix",
+        )
+
+
+if __name__ == "__main__":
+    unittest.main()
