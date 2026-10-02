@@ -266,6 +266,7 @@ from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
     ExecutionGpuMatrixError,
+    MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
     MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
@@ -393,18 +394,43 @@ class _TinyFlux(torch.nn.Module):
         return self.double_blocks[0](value)
 
 
+def _initialize_muon_linear(
+    layer: torch.nn.Linear,
+    *,
+    diagonal_scale: float,
+    fill_scale: float,
+) -> None:
+    with torch.no_grad():
+        value = torch.eye(
+            layer.out_features,
+            layer.in_features,
+            dtype=layer.weight.dtype,
+        )
+        value.mul_(diagonal_scale)
+        value.add_(torch.ones_like(value) * fill_scale)
+        layer.weight.copy_(value)
+
+
 class _TinyMuonFlux(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        layer = torch.nn.Linear(8, 8, bias=False)
-        with torch.no_grad():
-            value = torch.eye(8, dtype=layer.weight.dtype) * 0.125
-            value.add_(torch.ones_like(value) * 0.015625)
-            layer.weight.copy_(value)
-        self.double_blocks = torch.nn.ModuleList([layer])
+        expand = torch.nn.Linear(8, 12, bias=False)
+        contract = torch.nn.Linear(12, 8, bias=False)
+        _initialize_muon_linear(
+            expand,
+            diagonal_scale=0.125,
+            fill_scale=0.015625,
+        )
+        _initialize_muon_linear(
+            contract,
+            diagonal_scale=0.09375,
+            fill_scale=0.0078125,
+        )
+        self.double_blocks = torch.nn.ModuleList([expand, contract])
 
     def forward(self, value):
-        return self.double_blocks[0](value)
+        value = self.double_blocks[0](value)
+        return self.double_blocks[1](value)
 
 
 def _policy() -> dict[str, Any]:
@@ -616,6 +642,8 @@ def _muon_routing_evidence(session) -> dict[str, Any]:
                 "component_id": assignment.component_id,
                 "route_kind": assignment.route_kind,
                 "optimizer_profile": assignment.optimizer_profile,
+                "parameter_class": assignment.parameter_class,
+                "shape": [int(dim) for dim in assignment.parameter.shape],
             }
         )
     trainable = [
@@ -631,11 +659,34 @@ def _muon_routing_evidence(session) -> dict[str, Any]:
         raise AssertionError(
             "Pure Muon evidence routed a trainable parameter outside the Muon profile."
         )
+    if any(row["parameter_class"] != "matrix_weight" for row in trainable):
+        raise AssertionError(
+            "Pure Muon evidence routed a non-matrix trainable parameter."
+        )
+
+    shapes = [tuple(row["shape"]) for row in trainable]
+    if len(trainable) != 2 or shapes != [(12, 8), (8, 12)]:
+        raise AssertionError(
+            "Pure Muon evidence must cover exactly the tall/wide reference shapes "
+            f"[(12, 8), (8, 12)]; got {shapes!r}."
+        )
+    if not any(rows_count > cols_count for rows_count, cols_count in shapes):
+        raise AssertionError("Pure Muon evidence does not cover transpose=True.")
+    if not any(rows_count < cols_count for rows_count, cols_count in shapes):
+        raise AssertionError("Pure Muon evidence does not cover transpose=False.")
+
     return {
         "assignments": rows,
         "trainable_count": len(trainable),
         "primary_count": sum(row["route_kind"] == "primary" for row in trainable),
         "fallback_count": sum(row["route_kind"] == "fallback" for row in trainable),
+        "matrix_shapes": [list(shape) for shape in shapes],
+        "covers_transpose_true": any(
+            rows_count > cols_count for rows_count, cols_count in shapes
+        ),
+        "covers_transpose_false": any(
+            rows_count < cols_count for rows_count, cols_count in shapes
+        ),
     }
 
 
@@ -695,6 +746,7 @@ def _muon_path_evidence(session) -> dict[str, Any]:
         ),
         "groups": groups,
         "state_keys": state_keys,
+        "state_parameter_count": len(state_keys),
         "internal_adamw_state_present": any(
             "exp_avg" in keys or "exp_avg_sq" in keys
             for keys in state_keys
@@ -720,6 +772,42 @@ def _assert_muon_gradient_evidence(gradients: dict[str, Any]) -> None:
             raise AssertionError(f"Muon trainable parameter {name} has non-finite gradient.")
         if evidence.get("nonzero") is not True:
             raise AssertionError(f"Muon trainable parameter {name} has zero gradient.")
+
+
+def _muon_qualification_contract(
+    session,
+    provider: dict[str, str],
+) -> dict[str, Any]:
+    optimizers = tuple(session.runtime_spec.optimizers)
+    if len(optimizers) != 1:
+        raise AssertionError(
+            "Muon qualification contract requires exactly one runtime optimizer spec."
+        )
+    spec = optimizers[0]
+    if spec.profile_name != "main" or spec.optimizer_type != "Muon":
+        raise AssertionError(
+            "Muon qualification contract resolved unexpected runtime optimizer "
+            f"{spec.profile_name!r}/{spec.optimizer_type!r}."
+        )
+
+    reference_arguments = spec.optimizer_arguments
+    expected_family = tuple(sorted(MUON_FULL_BF16_ARGUMENT_FAMILY))
+    actual_family = tuple(sorted(reference_arguments))
+    if actual_family != expected_family:
+        raise AssertionError(
+            "Muon reference arguments must explicitly cover the full C3 argument family: "
+            f"expected={expected_family!r}, actual={actual_family!r}."
+        )
+
+    return {
+        "schema": "dts.parameter-policy.muon-full-bf16-qualification-family",
+        "version": 1,
+        "provider": dict(provider),
+        "routing_family": "pure_muon",
+        "state_family": "momentum_buffer",
+        "argument_family": list(expected_family),
+        "reference_arguments": reference_arguments,
+    }
 
 
 def _trainable_dtypes(session) -> list[str]:
@@ -1048,6 +1136,15 @@ def _run_muon_logical_step(
         )
     if after_path["internal_adamw_state_present"]:
         raise AssertionError("Muon logical step entered internal AdamW state path.")
+    expected_state_count = sum(
+        group["parameter_count"] for group in after_path["groups"]
+    )
+    if after_path["state_parameter_count"] != expected_state_count:
+        raise AssertionError(
+            "Muon logical step did not create state for every routed parameter: "
+            f"expected={expected_state_count}, "
+            f"actual={after_path['state_parameter_count']}."
+        )
     if not after_path["state_keys"] or any(
         "momentum_buffer" not in keys for keys in after_path["state_keys"]
     ):
@@ -1091,8 +1188,11 @@ def _build_muon_runtime(case_dir: Path, *, accumulation_steps: int):
         roots={"transformer": model},
     )
     routing = _muon_routing_evidence(session)
-    if routing["fallback_count"] != 0:
-        raise AssertionError("Pure Muon runtime unexpectedly contains fallback routing.")
+    if routing["primary_count"] != 2 or routing["fallback_count"] != 0:
+        raise AssertionError(
+            "Pure Muon runtime must contain exactly two primary assignments and no fallback."
+        )
+    qualification_contract = _muon_qualification_contract(session, provider)
     raw_scheduler = session.build_scheduler(_scheduler_factory(args))
     if session.execution_contract is None:
         raise AssertionError("Muon full-BF16 session has no execution contract.")
@@ -1137,6 +1237,7 @@ def _build_muon_runtime(case_dir: Path, *, accumulation_steps: int):
         distributed_type,
         provider,
         routing,
+        qualification_contract,
     )
 
 
@@ -1166,6 +1267,7 @@ def _muon_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
             distributed_type,
             provider,
             routing,
+            qualification_contract,
         ) = _build_muon_runtime(case_dir, accumulation_steps=accumulation_steps)
         try:
             if not _muon_child_state_is_empty(session):
@@ -1191,6 +1293,7 @@ def _muon_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
                 "accumulation_steps": accumulation_steps,
                 "provider": provider,
                 "routing": routing,
+                "qualification_contract": qualification_contract,
                 "execution_identity": session.execution_contract.execution_identity(),
                 "execution_signature": session.execution_contract.execution_signature(),
                 "model": model_parameter_evidence(accelerator.unwrap_model(model)),
@@ -1215,6 +1318,7 @@ def _muon_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
                 "qualification_lease": lease,
                 "provider": provider,
                 "routing": routing,
+                "qualification_contract": qualification_contract,
                 "accelerator": {
                     "device": str(accelerator.device),
                     "num_processes": int(accelerator.num_processes),
@@ -1265,12 +1369,17 @@ def _muon_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
             distributed_type,
             provider,
             routing,
+            qualification_contract,
         ) = _build_muon_runtime(case_dir, accumulation_steps=accumulation_steps)
         try:
             if provider != handoff.get("provider"):
                 raise AssertionError("Muon provider identity changed across fresh resume.")
             if routing != handoff.get("routing"):
                 raise AssertionError("Muon routing identity changed across fresh resume.")
+            if qualification_contract != handoff.get("qualification_contract"):
+                raise AssertionError(
+                    "Muon qualification-family contract changed across fresh resume."
+                )
             if not _muon_child_state_is_empty(session):
                 raise AssertionError("Fresh resume Muon optimizer state must start empty.")
 
@@ -1328,6 +1437,7 @@ def _muon_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
                 "qualification_lease": lease,
                 "provider": provider,
                 "routing": routing,
+                "qualification_contract": qualification_contract,
                 "accelerator": {
                     "device": str(accelerator.device),
                     "num_processes": int(accelerator.num_processes),
