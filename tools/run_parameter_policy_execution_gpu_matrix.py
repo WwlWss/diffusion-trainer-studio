@@ -277,6 +277,7 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_adamw_full_bf16_bundle,
     summarize_muon_full_bf16_bundle,
     summarize_muon_adamw_fallback_full_bf16_bundle,
+    summarize_shared_full_bf16_promotion,
     temporary_execution_qualification,
 )
 
@@ -2975,6 +2976,14 @@ def _coordinator_main(args: argparse.Namespace) -> int:
 
     if evidence_bundles:
         evidence["evidence_bundles"] = evidence_bundles
+
+    promotion = summarize_shared_full_bf16_promotion(
+        evidence["cases"],
+        evidence["qualification_snapshot"],
+    )
+    evidence["shared_optimizer_promotion"] = promotion
+    if promotion["status"] != "pass":
+        failed = True
 
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
