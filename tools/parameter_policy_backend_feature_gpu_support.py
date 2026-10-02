@@ -93,6 +93,37 @@ def _require_resume_source(
         )
 
 
+def _repo_python_entrypoint(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> Path:
+    candidates: list[Path] = []
+    for item in command:
+        raw = str(item or "").strip()
+        if not raw.lower().endswith(".py"):
+            continue
+        candidate = Path(raw)
+        if not candidate.is_absolute():
+            candidate = repo_root / candidate
+        resolved = candidate.expanduser().resolve(strict=False)
+        try:
+            resolved.relative_to(repo_root.resolve(strict=False))
+        except ValueError:
+            continue
+        if resolved.is_file():
+            candidates.append(resolved)
+    unique = list(dict.fromkeys(candidates))
+    if len(unique) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must reference "
+            "exactly one existing Python entrypoint from this repository."
+        )
+    return unique[0]
+
+
 def _validate_lifecycle_command_contract(
     *,
     case_id: str,
@@ -236,10 +267,33 @@ def load_backend_feature_manifest(
             )
 
         cwd_raw = case.get("cwd")
-        cwd = None if cwd_raw in (None, "") else str(cwd_raw)
-        if cwd is not None and not cwd.strip():
+        cwd_path = (
+            repo_root.resolve(strict=False)
+            if cwd_raw in (None, "")
+            else Path(str(cwd_raw)).expanduser().resolve(strict=False)
+        )
+        if cwd_path != repo_root.resolve(strict=False):
             raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} cwd must be non-empty."
+                f"Backend feature case {case_id!r} cwd must be the exact "
+                "qualification repository root in D0/D1."
+            )
+
+        fresh_entrypoint = _repo_python_entrypoint(
+            commands["fresh_command"],
+            repo_root=repo_root,
+            case_id=case_id,
+            phase="fresh",
+        )
+        resume_entrypoint = _repo_python_entrypoint(
+            commands["resume_command"],
+            repo_root=repo_root,
+            case_id=case_id,
+            phase="resume",
+        )
+        if fresh_entrypoint != resume_entrypoint:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} fresh/resume commands must "
+                "use the same exact repository trainer entrypoint."
             )
 
         fresh_checkpoint = _resolved_outside_repo(
@@ -271,7 +325,10 @@ def load_backend_feature_manifest(
                 "feature": feature,
                 "fresh_command": commands["fresh_command"],
                 "resume_command": commands["resume_command"],
-                "cwd": cwd,
+                "cwd": str(cwd_path),
+                "entrypoint": str(
+                    fresh_entrypoint.relative_to(repo_root.resolve(strict=False))
+                ),
                 "environment": dict(environment),
                 "fresh_checkpoint_dir": str(fresh_checkpoint),
                 "resume_checkpoint_dir": str(resume_checkpoint),
