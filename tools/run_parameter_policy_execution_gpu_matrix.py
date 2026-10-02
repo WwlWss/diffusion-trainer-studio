@@ -5,7 +5,9 @@ Phase C0/C1 established the strict exact-head CUDA/BF16 evidence infrastructure.
 Phase C2 extends that protocol with AdamW full-BF16 optimizer lifecycle evidence.
 Phase C3 adds a separate pure-Muon lifecycle bundle that proves the pinned Muon
 provider uses only explicit Muon groups/state, without its internal AdamW fallback.
-Both train/save flows are followed by resume/second-step in a fresh subprocess.
+Phase C4 adds explicit Muon-primary + AdamW-fallback multi-child lifecycle evidence.
+Every optimizer lifecycle uses train/save followed by resume/second-step in a fresh
+Python subprocess.
 
 The coordinator launches every evidence phase in a fresh Python subprocess.
 Optimizer evidence remains non-promoting until the final qualification gate,
@@ -260,6 +262,7 @@ from tools.parameter_policy_execution_gpu_runtime import (
     model_parameter_evidence,
     optimizer_state_evidence,
     scheduler_state_evidence,
+    tensor_fingerprint,
 )
 from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_CASE_IDS,
@@ -269,8 +272,11 @@ from tools.parameter_policy_execution_gpu_support import (
     MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
     MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS,
+    MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
     summarize_adamw_full_bf16_bundle,
     summarize_muon_full_bf16_bundle,
+    summarize_muon_adamw_fallback_full_bf16_bundle,
     temporary_execution_qualification,
 )
 
@@ -280,6 +286,7 @@ EVIDENCE_VERSION = 2
 _CASES = tuple(EXECUTION_GPU_CASE_PHASES)
 _ADAMW_CASES = ADAMW_FULL_BF16_CASE_IDS
 _MUON_CASES = MUON_FULL_BF16_CASE_IDS
+_C4_CASES = MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS
 _PINNED_MUON_PROVIDER_VERSION = "3.10.0"
 _STDIO_TAIL_LIMIT = 16000
 
@@ -433,6 +440,31 @@ class _TinyMuonFlux(torch.nn.Module):
         return self.double_blocks[1](value)
 
 
+class _TinyMuonAdamWFallbackFlux(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        expand = torch.nn.Linear(8, 12, bias=True)
+        contract = torch.nn.Linear(12, 8, bias=True)
+        _initialize_muon_linear(
+            expand,
+            diagonal_scale=0.125,
+            fill_scale=0.015625,
+        )
+        _initialize_muon_linear(
+            contract,
+            diagonal_scale=0.09375,
+            fill_scale=0.0078125,
+        )
+        with torch.no_grad():
+            expand.bias.zero_()
+            contract.bias.zero_()
+        self.double_blocks = torch.nn.ModuleList([expand, contract])
+
+    def forward(self, value):
+        value = self.double_blocks[0](value)
+        return self.double_blocks[1](value)
+
+
 def _policy() -> dict[str, Any]:
     return {
         "version": 1,
@@ -471,6 +503,39 @@ def _muon_policy() -> dict[str, Any]:
                 "train": True,
                 "optimizer_profile": "main",
                 "learning_rate": 2e-2,
+            },
+        },
+    }
+
+
+def _muon_adamw_fallback_policy() -> dict[str, Any]:
+    return {
+        "version": 1,
+        "optimizer_profiles": {
+            "muon": {
+                "type": "Muon",
+                "args": {
+                    "momentum": 0.95,
+                    "weight_decay": 0.0,
+                    "weight_decouple": True,
+                    "nesterov": True,
+                    "ns_steps": 5,
+                    "ns_coeffs": "original",
+                    "use_adjusted_lr": False,
+                },
+            },
+            "adamw_fallback": {
+                "type": "AdamW",
+                "args": {},
+            },
+        },
+        "components": {
+            "transformer.double_stream": {
+                "train": True,
+                "optimizer_profile": "muon",
+                "learning_rate": 2e-2,
+                "fallback_optimizer_profile": "adamw_fallback",
+                "fallback_learning_rate": 1e-2,
             },
         },
     }
@@ -807,6 +872,331 @@ def _muon_qualification_contract(
         "state_family": "momentum_buffer",
         "argument_family": list(expected_family),
         "reference_arguments": reference_arguments,
+    }
+
+
+def _c4_accumulation_steps(case_id: str) -> int:
+    if case_id == MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[0]:
+        return 1
+    if case_id == MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[1]:
+        return 2
+    raise ExecutionGpuMatrixError(f"Unknown C4 lifecycle case {case_id!r}.")
+
+
+def _c4_child_entry(session, profile_name: str, optimizer_type: str):
+    entries = {
+        entry.profile_name: entry
+        for entry in session.optimizer.entries
+    }
+    if set(entries) != {"muon", "adamw_fallback"}:
+        raise AssertionError(
+            f"C4 requires exactly muon/adamw_fallback children; got {sorted(entries)!r}."
+        )
+    entry = entries.get(profile_name)
+    if entry is None or entry.optimizer_type != optimizer_type:
+        raise AssertionError(
+            f"C4 child {profile_name!r} is not {optimizer_type!r}."
+        )
+    return entry
+
+
+def _c4_routing_evidence(session) -> dict[str, Any]:
+    rows = {}
+    for assignment in session.routing_plan.assignments:
+        if assignment.route_kind not in {"primary", "fallback"}:
+            continue
+        rows[assignment.canonical_name] = {
+            "component_id": assignment.component_id,
+            "route_kind": assignment.route_kind,
+            "optimizer_profile": assignment.optimizer_profile,
+            "parameter_class": assignment.parameter_class,
+            "shape": [int(dim) for dim in assignment.parameter.shape],
+        }
+
+    expected = {
+        "transformer.double_blocks.0.weight": {
+            "route_kind": "primary",
+            "optimizer_profile": "muon",
+            "parameter_class": "matrix_weight",
+            "shape": [12, 8],
+        },
+        "transformer.double_blocks.0.bias": {
+            "route_kind": "fallback",
+            "optimizer_profile": "adamw_fallback",
+            "parameter_class": "bias",
+            "shape": [12],
+        },
+        "transformer.double_blocks.1.weight": {
+            "route_kind": "primary",
+            "optimizer_profile": "muon",
+            "parameter_class": "matrix_weight",
+            "shape": [8, 12],
+        },
+        "transformer.double_blocks.1.bias": {
+            "route_kind": "fallback",
+            "optimizer_profile": "adamw_fallback",
+            "parameter_class": "bias",
+            "shape": [8],
+        },
+    }
+    if set(rows) != set(expected):
+        raise AssertionError(
+            f"C4 routed parameter set mismatch: expected={sorted(expected)!r}, "
+            f"actual={sorted(rows)!r}."
+        )
+    for name, contract in expected.items():
+        row = rows[name]
+        for key, value in contract.items():
+            if row.get(key) != value:
+                raise AssertionError(
+                    f"C4 routing mismatch for {name}.{key}: "
+                    f"expected={value!r}, actual={row.get(key)!r}."
+                )
+
+    return {
+        "assignments": rows,
+        "trainable_count": len(rows),
+        "primary_count": sum(row["route_kind"] == "primary" for row in rows.values()),
+        "fallback_count": sum(row["route_kind"] == "fallback" for row in rows.values()),
+        "primary_profile": "muon",
+        "fallback_profile": "adamw_fallback",
+        "primary_shapes": [[12, 8], [8, 12]],
+        "fallback_shapes": [[12], [8]],
+    }
+
+
+def _c4_child_ownership_evidence(session) -> dict[str, Any]:
+    assignment_by_id = {
+        assignment.parameter_id: assignment
+        for assignment in session.routing_plan.assignments
+        if assignment.route_kind in {"primary", "fallback"}
+    }
+    expected_by_profile: dict[str, set[int]] = {
+        "muon": {
+            parameter_id
+            for parameter_id, assignment in assignment_by_id.items()
+            if assignment.optimizer_profile == "muon"
+        },
+        "adamw_fallback": {
+            parameter_id
+            for parameter_id, assignment in assignment_by_id.items()
+            if assignment.optimizer_profile == "adamw_fallback"
+        },
+    }
+    actual_by_profile: dict[str, set[int]] = {}
+    for profile_name, optimizer_type in (
+        ("muon", "Muon"),
+        ("adamw_fallback", "AdamW"),
+    ):
+        child = _c4_child_entry(session, profile_name, optimizer_type).optimizer
+        actual_by_profile[profile_name] = {
+            id(parameter)
+            for group in child.param_groups
+            for parameter in group["params"]
+        }
+        if actual_by_profile[profile_name] != expected_by_profile[profile_name]:
+            raise AssertionError(
+                f"C4 child ownership mismatch for {profile_name!r}."
+            )
+
+    if actual_by_profile["muon"].intersection(actual_by_profile["adamw_fallback"]):
+        raise AssertionError("C4 Muon and AdamW children share a physical parameter.")
+    if actual_by_profile["muon"].union(actual_by_profile["adamw_fallback"]) != set(
+        session.trainable_parameter_ids
+    ):
+        raise AssertionError("C4 child ownership does not cover all trainable parameters.")
+
+    names = {}
+    for profile_name, parameter_ids in actual_by_profile.items():
+        names[profile_name] = sorted(
+            assignment_by_id[parameter_id].canonical_name
+            for parameter_id in parameter_ids
+        )
+    return {
+        "profiles": names,
+        "disjoint": True,
+        "covers_all_trainable": True,
+    }
+
+
+def _c4_profile_parameter_evidence(session) -> dict[str, Any]:
+    result: dict[str, dict[str, Any]] = {
+        "muon": {},
+        "adamw_fallback": {},
+    }
+    for assignment in session.routing_plan.assignments:
+        if assignment.route_kind not in {"primary", "fallback"}:
+            continue
+        profile = assignment.optimizer_profile
+        if profile not in result:
+            raise AssertionError(f"C4 unexpected routed profile {profile!r}.")
+        result[profile][assignment.canonical_name] = tensor_fingerprint(
+            assignment.parameter
+        )
+    if any(len(rows) != 2 for rows in result.values()):
+        raise AssertionError(f"C4 profile parameter evidence is incomplete: {result!r}.")
+    return result
+
+
+def _c4_gradient_evidence(session) -> dict[str, Any]:
+    result = {}
+    for assignment in session.routing_plan.assignments:
+        if assignment.route_kind not in {"primary", "fallback"}:
+            continue
+        gradient = assignment.parameter.grad
+        result[assignment.canonical_name] = (
+            None if gradient is None else tensor_fingerprint(gradient)
+        )
+    for name, evidence in result.items():
+        if evidence is None:
+            raise AssertionError(f"C4 trainable parameter {name} has no gradient.")
+        if evidence.get("finite") is not True or evidence.get("nonzero") is not True:
+            raise AssertionError(f"C4 trainable parameter {name} has invalid gradient.")
+    return result
+
+
+def _c4_muon_state_evidence(session) -> dict[str, Any]:
+    child = _c4_child_entry(session, "muon", "Muon").optimizer
+    groups = []
+    for index, group in enumerate(child.param_groups):
+        if group.get("use_muon") is not True:
+            raise AssertionError(f"C4 Muon group {index} is not use_muon=True.")
+        raw_step = group.get("step", 0)
+        if isinstance(raw_step, torch.Tensor):
+            raw_step = raw_step.detach().cpu().item()
+        groups.append({
+            "index": index,
+            "step": int(raw_step),
+            "parameter_count": len(group["params"]),
+            "use_muon": True,
+        })
+    state_keys = []
+    for state in child.state.values():
+        keys = sorted(str(key) for key in state)
+        if "exp_avg" in keys or "exp_avg_sq" in keys:
+            raise AssertionError("C4 Muon child entered internal AdamW state path.")
+        if state and "momentum_buffer" not in keys:
+            raise AssertionError(f"C4 Muon state lacks momentum_buffer: {keys!r}.")
+        state_keys.append(keys)
+    return {
+        "child_class": f"{child.__class__.__module__}.{child.__class__.__qualname__}",
+        "groups": groups,
+        "state_keys": state_keys,
+        "state_parameter_count": len(state_keys),
+        "internal_adamw_state_present": any(
+            "exp_avg" in keys or "exp_avg_sq" in keys for keys in state_keys
+        ),
+    }
+
+
+def _c4_adamw_state_evidence(session) -> dict[str, Any]:
+    child = _c4_child_entry(session, "adamw_fallback", "AdamW").optimizer
+    rows = []
+    counters = []
+    for state in child.state.values():
+        keys = sorted(str(key) for key in state)
+        rows.append(keys)
+        if state:
+            for required in ("step", "exp_avg", "exp_avg_sq"):
+                if required not in state:
+                    raise AssertionError(
+                        f"C4 AdamW fallback state lacks {required!r}: {keys!r}."
+                    )
+            raw_step = state["step"]
+            if isinstance(raw_step, torch.Tensor):
+                raw_step = raw_step.detach().cpu().item()
+            counters.append(int(raw_step))
+    return {
+        "child_class": f"{child.__class__.__module__}.{child.__class__.__qualname__}",
+        "state_keys": rows,
+        "state_parameter_count": len(rows),
+        "step_counters": sorted(counters),
+    }
+
+
+def _c4_scheduler_evidence(raw_scheduler, session) -> dict[str, Any]:
+    children = {}
+    child_entries = {
+        entry.profile_name: entry
+        for entry in raw_scheduler.entries
+    }
+    if set(child_entries) != {"muon", "adamw_fallback"}:
+        raise AssertionError("C4 scheduler does not expose both expected children.")
+    optimizer_entries = {
+        entry.profile_name: entry.optimizer
+        for entry in session.optimizer.entries
+    }
+    for profile_name in ("muon", "adamw_fallback"):
+        entry = child_entries[profile_name]
+        if entry.mode != "external" or entry.scheduler is None:
+            raise AssertionError(f"C4 scheduler child {profile_name!r} is not external.")
+        if entry.scheduler.optimizer is not optimizer_entries[profile_name]:
+            raise AssertionError(
+                f"C4 scheduler child {profile_name!r} is attached to wrong optimizer."
+            )
+        children[profile_name] = {
+            "mode": entry.mode,
+            "step_count": int(entry.scheduler._step_count),
+            "last_epoch": int(entry.scheduler.last_epoch),
+            "last_lr": list(entry.scheduler.get_last_lr()),
+        }
+    if children["muon"]["step_count"] != children["adamw_fallback"]["step_count"]:
+        raise AssertionError("C4 child schedulers disagree on step_count.")
+    if children["muon"]["last_epoch"] != children["adamw_fallback"]["last_epoch"]:
+        raise AssertionError("C4 child schedulers disagree on last_epoch.")
+    return {
+        "composite_step_count": _scheduler_step_count(raw_scheduler),
+        "composite_last_epoch": int(raw_scheduler.last_epoch),
+        "by_profile": children,
+        "last_lr_by_profile": {
+            key: list(value)
+            for key, value in raw_scheduler.get_last_lr_by_profile().items()
+        },
+    }
+
+
+def _c4_fresh_state_is_empty(session) -> bool:
+    muon = _c4_child_entry(session, "muon", "Muon").optimizer
+    adamw = _c4_child_entry(session, "adamw_fallback", "AdamW").optimizer
+    return (
+        len(muon.state) == 0
+        and all(int(group.get("step", 0)) == 0 for group in muon.param_groups)
+        and len(adamw.state) == 0
+    )
+
+
+def _c4_qualification_contract(session, provider: dict[str, str]) -> dict[str, Any]:
+    specs = {
+        spec.profile_name: spec
+        for spec in session.runtime_spec.optimizers
+    }
+    if set(specs) != {"muon", "adamw_fallback"}:
+        raise AssertionError("C4 qualification contract has unexpected optimizer profiles.")
+    muon_args = specs["muon"].optimizer_arguments
+    if tuple(sorted(muon_args)) != tuple(sorted(MUON_FULL_BF16_ARGUMENT_FAMILY)):
+        raise AssertionError("C4 Muon reference args do not cover C3 argument family.")
+    adamw_args = specs["adamw_fallback"].optimizer_arguments
+    if adamw_args != {}:
+        raise AssertionError("C4 AdamW fallback must use the reference empty args variant.")
+    return {
+        "schema": "dts.parameter-policy.muon-adamw-explicit-fallback-qualification-family",
+        "version": 1,
+        "routing_family": "muon_primary_adamw_explicit_fallback",
+        "muon": {
+            "provider": dict(provider),
+            "argument_family": list(sorted(MUON_FULL_BF16_ARGUMENT_FAMILY)),
+            "reference_arguments": muon_args,
+        },
+        "adamw": {
+            "provider": "torch.optim.AdamW",
+            "reference_arguments": adamw_args,
+        },
+        "learning_rates": {
+            "muon": 2e-2,
+            "adamw_fallback": 1e-2,
+        },
+        "primary_parameter_class": "matrix_weight",
+        "fallback_parameter_class": "bias",
     }
 
 
@@ -1455,6 +1845,447 @@ def _muon_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
             accelerator.end_training()
 
 
+def _run_c4_logical_step(
+    *,
+    accelerator: Accelerator,
+    model: torch.nn.Module,
+    optimizer: object,
+    scheduler: object,
+    raw_scheduler: object,
+    session: object,
+    accumulation_steps: int,
+    logical_step: int,
+) -> dict[str, Any]:
+    before_profiles = _c4_profile_parameter_evidence(session)
+    before_optimizer = optimizer_state_evidence(session.optimizer)
+    before_scheduler = scheduler_state_evidence(raw_scheduler)
+    before_muon = _c4_muon_state_evidence(session)
+    before_adamw = _c4_adamw_state_evidence(session)
+    before_scheduler_children = _c4_scheduler_evidence(raw_scheduler, session)
+    microsteps = []
+
+    for microstep in range(accumulation_steps):
+        profiles_before = _c4_profile_parameter_evidence(session)
+        optimizer_before = optimizer_state_evidence(session.optimizer)
+        scheduler_before = scheduler_state_evidence(raw_scheduler)
+        muon_before = _c4_muon_state_evidence(session)
+        adamw_before = _c4_adamw_state_evidence(session)
+        scheduler_children_before = _c4_scheduler_evidence(raw_scheduler, session)
+
+        with accelerator.accumulate(model):
+            scale = 0.5 + 0.125 * (logical_step + microstep)
+            value = torch.eye(8, device=accelerator.device, dtype=torch.bfloat16)
+            value.mul_(scale)
+            output = model(value)
+            loss = output.float().square().mean()
+            accelerator.backward(loss)
+            sync_gradients = bool(accelerator.sync_gradients)
+            gradients = _c4_gradient_evidence(session)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+
+        profiles_after = _c4_profile_parameter_evidence(session)
+        optimizer_after = optimizer_state_evidence(session.optimizer)
+        scheduler_after = scheduler_state_evidence(raw_scheduler)
+        muon_after = _c4_muon_state_evidence(session)
+        adamw_after = _c4_adamw_state_evidence(session)
+        scheduler_children_after = _c4_scheduler_evidence(raw_scheduler, session)
+
+        microsteps.append({
+            "microstep": microstep + 1,
+            "sync_gradients": sync_gradients,
+            "loss": float(loss.detach().cpu()),
+            "gradients": gradients,
+            "profile_parameters": profiles_after,
+            "muon": muon_after,
+            "adamw_fallback": adamw_after,
+            "schedulers": scheduler_children_after,
+        })
+
+        if accumulation_steps > 1 and microstep < accumulation_steps - 1:
+            if sync_gradients:
+                raise AssertionError("Intermediate C4 accumulation microstep unexpectedly synced.")
+            if profiles_after != profiles_before:
+                raise AssertionError("Intermediate C4 microstep changed routed parameters.")
+            if optimizer_after["sha256"] != optimizer_before["sha256"]:
+                raise AssertionError("Intermediate C4 microstep changed optimizer state.")
+            if scheduler_after["sha256"] != scheduler_before["sha256"]:
+                raise AssertionError("Intermediate C4 microstep advanced scheduler.")
+            if muon_after != muon_before or adamw_after != adamw_before:
+                raise AssertionError("Intermediate C4 microstep changed child optimizer state.")
+            if scheduler_children_after != scheduler_children_before:
+                raise AssertionError("Intermediate C4 microstep changed child scheduler state.")
+
+    after_profiles = _c4_profile_parameter_evidence(session)
+    after_optimizer = optimizer_state_evidence(session.optimizer)
+    after_scheduler = scheduler_state_evidence(raw_scheduler)
+    after_muon = _c4_muon_state_evidence(session)
+    after_adamw = _c4_adamw_state_evidence(session)
+    after_scheduler_children = _c4_scheduler_evidence(raw_scheduler, session)
+
+    if not microsteps[-1]["sync_gradients"]:
+        raise AssertionError("Final C4 accumulation microstep did not synchronize gradients.")
+    for profile_name in ("muon", "adamw_fallback"):
+        before_rows = before_profiles[profile_name]
+        after_rows = after_profiles[profile_name]
+        for name in before_rows:
+            if before_rows[name]["sha256"] == after_rows[name]["sha256"]:
+                raise AssertionError(
+                    f"C4 logical step did not update routed parameter {name!r}."
+                )
+    if before_optimizer["sha256"] == after_optimizer["sha256"]:
+        raise AssertionError("C4 logical step did not update composite optimizer state.")
+    if before_scheduler["sha256"] == after_scheduler["sha256"]:
+        raise AssertionError("C4 logical step did not advance composite scheduler.")
+
+    muon_steps_before = [group["step"] for group in before_muon["groups"]]
+    muon_steps_after = [group["step"] for group in after_muon["groups"]]
+    expected_before = logical_step - 1
+    if any(step != expected_before for step in muon_steps_before):
+        raise AssertionError(f"C4 Muon pre-step counter mismatch: {muon_steps_before!r}.")
+    if not muon_steps_after or any(step != logical_step for step in muon_steps_after):
+        raise AssertionError(f"C4 Muon post-step counter mismatch: {muon_steps_after!r}.")
+    if after_muon["state_parameter_count"] != 2:
+        raise AssertionError("C4 Muon child must own state for exactly two weights.")
+    if after_muon["internal_adamw_state_present"]:
+        raise AssertionError("C4 Muon child entered internal AdamW fallback.")
+    if any("momentum_buffer" not in keys for keys in after_muon["state_keys"]):
+        raise AssertionError("C4 Muon child did not create both momentum buffers.")
+
+    adamw_before_steps = before_adamw["step_counters"]
+    adamw_after_steps = after_adamw["step_counters"]
+    if logical_step == 1:
+        if adamw_before_steps:
+            raise AssertionError("Fresh C4 AdamW fallback state is not empty.")
+    elif adamw_before_steps != [logical_step - 1, logical_step - 1]:
+        raise AssertionError(
+            f"C4 AdamW pre-step counters mismatch: {adamw_before_steps!r}."
+        )
+    if adamw_after_steps != [logical_step, logical_step]:
+        raise AssertionError(
+            f"C4 AdamW post-step counters mismatch: {adamw_after_steps!r}."
+        )
+    if after_adamw["state_parameter_count"] != 2:
+        raise AssertionError("C4 AdamW fallback must own state for exactly two biases.")
+
+    for profile_name in ("muon", "adamw_fallback"):
+        before_child = before_scheduler_children["by_profile"][profile_name]
+        after_child = after_scheduler_children["by_profile"][profile_name]
+        if after_child["step_count"] != before_child["step_count"] + 1:
+            raise AssertionError(
+                f"C4 scheduler {profile_name!r} did not advance exactly one step."
+            )
+
+    expected_lrs = {"muon": [2e-2], "adamw_fallback": [1e-2]}
+    if after_scheduler_children["last_lr_by_profile"] != expected_lrs:
+        raise AssertionError(
+            "C4 scheduler profile LRs do not match primary/fallback policy: "
+            f"{after_scheduler_children['last_lr_by_profile']!r}."
+        )
+
+    return {
+        "logical_step": logical_step,
+        "accumulation_steps": accumulation_steps,
+        "before": {
+            "profile_parameters": before_profiles,
+            "optimizer": before_optimizer,
+            "scheduler": before_scheduler,
+            "muon": before_muon,
+            "adamw_fallback": before_adamw,
+            "schedulers": before_scheduler_children,
+        },
+        "after": {
+            "profile_parameters": after_profiles,
+            "optimizer": after_optimizer,
+            "scheduler": after_scheduler,
+            "muon": after_muon,
+            "adamw_fallback": after_adamw,
+            "schedulers": after_scheduler_children,
+        },
+        "microsteps": microsteps,
+    }
+
+
+def _build_c4_runtime(case_dir: Path, *, accumulation_steps: int):
+    provider = _assert_pinned_muon_provider()
+    policy_path = case_dir / "muon-adamw-fallback-policy.json"
+    policy_path.write_text(
+        json.dumps(_muon_adamw_fallback_policy(), sort_keys=True),
+        encoding="utf-8",
+    )
+    args = _scheduler_args(policy_path, optimizer_type="Muon")
+    model = _TinyMuonAdamWFallbackFlux()
+    session = create_parameter_policy_session(
+        args=args,
+        train_type="flux-finetune",
+        roots={"transformer": model},
+    )
+    routing = _c4_routing_evidence(session)
+    if routing["primary_count"] != 2 or routing["fallback_count"] != 2:
+        raise AssertionError("C4 must produce exactly 2 primary + 2 fallback routes.")
+    ownership = _c4_child_ownership_evidence(session)
+    qualification_contract = _c4_qualification_contract(session, provider)
+    raw_scheduler = session.build_scheduler(_scheduler_factory(args))
+    if session.execution_contract is None:
+        raise AssertionError("C4 full-BF16 session has no execution contract.")
+    scheduler_evidence = _c4_scheduler_evidence(raw_scheduler, session)
+
+    model.to(torch.bfloat16)
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("C4 trainable parameters are not true BF16 before prepare.")
+
+    accelerator = Accelerator(
+        mixed_precision="bf16",
+        gradient_accumulation_steps=accumulation_steps,
+    )
+    distributed_type = _assert_cuda_accelerator(accelerator)
+    model, optimizer, scheduler = accelerator.prepare(
+        model,
+        session.optimizer,
+        raw_scheduler,
+    )
+    session.finalize_after_prepare(
+        accelerator=accelerator,
+        optimizer=optimizer,
+        scheduler=scheduler,
+    )
+    if _trainable_dtypes(session) != ["torch.bfloat16"]:
+        raise AssertionError("C4 trainable parameters are not true BF16 after prepare.")
+    return (
+        model,
+        optimizer,
+        scheduler,
+        raw_scheduler,
+        session,
+        accelerator,
+        distributed_type,
+        provider,
+        routing,
+        ownership,
+        qualification_contract,
+        scheduler_evidence,
+    )
+
+
+def _c4_handoff_path(case_dir: Path) -> Path:
+    return case_dir / "muon-adamw-fallback-handoff.json"
+
+
+def _c4_checkpoint_dir(case_dir: Path) -> Path:
+    return case_dir / "muon-adamw-fallback-checkpoint"
+
+
+def _c4_train_save(case_id: str, case_dir: Path) -> dict[str, Any]:
+    accumulation_steps = _c4_accumulation_steps(case_id)
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("Muon", "AdamW"),
+        evidence_case_id=MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+            provider,
+            routing,
+            ownership,
+            qualification_contract,
+            _initial_scheduler,
+        ) = _build_c4_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if not _c4_fresh_state_is_empty(session):
+                raise AssertionError("Fresh C4 child optimizer states must start empty.")
+            step = _run_c4_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=1,
+            )
+            accelerator.save_state(_c4_checkpoint_dir(case_dir))
+            saved = {
+                "schema": "dts.parameter-policy.muon-adamw-explicit-fallback-full-bf16-handoff",
+                "version": 1,
+                "case_id": case_id,
+                "evidence_bundle_id": MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "commit": _BOOTSTRAP_COMMIT,
+                "accumulation_steps": accumulation_steps,
+                "provider": provider,
+                "routing": routing,
+                "ownership": ownership,
+                "qualification_contract": qualification_contract,
+                "execution_identity": session.execution_contract.execution_identity(),
+                "execution_signature": session.execution_contract.execution_signature(),
+                "scheduler_identity": session.scheduler_identity,
+                "scheduler_signature": session.scheduler_signature,
+                "model": model_parameter_evidence(accelerator.unwrap_model(model)),
+                "profile_parameters": _c4_profile_parameter_evidence(session),
+                "optimizer": optimizer_state_evidence(session.optimizer),
+                "scheduler": scheduler_state_evidence(raw_scheduler),
+                "muon": _c4_muon_state_evidence(session),
+                "adamw_fallback": _c4_adamw_state_evidence(session),
+                "scheduler_children": _c4_scheduler_evidence(raw_scheduler, session),
+            }
+            _write_json(_c4_handoff_path(case_dir), saved)
+            return {
+                "scope": "optimizer_topology",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer_topology",
+                    "name": "muon_primary_adamw_explicit_fallback",
+                },
+                "evidence_bundle_id": MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "provider": provider,
+                "routing": routing,
+                "ownership": ownership,
+                "qualification_contract": qualification_contract,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "trainable_dtypes": _trainable_dtypes(session),
+                "step": step,
+                "handoff": saved,
+            }
+        finally:
+            accelerator.end_training()
+
+
+def _c4_resume_second_step(case_id: str, case_dir: Path) -> dict[str, Any]:
+    handoff_path = _c4_handoff_path(case_dir)
+    if not handoff_path.is_file():
+        raise ExecutionGpuMatrixError("C4 resume phase is missing train/save handoff.")
+    handoff = json.loads(handoff_path.read_text(encoding="utf-8"))
+    accumulation_steps = _c4_accumulation_steps(case_id)
+    expected = {
+        "schema": "dts.parameter-policy.muon-adamw-explicit-fallback-full-bf16-handoff",
+        "version": 1,
+        "case_id": case_id,
+        "evidence_bundle_id": MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+        "commit": _BOOTSTRAP_COMMIT,
+        "accumulation_steps": accumulation_steps,
+    }
+    for key, value in expected.items():
+        if handoff.get(key) != value:
+            raise ExecutionGpuMatrixError(
+                f"C4 resume handoff mismatch for {key}: "
+                f"expected={value!r}, actual={handoff.get(key)!r}."
+            )
+
+    with temporary_execution_qualification(
+        backend="flux-finetune",
+        optimizers=("Muon", "AdamW"),
+        evidence_case_id=MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+    ) as lease:
+        (
+            model,
+            optimizer,
+            scheduler,
+            raw_scheduler,
+            session,
+            accelerator,
+            distributed_type,
+            provider,
+            routing,
+            ownership,
+            qualification_contract,
+            _initial_scheduler,
+        ) = _build_c4_runtime(case_dir, accumulation_steps=accumulation_steps)
+        try:
+            if not _c4_fresh_state_is_empty(session):
+                raise AssertionError("Fresh resumed C4 child states must start empty.")
+            for key, value in (
+                ("provider", provider),
+                ("routing", routing),
+                ("ownership", ownership),
+                ("qualification_contract", qualification_contract),
+            ):
+                if handoff.get(key) != value:
+                    raise AssertionError(f"C4 fresh resume changed {key}.")
+
+            accelerator.load_state(_c4_checkpoint_dir(case_dir))
+            session.assert_runtime_contract(
+                phase="post_resume",
+                accelerator=accelerator,
+                optimizer=optimizer,
+            )
+
+            restored = {
+                "model": model_parameter_evidence(accelerator.unwrap_model(model)),
+                "profile_parameters": _c4_profile_parameter_evidence(session),
+                "optimizer": optimizer_state_evidence(session.optimizer),
+                "scheduler": scheduler_state_evidence(raw_scheduler),
+                "muon": _c4_muon_state_evidence(session),
+                "adamw_fallback": _c4_adamw_state_evidence(session),
+                "scheduler_children": _c4_scheduler_evidence(raw_scheduler, session),
+            }
+            for key in restored:
+                if restored[key] != handoff.get(key):
+                    raise AssertionError(f"C4 restored {key} does not match saved state.")
+            if session.execution_contract.execution_identity() != handoff.get("execution_identity"):
+                raise AssertionError("C4 resumed execution identity changed.")
+            if session.execution_contract.execution_signature() != handoff.get("execution_signature"):
+                raise AssertionError("C4 resumed execution signature changed.")
+            if session.scheduler_identity != handoff.get("scheduler_identity"):
+                raise AssertionError("C4 resumed scheduler identity changed.")
+            if session.scheduler_signature != handoff.get("scheduler_signature"):
+                raise AssertionError("C4 resumed scheduler signature changed.")
+
+            step = _run_c4_logical_step(
+                accelerator=accelerator,
+                model=model,
+                optimizer=optimizer,
+                scheduler=scheduler,
+                raw_scheduler=raw_scheduler,
+                session=session,
+                accumulation_steps=accumulation_steps,
+                logical_step=2,
+            )
+            return {
+                "scope": "optimizer_topology",
+                "qualification_target": {
+                    "feature": "full_bf16",
+                    "kind": "optimizer_topology",
+                    "name": "muon_primary_adamw_explicit_fallback",
+                },
+                "evidence_bundle_id": MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                "promotion_eligible": False,
+                "optimizer_qualification_eligible": False,
+                "qualification_evidence_component": True,
+                "backend_scaffold": "flux-finetune",
+                "backend_qualification_eligible": False,
+                "qualification_lease": lease,
+                "provider": provider,
+                "routing": routing,
+                "ownership": ownership,
+                "qualification_contract": qualification_contract,
+                "accelerator": {
+                    "device": str(accelerator.device),
+                    "num_processes": int(accelerator.num_processes),
+                    "distributed_type": distributed_type,
+                },
+                "restored": restored,
+                "step": step,
+            }
+        finally:
+            accelerator.end_training()
+
+
 def _build_adamw_runtime(case_dir: Path, *, accumulation_steps: int):
     policy_path = case_dir / "policy.json"
     policy_path.write_text(json.dumps(_policy(), sort_keys=True), encoding="utf-8")
@@ -1811,6 +2642,11 @@ def _run_worker_case(
             return _muon_train_save(case_id, case_dir)
         if phase == "resume_second_step":
             return _muon_resume_second_step(case_id, case_dir)
+    if case_id in _C4_CASES:
+        if phase == "train_save":
+            return _c4_train_save(case_id, case_dir)
+        if phase == "resume_second_step":
+            return _c4_resume_second_step(case_id, case_dir)
     raise ExecutionGpuMatrixError(
         f"Unknown execution GPU case/phase {case_id!r}/{phase!r}."
     )
@@ -2023,6 +2859,21 @@ def _coordinator_main(args: argparse.Namespace) -> int:
                         "backend_qualification_eligible": False,
                     }
                 )
+            if case_id in _C4_CASES:
+                row.update(
+                    {
+                        "scope": "optimizer_topology",
+                        "qualification_target": {
+                            "feature": "full_bf16",
+                            "kind": "optimizer_topology",
+                            "name": "muon_primary_adamw_explicit_fallback",
+                        },
+                        "evidence_bundle_id": MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+                        "qualification_evidence_component": True,
+                        "optimizer_qualification_eligible": False,
+                        "backend_qualification_eligible": False,
+                    }
+                )
             evidence["cases"].append(row)
             print(f"{case_status.upper():4} {case_id}", flush=True)
             if case_status != "pass":
@@ -2040,6 +2891,16 @@ def _coordinator_main(args: argparse.Namespace) -> int:
     if muon_bundle is not None:
         evidence_bundles[MUON_FULL_BF16_EVIDENCE_BUNDLE_ID] = muon_bundle
         if muon_bundle["status"] != "pass":
+            failed = True
+
+    c4_bundle = summarize_muon_adamw_fallback_full_bf16_bundle(
+        evidence["cases"]
+    )
+    if c4_bundle is not None:
+        evidence_bundles[
+            MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID
+        ] = c4_bundle
+        if c4_bundle["status"] != "pass":
             failed = True
 
     if evidence_bundles:
