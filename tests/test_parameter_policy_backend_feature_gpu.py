@@ -26,7 +26,12 @@ def _case(root: Path) -> dict:
         "train_type": "flux-finetune",
         "feature": "full_bf16",
         "fresh_command": ["python", "fresh.py"],
-        "resume_command": ["python", "resume.py"],
+        "resume_command": [
+            "python",
+            "resume.py",
+            "--resume",
+            str(root / "checkpoint-1"),
+        ],
         "cwd": str(ROOT),
         "environment": {"DTS_TEST": "1"},
         "fresh_checkpoint_dir": str(root / "checkpoint-1"),
@@ -150,6 +155,35 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
+    def test_resume_command_must_reference_fresh_checkpoint(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["resume_command"] = ["python", "resume.py"]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "resume_command must explicitly reference fresh_checkpoint_dir",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_resume_command_accepts_equals_form_checkpoint_reference(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["resume_command"] = [
+                "python",
+                "resume.py",
+                f"--resume={case['fresh_checkpoint_dir']}",
+            ]
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )
+        self.assertEqual(len(loaded), 1)
+
     def test_checkpoint_directories_must_be_distinct_and_external(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
@@ -254,6 +288,15 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertLess(
             source.index("_BOOTSTRAP_COMMIT = _assert_clean_head"),
             source.index("import torch"),
+        )
+
+    def test_runner_rejects_stale_checkpoint_directories(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("def _assert_checkpoint_dir_absent(", source)
+        self.assertIn("stale qualification evidence is forbidden", source)
+        self.assertGreaterEqual(
+            source.count("_assert_checkpoint_dir_absent("),
+            4,
         )
 
     def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
