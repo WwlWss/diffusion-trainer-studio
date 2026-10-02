@@ -261,6 +261,15 @@ def _checkpoint_payload(path: str, *, train_type: str) -> dict[str, Any]:
     )
 
 
+def _assert_checkpoint_dir_absent(path: str, *, label: str) -> None:
+    target = Path(path)
+    if target.exists():
+        raise BackendFeatureGpuMatrixError(
+            f"{label} must not exist before its command runs; stale qualification "
+            f"evidence is forbidden: {target}."
+        )
+
+
 def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     row: dict[str, Any] = {
         "case_id": case["case_id"],
@@ -274,6 +283,14 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
     }
     try:
         _repo_clean("before fresh backend command")
+        _assert_checkpoint_dir_absent(
+            case["fresh_checkpoint_dir"],
+            label="Fresh checkpoint directory",
+        )
+        _assert_checkpoint_dir_absent(
+            case["resume_checkpoint_dir"],
+            label="Resume checkpoint directory",
+        )
         fresh = _run_command(
             case["fresh_command"],
             cwd=case["cwd"],
@@ -290,6 +307,10 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             train_type=case["train_type"],
         )
         row["fresh_checkpoint_manifest"] = fresh_manifest
+        _assert_checkpoint_dir_absent(
+            case["resume_checkpoint_dir"],
+            label="Resume checkpoint directory",
+        )
 
         resume = _run_command(
             case["resume_command"],
