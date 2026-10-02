@@ -82,6 +82,8 @@ on:
       - "tools/parameter_policy_execution_gpu_support.py"
       - "tools/parameter_policy_execution_gpu_runtime.py"
       - "tools/run_parameter_policy_backend_gpu_matrix.py"
+      - "tools/run_parameter_policy_backend_feature_gpu_matrix.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/stable/library/dts_parameter_policy_bridge.py"
@@ -176,6 +178,8 @@ jobs:
             tools/parameter_policy_execution_gpu_support.py \
             tools/parameter_policy_execution_gpu_runtime.py \
             tools/run_parameter_policy_backend_gpu_matrix.py \
+            tools/run_parameter_policy_backend_feature_gpu_matrix.py \
+            tools/parameter_policy_backend_feature_gpu_support.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
             scripts/stable/library/dts_parameter_policy_bridge.py \
