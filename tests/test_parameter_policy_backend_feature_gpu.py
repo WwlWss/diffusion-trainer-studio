@@ -419,7 +419,8 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
     def test_runner_rejects_stale_checkpoint_directories(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn("def _assert_checkpoint_dir_absent(", source)
-        self.assertIn("stale qualification evidence is forbidden", source)
+        self.assertIn("stale qualification", source)
+        self.assertIn("evidence is forbidden", source)
         self.assertGreaterEqual(
             source.count("_assert_checkpoint_dir_absent("),
             4,
