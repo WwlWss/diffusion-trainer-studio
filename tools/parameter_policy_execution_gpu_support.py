@@ -17,6 +17,9 @@ class ExecutionGpuMatrixError(RuntimeError):
 
 ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:adamw-full-bf16:v1"
 MUON_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:muon-full-bf16:v1"
+MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID = (
+    "phase-c:muon-adamw-explicit-fallback-full-bf16:v1"
+)
 
 MUON_FULL_BF16_ARGUMENT_FAMILY = (
     "momentum",
@@ -38,6 +41,11 @@ MUON_FULL_BF16_CASE_IDS = (
     "optimizer:muon:full-bf16:accum2:v1",
 )
 
+MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS = (
+    "optimizer:muon-adamw-explicit-fallback:full-bf16:accum1:v1",
+    "optimizer:muon-adamw-explicit-fallback:full-bf16:accum2:v1",
+)
+
 EXECUTION_GPU_CASE_PHASES: dict[str, tuple[str, ...]] = {
     "infra:cuda-bf16-capability:v1": ("probe",),
     "infra:full-bf16-session:v1": ("probe",),
@@ -54,6 +62,14 @@ EXECUTION_GPU_CASE_PHASES: dict[str, tuple[str, ...]] = {
         "resume_second_step",
     ),
     MUON_FULL_BF16_CASE_IDS[1]: (
+        "train_save",
+        "resume_second_step",
+    ),
+    MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[0]: (
+        "train_save",
+        "resume_second_step",
+    ),
+    MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS[1]: (
         "train_save",
         "resume_second_step",
     ),
@@ -123,6 +139,46 @@ def summarize_muon_full_bf16_bundle(
         "promotion_eligible": False,
         "optimizer_qualification_eligible": False,
         "production_qualification_mutated": False,
+    }
+
+
+def summarize_muon_adamw_fallback_full_bf16_bundle(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+) -> dict[str, Any] | None:
+    rows = {
+        row.get("case_id"): row
+        for row in case_rows
+        if row.get("case_id") in MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS
+    }
+    if not rows:
+        return None
+
+    missing_cases = sorted(
+        set(MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS).difference(rows)
+    )
+    if missing_cases:
+        status = "incomplete"
+    elif all(row.get("status") == "pass" for row in rows.values()):
+        status = "pass"
+    else:
+        status = "fail"
+
+    return {
+        "scope": "optimizer_topology",
+        "feature": "full_bf16",
+        "topology": "muon_primary_adamw_explicit_fallback",
+        "optimizers": ["Muon", "AdamW"],
+        "required_cases": list(MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS),
+        "missing_cases": missing_cases,
+        "status": status,
+        "topology_evidence_complete": status == "pass",
+        "promotion_eligible": False,
+        "optimizer_qualification_eligible": False,
+        "production_qualification_mutated": False,
+        "prerequisite_bundles": [
+            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+        ],
     }
 
 
@@ -222,7 +278,10 @@ __all__ = [
     "MUON_FULL_BF16_ARGUMENT_FAMILY",
     "MUON_FULL_BF16_CASE_IDS",
     "MUON_FULL_BF16_EVIDENCE_BUNDLE_ID",
+    "MUON_ADAMW_FALLBACK_FULL_BF16_CASE_IDS",
+    "MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID",
     "summarize_adamw_full_bf16_bundle",
     "summarize_muon_full_bf16_bundle",
+    "summarize_muon_adamw_fallback_full_bf16_bundle",
     "temporary_execution_qualification",
 ]
