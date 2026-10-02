@@ -399,6 +399,47 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('optimizers=("Muon", "AdamW")', source)
         self.assertIn('"scope": "optimizer_topology"', source)
 
+    def test_c4_hardening_fails_closed_on_nonfinite_state_and_invalid_steps(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        c4_step = source.split("def _run_c4_logical_step(", 1)[1].split(
+            "\ndef _build_c4_runtime", 1
+        )[0]
+        self.assertGreaterEqual(
+            c4_step.count("_assert_tensor_evidence_finite("),
+            9,
+        )
+        self.assertIn('label="C4 routed parameter state"', c4_step)
+        self.assertIn('label="C4 optimizer state"', c4_step)
+        self.assertIn('label="C4 scheduler state"', c4_step)
+
+        self.assertIn("def _c4_exact_nonnegative_step(", source)
+        muon_state = source.split("def _c4_muon_state_evidence(", 1)[1].split(
+            "\ndef _c4_adamw_state_evidence", 1
+        )[0]
+        adamw_state = source.split("def _c4_adamw_state_evidence(", 1)[1].split(
+            "\ndef _c4_scheduler_evidence", 1
+        )[0]
+        fresh_state = source.split("def _c4_fresh_state_is_empty(", 1)[1].split(
+            "\ndef _c4_qualification_contract", 1
+        )[0]
+        self.assertIn("_c4_exact_nonnegative_step(", muon_state)
+        self.assertIn("_c4_exact_nonnegative_step(", adamw_state)
+        self.assertIn("_c4_exact_nonnegative_step(", fresh_state)
+        self.assertNotIn("int(raw_step)", muon_state)
+        self.assertNotIn("int(raw_step)", adamw_state)
+
+    def test_c4_actual_muon_child_matches_pinned_provider_class(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        build = source.split("def _build_c4_runtime(", 1)[1].split(
+            "\ndef _c4_handoff_path", 1
+        )[0]
+        self.assertIn('muon_path = _c4_muon_state_evidence(session)', build)
+        self.assertIn('muon_path["child_class"] != provider["class"]', build)
+        self.assertIn(
+            "C4 Muon runtime resolved a different provider class",
+            build,
+        )
+
     def test_c4_evidence_does_not_add_production_topology_qualification(self):
         source = RUNNER.read_text(encoding="utf-8")
         production = (ROOT / "mikazuki" / "parameter_policy_execution.py").read_text(
