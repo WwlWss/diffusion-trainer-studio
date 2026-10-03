@@ -247,18 +247,16 @@ def _validate_lifecycle_command_contract(
             case_id=case_id,
             phase=phase,
         )
-        hidden = [
-            key
-            for key in (
-                "max_train_epochs",
-                "initial_epoch",
-                "initial_step",
-                "skip_until_initial_step",
-                "resume",
-                "resume_from_huggingface",
-            )
-            if config.get(key) not in (None, "", False)
-        ]
+        hidden: list[str] = []
+        for key in ("max_train_epochs", "initial_epoch", "initial_step"):
+            if key in config and config.get(key) not in (None, ""):
+                hidden.append(key)
+        if config.get("skip_until_initial_step") is True:
+            hidden.append("skip_until_initial_step")
+        if config.get("resume") not in (None, ""):
+            hidden.append("resume")
+        if config.get("resume_from_huggingface") is True:
+            hidden.append("resume_from_huggingface")
         if hidden:
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} {phase} trainer config may not "
