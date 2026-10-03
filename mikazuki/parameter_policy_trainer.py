@@ -49,6 +49,8 @@ from mikazuki.parameter_routing import (
 
 PARAMETER_POLICY_CHECKPOINT_MANIFEST = "dts_parameter_policy_manifest.json"
 PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION = 2
+PARAMETER_POLICY_CHECKPOINT_PROGRESS = "dts_parameter_policy_progress.json"
+PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION = 1
 PARAMETER_POLICY_SCHEDULER_IDENTITY_VERSION = 1
 _LIVE_ROOT_AUDIT_PHASES = frozenset({"post_prepare", "post_resume"})
 _EXECUTION_PARAMETER_DTYPES: dict[str, torch.dtype] = {
@@ -62,6 +64,41 @@ _EXECUTION_MANIFEST_KEYS = (
 
 class ParameterPolicyTrainerRuntimeError(RuntimeError):
     """Raised when trainer integration cannot honor Parameter Policy exactly."""
+
+
+def _checkpoint_step_scalar(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value) if value.is_integer() else None
+    if isinstance(value, torch.Tensor):
+        if value.numel() != 1:
+            return None
+        item = value.detach().cpu().item()
+        if isinstance(item, bool):
+            return None
+        if isinstance(item, int):
+            return item
+        if isinstance(item, float) and item.is_integer():
+            return int(item)
+    return None
+
+
+def _collect_optimizer_step_values(value: object) -> list[int]:
+    values: list[int] = []
+    if isinstance(value, Mapping):
+        for key, child in value.items():
+            if str(key) == "step":
+                scalar = _checkpoint_step_scalar(child)
+                if scalar is not None:
+                    values.append(scalar)
+            values.extend(_collect_optimizer_step_values(child))
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            values.extend(_collect_optimizer_step_values(child))
+    return values
 
 
 def _current_cuda_device_index() -> int:
@@ -1225,6 +1262,100 @@ class ParameterPolicyTrainerSession:
                 "Load model weights only when intentionally starting a new policy/stage."
             )
 
+    def checkpoint_progress(
+        self,
+        *,
+        optimizer: object,
+        scheduler: object,
+    ) -> dict[str, Any]:
+        if self.execution_contract is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress evidence is only defined for an active "
+                "Parameter Policy execution contract."
+            )
+
+        optimizer_state_fn = getattr(optimizer, "state_dict", None)
+        scheduler_state_fn = getattr(scheduler, "state_dict", None)
+        if not callable(optimizer_state_fn) or not callable(scheduler_state_fn):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress evidence requires optimizer/scheduler state_dict()."
+            )
+
+        optimizer_state = optimizer_state_fn()
+        if not isinstance(optimizer_state, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress state must be a mapping."
+            )
+        children = optimizer_state.get("children")
+        if not isinstance(children, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress requires CompositeOptimizer children."
+            )
+
+        optimizer_profiles: dict[str, Any] = {}
+        expected_profiles = {
+            spec.profile_name: spec.optimizer_type
+            for spec in self.runtime_spec.optimizers
+        }
+        if set(children) != set(expected_profiles):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress child Profile set does not match runtime."
+            )
+        for profile_name, optimizer_type in expected_profiles.items():
+            child = children.get(profile_name)
+            if not isinstance(child, Mapping):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint optimizer progress child {profile_name!r} is invalid."
+                )
+            child_state = child.get("state_dict")
+            if not isinstance(child_state, Mapping):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint optimizer progress child {profile_name!r} has no state_dict."
+                )
+            step_values = sorted(set(_collect_optimizer_step_values(child_state)))
+            optimizer_profiles[profile_name] = {
+                "optimizer_type": optimizer_type,
+                "step_values": step_values,
+            }
+
+        scheduler_state = scheduler_state_fn()
+        if not isinstance(scheduler_state, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint scheduler progress state must be a mapping."
+            )
+        step_count = scheduler_state.get("step_count")
+        last_epoch = scheduler_state.get("last_epoch")
+        if (
+            isinstance(step_count, bool)
+            or not isinstance(step_count, int)
+            or step_count < 0
+            or isinstance(last_epoch, bool)
+            or not isinstance(last_epoch, int)
+        ):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint scheduler progress requires integer step_count/last_epoch."
+            )
+
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress evidence requires execution identity."
+            )
+        _identity, execution_signature = execution_payload
+        return {
+            "schema": "dts.parameter-policy.checkpoint-progress",
+            "version": PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION,
+            "train_type": self.train_type,
+            "policy_hash": self.policy_hash,
+            "runtime_topology_fingerprint": self.runtime_spec.topology_fingerprint,
+            "execution_signature": execution_signature,
+            "optimizer_profiles": optimizer_profiles,
+            "scheduler": {
+                "step_count": step_count,
+                "last_epoch": last_epoch,
+            },
+        }
+
     def register_checkpoint_manifest(
         self,
         accelerator: object,
@@ -1250,6 +1381,29 @@ class ParameterPolicyTrainerSession:
                 encoding="utf-8",
             )
             os.replace(temp, path)
+
+            if self.execution_contract is not None:
+                if optimizer is None or scheduler is None:
+                    raise ParameterPolicyTrainerRuntimeError(
+                        "Execution checkpoint progress requires prepared optimizer/scheduler."
+                    )
+                progress = self.checkpoint_progress(
+                    optimizer=optimizer,
+                    scheduler=scheduler,
+                )
+                progress_path = Path(output_dir) / PARAMETER_POLICY_CHECKPOINT_PROGRESS
+                progress_temp = progress_path.with_name(progress_path.name + ".tmp")
+                progress_temp.write_text(
+                    json.dumps(
+                        progress,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                os.replace(progress_temp, progress_path)
 
         def load_hook(models, input_dir):
             del models
