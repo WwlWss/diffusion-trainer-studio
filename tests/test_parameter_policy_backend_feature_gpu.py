@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 from pathlib import Path
@@ -688,14 +689,63 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
 
     def test_runner_rechecks_exact_head_after_fresh_resume_and_final(self):
         source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn('row["pre_fresh_commit"] = _assert_clean_head', source)
-        self.assertIn('row["post_fresh_commit"] = _assert_clean_head', source)
-        self.assertIn('row["pre_resume_commit"] = _assert_clean_head', source)
-        self.assertIn('row["post_resume_commit"] = _assert_clean_head', source)
-        self.assertIn(
-            'evidence["final_provenance_commit"] = _assert_clean_head',
-            source,
+        tree = ast.parse(source)
+
+        functions = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+        }
+        run_case = functions["_run_case"]
+        main = functions["main"]
+
+        run_case_calls = [
+            node
+            for node in ast.walk(run_case)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_assert_clean_head"
+        ]
+        self.assertGreaterEqual(len(run_case_calls), 4)
+
+        assigned_keys = {
+            target.slice.value
+            for node in ast.walk(run_case)
+            if isinstance(node, ast.Assign)
+            for target in node.targets
+            if isinstance(target, ast.Subscript)
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "row"
+            and isinstance(target.slice, ast.Constant)
+            and isinstance(target.slice.value, str)
+        }
+        self.assertTrue(
+            {
+                "pre_fresh_commit",
+                "post_fresh_commit",
+                "pre_resume_commit",
+                "post_resume_commit",
+            }.issubset(assigned_keys)
         )
+
+        final_assignments = [
+            node
+            for node in ast.walk(main)
+            if isinstance(node, ast.Assign)
+            and any(
+                isinstance(target, ast.Subscript)
+                and isinstance(target.value, ast.Name)
+                and target.value.id == "evidence"
+                and isinstance(target.slice, ast.Constant)
+                and target.slice.value == "final_provenance_commit"
+                for target in node.targets
+            )
+        ]
+        self.assertEqual(len(final_assignments), 1)
+        final_value = final_assignments[0].value
+        self.assertIsInstance(final_value, ast.Call)
+        self.assertIsInstance(final_value.func, ast.Name)
+        self.assertEqual(final_value.func.id, "_assert_clean_head")
 
     def test_runner_rejects_stale_checkpoint_directories(self):
         source = RUNNER.read_text(encoding="utf-8")
