@@ -263,6 +263,59 @@ def summarize_shared_full_bf16_promotion(
     }
 
 
+def summarize_shared_full_bf16_regression(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    required_cases = tuple(EXECUTION_GPU_CASE_PHASES)
+    rows = {
+        row.get("case_id"): row
+        for row in case_rows
+        if row.get("case_id") in required_cases
+    }
+    missing_cases = sorted(set(required_cases).difference(rows))
+    failed_cases = sorted(
+        case_id
+        for case_id, row in rows.items()
+        if row.get("status") != "pass"
+    )
+
+    optimizers = qualification_snapshot.get("optimizers", {})
+    expected_targets = ("AdamW", "Muon")
+    target_rows_match = all(
+        optimizers.get(name, {}).get("status") == "qualified"
+        and optimizers.get(name, {}).get("evidence_case_id")
+        == SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID
+        for name in expected_targets
+    )
+    complete = not missing_cases and not failed_cases
+    status = "pass" if complete and target_rows_match else "fail"
+
+    return {
+        "id": "phase-d:shared-adamw-muon-full-bf16-regression:v1",
+        "scope": "shared_optimizer_regression",
+        "feature": "full_bf16",
+        "targets": list(expected_targets),
+        "required_cases": list(required_cases),
+        "required_bundles": [
+            ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            MUON_FULL_BF16_EVIDENCE_BUNDLE_ID,
+            MUON_ADAMW_FALLBACK_FULL_BF16_EVIDENCE_BUNDLE_ID,
+        ],
+        "missing_cases": missing_cases,
+        "failed_cases": failed_cases,
+        "target_rows_match": target_rows_match,
+        "infra_complete": all(
+            rows.get(case_id, {}).get("status") == "pass"
+            for case_id in EXECUTION_INFRA_CASE_IDS
+        ),
+        "status": status,
+        "promotion_eligible": False,
+        "optimizer_qualification_eligible": False,
+        "runtime_qualification_mutated": False,
+    }
+
+
 @contextmanager
 def temporary_execution_qualification(
     *,
@@ -367,5 +420,6 @@ __all__ = [
     "summarize_muon_full_bf16_bundle",
     "summarize_muon_adamw_fallback_full_bf16_bundle",
     "summarize_shared_full_bf16_promotion",
+    "summarize_shared_full_bf16_regression",
     "temporary_execution_qualification",
 ]
