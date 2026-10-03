@@ -76,6 +76,8 @@ def _progress(
     optimizer_step: int,
     scheduler_step_count: int,
     scheduler_last_epoch: int,
+    checkpoint_id: str = "checkpoint",
+    resume_source_checkpoint_id: str | None = None,
 ) -> dict:
     return {
         "schema": CHECKPOINT_PROGRESS_SCHEMA,
@@ -84,6 +86,8 @@ def _progress(
         "policy_hash": policy_hash,
         "runtime_topology_fingerprint": topology,
         "execution_signature": execution_signature,
+        "checkpoint_id": checkpoint_id,
+        "resume_source_checkpoint_id": resume_source_checkpoint_id,
         "optimizer_profiles": {
             "main": {
                 "optimizer_type": "AdamW",
@@ -533,12 +537,15 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
             optimizer_step=1,
             scheduler_step_count=2,
             scheduler_last_epoch=1,
+            checkpoint_id="fresh-id",
         )
         resumed = _progress(
             execution_signature=manifest["execution_signature"],
             optimizer_step=2,
             scheduler_step_count=3,
             scheduler_last_epoch=2,
+            checkpoint_id="resume-id",
+            resume_source_checkpoint_id="fresh-id",
         )
         self.assertIs(
             validate_checkpoint_progress(
@@ -553,37 +560,79 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
         )
         compare_checkpoint_progress(fresh, resumed)
 
-    def test_checkpoint_progress_rejects_fake_or_skipped_resume(self):
+    def test_checkpoint_progress_rejects_independent_fresh_or_wrong_parent(self):
         manifest = _checkpoint()
         fresh = _progress(
             execution_signature=manifest["execution_signature"],
             optimizer_step=1,
             scheduler_step_count=2,
             scheduler_last_epoch=1,
+            checkpoint_id="fresh-id",
         )
-        fake = _progress(
+        independent = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=2,
+            scheduler_step_count=3,
+            scheduler_last_epoch=2,
+            checkpoint_id="independent-id",
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "lineage does not reference",
+        ):
+            compare_checkpoint_progress(fresh, independent)
+
+        wrong_parent = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=2,
+            scheduler_step_count=3,
+            scheduler_last_epoch=2,
+            checkpoint_id="resume-id",
+            resume_source_checkpoint_id="other-id",
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "lineage does not reference",
+        ):
+            compare_checkpoint_progress(fresh, wrong_parent)
+
+    def test_checkpoint_progress_rejects_reused_id_or_skipped_step(self):
+        manifest = _checkpoint()
+        fresh = _progress(
             execution_signature=manifest["execution_signature"],
             optimizer_step=1,
             scheduler_step_count=2,
             scheduler_last_epoch=1,
+            checkpoint_id="fresh-id",
+        )
+        reused = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=2,
+            scheduler_step_count=3,
+            scheduler_last_epoch=2,
+            checkpoint_id="fresh-id",
+            resume_source_checkpoint_id="fresh-id",
         )
         with self.assertRaisesRegex(
             BackendFeatureGpuMatrixError,
-            "logical optimizer step 2",
+            "distinct checkpoint_id",
         ):
-            compare_checkpoint_progress(fresh, fake)
+            compare_checkpoint_progress(fresh, reused)
 
         skipped = _progress(
             execution_signature=manifest["execution_signature"],
             optimizer_step=3,
             scheduler_step_count=4,
             scheduler_last_epoch=3,
+            checkpoint_id="resume-id",
+            resume_source_checkpoint_id="fresh-id",
         )
         with self.assertRaisesRegex(
             BackendFeatureGpuMatrixError,
             "logical optimizer step 2",
         ):
             compare_checkpoint_progress(fresh, skipped)
+
 
     def test_fresh_resume_trainable_counts_must_match(self):
         fresh = _checkpoint()
