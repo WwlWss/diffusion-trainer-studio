@@ -5,9 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+import re
 from typing import Any
-
-import toml
 
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_BACKEND_MATRIX,
@@ -175,16 +174,16 @@ def _normalize_backend_command(
     ]
 
 
-def _trainer_config_values(
+def _trainer_config_lifecycle_fields(
     command: list[str],
     *,
     repo_root: Path,
     case_id: str,
     phase: str,
-) -> dict[str, Any]:
+) -> set[str]:
     values = _option_values(command, "--config_file")
     if not values:
-        return {}
+        return set()
     if len(values) != 1:
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} {phase} command must set "
@@ -200,20 +199,33 @@ def _trainer_config_values(
             f"{path}."
         )
     try:
-        raw = toml.load(path)
-    except (OSError, TypeError, toml.TomlDecodeError) as exc:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
         raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} {phase} trainer config is invalid: "
+            f"Backend feature case {case_id!r} {phase} trainer config cannot be read: "
             f"{path}: {exc}"
         ) from exc
-    flattened: dict[str, Any] = {}
-    for key, value in raw.items():
-        if isinstance(value, dict):
-            flattened.update(value)
-        else:
-            flattened[key] = value
-    return flattened
 
+    guarded = (
+        "max_train_epochs",
+        "initial_epoch",
+        "initial_step",
+        "skip_until_initial_step",
+        "resume",
+        "resume_from_huggingface",
+    )
+    pattern = re.compile(
+        r"^\s*[\"']?(" + "|".join(re.escape(key) for key in guarded)
+        + r")[\"']?\s*="
+    )
+    found: set[str] = set()
+    for line in text.splitlines():
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        match = pattern.match(line)
+        if match:
+            found.add(match.group(1))
+    return found
 
 def _validate_lifecycle_command_contract(
     *,
@@ -241,22 +253,14 @@ def _validate_lifecycle_command_contract(
                 f"step-override option(s): {present!r}."
             )
 
-        config = _trainer_config_values(
-            command,
-            repo_root=repo_root,
-            case_id=case_id,
-            phase=phase,
+        hidden = sorted(
+            _trainer_config_lifecycle_fields(
+                command,
+                repo_root=repo_root,
+                case_id=case_id,
+                phase=phase,
+            )
         )
-        hidden: list[str] = []
-        for key in ("max_train_epochs", "initial_epoch", "initial_step"):
-            if key in config and config.get(key) not in (None, ""):
-                hidden.append(key)
-        if config.get("skip_until_initial_step") is True:
-            hidden.append("skip_until_initial_step")
-        if config.get("resume") not in (None, ""):
-            hidden.append("resume")
-        if config.get("resume_from_huggingface") is True:
-            hidden.append("resume_from_huggingface")
         if hidden:
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} {phase} trainer config may not "
