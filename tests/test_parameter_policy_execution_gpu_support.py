@@ -353,14 +353,16 @@ class SharedFullBf16RegressionTests(SharedFullBf16PromotionTests):
         self.assertTrue(summary["failed_cases"])
 
     def test_regression_requires_d0_optimizer_authority(self):
-        snapshot = self._snapshot()
-        snapshot["optimizers"]["Muon"]["evidence_case_id"] = "wrong"
-        summary = summarize_shared_full_bf16_regression(
-            self._passing_rows(),
-            snapshot,
-        )
-        self.assertEqual(summary["status"], "fail")
-        self.assertFalse(summary["target_rows_match"])
+        for optimizer_name in ("AdamW", "Muon"):
+            with self.subTest(optimizer=optimizer_name):
+                snapshot = self._snapshot()
+                snapshot["optimizers"][optimizer_name]["evidence_case_id"] = "wrong"
+                summary = summarize_shared_full_bf16_regression(
+                    self._passing_rows(),
+                    snapshot,
+                )
+                self.assertEqual(summary["status"], "fail")
+                self.assertFalse(summary["target_rows_match"])
 
 
 class TemporaryExecutionQualificationTests(unittest.TestCase):
