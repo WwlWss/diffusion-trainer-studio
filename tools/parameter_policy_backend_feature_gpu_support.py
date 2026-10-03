@@ -436,7 +436,7 @@ def load_backend_feature_manifest(
             case_id=case_id,
         )
         commands = {
-            phase: _normalize_backend_command(
+            f"{phase}_command": _normalize_backend_command(
                 raw_commands[f"{phase}_command"],
                 canonical_entrypoint=canonical_entrypoint,
                 repo_root=repo_root,
