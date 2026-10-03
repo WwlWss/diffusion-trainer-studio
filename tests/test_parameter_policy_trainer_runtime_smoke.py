@@ -758,6 +758,75 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             resume_accelerator.end_training()
 
+    def test_full_bf16_post_resume_rejects_progress_without_optimizer_restore(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+            model.to(torch.bfloat16)
+            save_accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = save_accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=save_accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            loss = model(torch.ones(2, 4, dtype=torch.bfloat16)).sum()
+            save_accelerator.backward(loss)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+            fresh_dir = Path(temp_dir) / "fresh-step"
+            save_accelerator.save_state(fresh_dir)
+            save_accelerator.end_training()
+
+            args2, model2, session2 = self._build_mock_qualified_full_bf16_session(
+                policy_path,
+                resume=str(fresh_dir),
+            )
+            scheduler2 = session2.build_scheduler(self._scheduler_factory(args2))
+            model2.to(torch.bfloat16)
+            resume_accelerator = Accelerator(cpu=True)
+            model2, optimizer2, scheduler2 = resume_accelerator.prepare(
+                model2,
+                session2.optimizer,
+                scheduler2,
+            )
+            session2.finalize_after_prepare(
+                accelerator=resume_accelerator,
+                optimizer=optimizer2,
+                scheduler=scheduler2,
+            )
+
+            session2._pending_resume_progress = session2._load_checkpoint_progress(
+                fresh_dir
+            )
+            self.assertEqual(
+                session2._optimizer_progress_profiles(optimizer2)["main"][
+                    "step_values"
+                ],
+                [],
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "Loaded optimizer progress does not match",
+            ):
+                session2.assert_runtime_contract(
+                    phase="post_resume",
+                    accelerator=resume_accelerator,
+                    optimizer=optimizer2,
+                )
+            resume_accelerator.end_training()
+
     def test_full_bf16_requested_resume_requires_loaded_progress(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = Path(temp_dir) / "policy.json"
