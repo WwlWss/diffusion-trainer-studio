@@ -17,6 +17,7 @@ and the tiny Flux scaffold is never backend-qualification evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -352,6 +353,9 @@ def _cuda_environment() -> dict[str, Any]:
 
     return {
         "python": platform.python_version(),
+        "requirements_sha256": hashlib.sha256(
+            (REPO_ROOT / "requirements.txt").read_bytes()
+        ).hexdigest(),
         "platform": platform.platform(),
         "torch": torch.__version__,
         "cuda_runtime": torch.version.cuda,
@@ -366,6 +370,14 @@ def _cuda_environment() -> dict[str, Any]:
                 "lion-pytorch",
                 "schedulefree",
                 "pytorch-optimizer",
+                "transformers",
+                "diffusers",
+                "safetensors",
+                "huggingface-hub",
+                "toml",
+                "numpy",
+                "opencv-python",
+                "imagesize",
             )
         },
         "gpu_count": torch.cuda.device_count(),
