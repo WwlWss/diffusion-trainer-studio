@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
-import re
+import tomllib
 from typing import Any
 
 from mikazuki.parameter_policy_matrix import (
@@ -199,33 +199,31 @@ def _trainer_config_lifecycle_fields(
             f"{path}."
         )
     try:
-        text = path.read_text(encoding="utf-8")
-    except OSError as exc:
+        with path.open("rb") as handle:
+            raw = tomllib.load(handle)
+    except (OSError, tomllib.TOMLDecodeError) as exc:
         raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} {phase} trainer config cannot be read: "
+            f"Backend feature case {case_id!r} {phase} trainer config is invalid: "
             f"{path}: {exc}"
         ) from exc
 
-    guarded = (
+    flattened: dict[str, Any] = {}
+    for key, value in raw.items():
+        if isinstance(value, dict):
+            for nested_key, nested_value in value.items():
+                flattened[str(nested_key)] = nested_value
+        else:
+            flattened[str(key)] = value
+
+    guarded = {
         "max_train_epochs",
         "initial_epoch",
         "initial_step",
         "skip_until_initial_step",
         "resume",
         "resume_from_huggingface",
-    )
-    pattern = re.compile(
-        r"^\s*[\"']?(" + "|".join(re.escape(key) for key in guarded)
-        + r")[\"']?\s*="
-    )
-    found: set[str] = set()
-    for line in text.splitlines():
-        if not line.strip() or line.lstrip().startswith("#"):
-            continue
-        match = pattern.match(line)
-        if match:
-            found.add(match.group(1))
-    return found
+    }
+    return guarded.intersection(flattened)
 
 def _validate_lifecycle_command_contract(
     *,
