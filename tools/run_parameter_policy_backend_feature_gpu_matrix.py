@@ -122,13 +122,16 @@ import torch
 from mikazuki.parameter_policy_trainer import (
     PARAMETER_POLICY_CHECKPOINT_MANIFEST,
     PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
+    PARAMETER_POLICY_CHECKPOINT_PROGRESS,
 )
 from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
     BACKEND_FEATURE_EVIDENCE_VERSION,
     BackendFeatureGpuMatrixError,
     compare_backend_checkpoint_contracts,
+    compare_checkpoint_progress,
     load_backend_feature_manifest,
+    validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
 )
 
@@ -241,10 +244,30 @@ def _redacted_argv(command: list[str]) -> list[str]:
     return redacted
 
 
+def _qualification_command(command: list[str]) -> list[str]:
+    accelerate_config = REPO_ROOT / "config" / "accelerate-gpu.yaml"
+    if not accelerate_config.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Missing DTS GPU Accelerate config: {accelerate_config}."
+        )
+    return [
+        sys.executable,
+        "-m",
+        "accelerate.commands.launch",
+        "--config_file",
+        str(accelerate_config),
+        "--num_cpu_threads_per_process",
+        "2",
+        "--quiet",
+        *command,
+    ]
+
+
 def _command_contract(case: dict[str, Any]) -> dict[str, Any]:
     return {
-        "fresh_argv": _redacted_argv(case["fresh_command"]),
-        "resume_argv": _redacted_argv(case["resume_command"]),
+        "python_executable": sys.executable,
+        "fresh_argv": _redacted_argv(_qualification_command(case["fresh_command"])),
+        "resume_argv": _redacted_argv(_qualification_command(case["resume_command"])),
         "cwd": case["cwd"],
         "entrypoint": case["entrypoint"],
         "environment_keys": sorted(case["environment"]),
@@ -263,7 +286,7 @@ def _run_command(
     env.update(environment)
     started = time.time()
     completed = subprocess.run(
-        command,
+        _qualification_command(command),
         cwd=cwd or str(REPO_ROOT),
         env=env,
         text=True,
@@ -296,6 +319,28 @@ def _checkpoint_payload(path: str, *, train_type: str) -> dict[str, Any]:
         payload,
         train_type=train_type,
         manifest_version=PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
+    )
+
+
+def _checkpoint_progress_payload(
+    path: str,
+    *,
+    checkpoint_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    progress_path = Path(path) / PARAMETER_POLICY_CHECKPOINT_PROGRESS
+    if not progress_path.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Missing Parameter Policy checkpoint progress evidence: {progress_path}."
+        )
+    try:
+        payload = json.loads(progress_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Invalid Parameter Policy checkpoint progress {progress_path}: {exc}"
+        ) from exc
+    return validate_checkpoint_progress(
+        payload,
+        checkpoint_manifest=checkpoint_manifest,
     )
 
 
@@ -346,6 +391,11 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             train_type=case["train_type"],
         )
         row["fresh_checkpoint_manifest"] = fresh_manifest
+        fresh_progress = _checkpoint_progress_payload(
+            case["fresh_checkpoint_dir"],
+            checkpoint_manifest=fresh_manifest,
+        )
+        row["fresh_checkpoint_progress"] = fresh_progress
         _assert_checkpoint_dir_absent(
             case["resume_checkpoint_dir"],
             label="Resume checkpoint directory",
@@ -367,7 +417,13 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             train_type=case["train_type"],
         )
         row["resume_checkpoint_manifest"] = resumed_manifest
+        resumed_progress = _checkpoint_progress_payload(
+            case["resume_checkpoint_dir"],
+            checkpoint_manifest=resumed_manifest,
+        )
+        row["resume_checkpoint_progress"] = resumed_progress
         compare_backend_checkpoint_contracts(fresh_manifest, resumed_manifest)
+        compare_checkpoint_progress(fresh_progress, resumed_progress)
         row["status"] = "pass"
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
