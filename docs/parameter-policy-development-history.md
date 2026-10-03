@@ -3194,8 +3194,8 @@ D0 将 strict C1-C4 execution runner正式接入 `.github/workflows/parameter-po
 
 ```text
 checkout exact head
-→ install pinned runtime
-→ strict C1-C4 execution qualification
+→ install Python 3.11 + torch/torchvision + canonical requirements.txt runtime
+→ strict C1-C4 execution qualification in explicit d0-promotion/regression mode
 → worker post-run + coordinator final exact-head/clean-tree audit
 → legacy synthetic CUDA regression
 → optional legacy all-backend regression
@@ -3214,6 +3214,8 @@ backend-feature runner在 torch/runtime import之前必须验证：
 - repo tracked/untracked workspace完全 clean；
 - manifest与output均位于 repo之外；
 - D0/D1 case的 `cwd` 必须是当前 exact-head repo root；`train_type` 必须使用 `PARAMETER_POLICY_BACKEND_MATRIX` 中对应的 canonical production trainer。manifest只提供 trainer argv，不拥有 Python解释器或 Accelerate launcher；runner统一用当前 qualification process的 `sys.executable -m accelerate.commands.launch` 与 DTS `config/accelerate-gpu.yaml` 启动，从而把 package/CUDA evidence与实际 trainer runtime绑定在同一环境。不能用另一个 repo脚本、另一个 checkout、另一个 Python/venv或已安装副本冒充 exact-head backend evidence。
+- backend-feature runner在 fresh前、fresh后、resume前、resume后以及最终 evidence写出前都重新执行 exact `HEAD == --expected-commit` + clean-tree审计；child/concurrent process即使切到另一个干净 commit，也不能形成有效 backend evidence。
+- GPU workflow qualification Python固定为3.11；production dependency closure以仓库 `requirements.txt` 为 authority，并额外固定 `torch==2.7.0` / `torchvision==0.22.0`。evidence同时记录 requirements SHA256 与关键 trainer/runtime package versions，避免依赖 self-hosted runner的 ambient site-packages。
 - D0/D1 manifest v1只接受七个 non-Anima qualification backend：`sd-lora`、`sdxl-lora`、`sdxl-finetune`、`sd3-lora`、`flux-lora`、`chroma-lora`、`flux-finetune`；`sd-dreambooth` 继续 unsupported，Anima staged runtime provenance在 D2另行显式扩展。
 
 manifest v1允许按 case选择，不再强制一次覆盖全部10个 backend。每个 case至少包含：
@@ -3231,7 +3233,9 @@ resume_checkpoint_dir
 
 两个 checkpoint目录必须不同且位于 repo之外，并且在对应命令运行前不得已经存在，防止旧 checkpoint/manifest 被误当成本轮 qualification evidence。qualification command contract固定要求 fresh与resume都显式 `--max_train_steps=2 --save_every_n_steps=1 --save_state`，禁止 CLI 或 trainer TOML通过 `max_train_epochs`、`initial_step`、`initial_epoch`、`skip_until_initial_step`、hidden resume 等字段改变该 lifecycle。production scheduler identity继续保持 `max_train_steps=2`，因此 fresh/resume scheduler拓扑完全一致。
 
-full-BF16 production checkpoint在原 manifest v2之外新增 additive `dts_parameter_policy_progress.json`，不改变 baseline manifest ABI。该 progress sidecar由 Parameter Policy save pre-hook直接从当时的 CompositeOptimizer / CompositeLRScheduler live state生成，记录每个 optimizer Profile的真实 step values以及 scheduler `step_count/last_epoch`。D1 runner要求 `fresh_checkpoint_dir` 的所有 optimizer Profile严格处于 logical step 1；resume必须以本地 `--resume` 精确加载该 state，`resume_checkpoint_dir` 的所有 Profile严格处于 logical step 2，同时 scheduler counters只增加一次。这样即使某些 full trainer本地 `global_step` 在新进程重新从0计数，也不能用第二个独立 fresh run、只load不step、跳过多个step或仅复制静态 manifest伪造 resume evidence。
+full-BF16 production checkpoint在原 manifest v2之外新增 additive `dts_parameter_policy_progress.json`，不改变 baseline manifest ABI。该 progress sidecar由 Parameter Policy save pre-hook直接从当时的 CompositeOptimizer / CompositeLRScheduler live state生成，记录每个 optimizer Profile的真实 step values、scheduler `step_count/last_epoch`、本 checkpoint唯一 `checkpoint_id`，以及 `resume_source_checkpoint_id`。
+
+load pre-hook读取并验证父 checkpoint progress，但不会在 optimizer真正恢复之前宣称 resume成功；已有 production `post_resume` runtime contract会再次读取 live CompositeOptimizer state，要求它与被加载 progress中的 Profile step evidence完全一致，成功后才把父 `checkpoint_id` 固化为当前 session的 resume lineage。D1 runner因此同时要求：fresh checkpoint parent为 null、resumed checkpoint parent精确等于 fresh `checkpoint_id`、二者 checkpoint ID不同、fresh所有 Profile严格为 logical step 1、resume所有 Profile严格为 logical step 2、scheduler counters只增加一次。第二个独立 fresh run即使最终也到 step 2，因为没有正确 parent lineage，也不能伪造 resume evidence。
 
 两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
 
@@ -3273,7 +3277,11 @@ all backends = pending / unsupported
 
 ### D1 — non-Anima backend qualification
 
-D1使用 D0 backend-feature runner一次处理非Anima backend，各 backend保持独立 evidence bundle/status；某一 backend失败时只保持该 row为 pending，不阻塞其它已通过 backend。目标包括：
+D1使用 D0 backend-feature runner一次处理非Anima backend，各 backend保持独立 evidence bundle/status；某一 backend失败时只保持该 row为 pending，不阻塞其它已通过 backend。
+
+shared C1-C4 runner在 Phase D以后不再重复执行 D0首次 promotion语义，而显式使用 `--qualification-mode regression`：仍要求8个 C1-C4 case全部PASS，并要求 AdamW/Muon继续保持 D0 stable evidence authority，但不再把 candidate backend的 `qualified` source row视为错误。D0 merge gate仍固定使用默认 `d0-promotion`，继续要求所有 backend尚未开放；两种 gate不得隐式互相切换。
+
+目标包括：
 
 - `sdxl-finetune`
 - `flux-finetune`
