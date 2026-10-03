@@ -1292,6 +1292,7 @@ class ParameterPolicyTrainerSession:
             )
         self._resume_source_checkpoint_id = checkpoint_id
         self._pending_resume_progress = None
+        self.resume_requested = False
 
     def assert_runtime_contract(
         self,
