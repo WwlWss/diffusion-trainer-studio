@@ -452,9 +452,6 @@ class LegacySchedulerFactory:
     num_processes: int
     scheduler_identity: dict[str, Any] | None = None
     scheduler_signature: str | None = None
-    resume_requested: bool = False
-    _pending_resume_progress: dict[str, Any] | None = None
-    _resume_source_checkpoint_id: str | None = None
 
     def _ensure_identity(self) -> None:
         if self.scheduler_identity is not None and self.scheduler_signature is not None:
@@ -557,6 +554,9 @@ class ParameterPolicyTrainerSession:
     execution_root_refs: tuple[_ExecutionRootRef, ...]
     scheduler_identity: dict[str, Any] | None = None
     scheduler_signature: str | None = None
+    resume_requested: bool = False
+    _pending_resume_progress: dict[str, Any] | None = None
+    _resume_source_checkpoint_id: str | None = None
 
     @property
     def trainable_parameters(self) -> tuple[Any, ...]:
