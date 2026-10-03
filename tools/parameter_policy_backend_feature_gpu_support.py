@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+import toml
+
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_BACKEND_MATRIX,
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
@@ -173,12 +175,53 @@ def _normalize_backend_command(
     ]
 
 
+def _trainer_config_values(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> dict[str, Any]:
+    values = _option_values(command, "--config_file")
+    if not values:
+        return {}
+    if len(values) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must set "
+            "--config_file at most once."
+        )
+    path = Path(values[0]).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    path = path.resolve(strict=False)
+    if not path.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} trainer config does not exist: "
+            f"{path}."
+        )
+    try:
+        raw = toml.load(path)
+    except (OSError, TypeError, toml.TomlDecodeError) as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} trainer config is invalid: "
+            f"{path}: {exc}"
+        ) from exc
+    flattened: dict[str, Any] = {}
+    for key, value in raw.items():
+        if isinstance(value, dict):
+            flattened.update(value)
+        else:
+            flattened[key] = value
+    return flattened
+
+
 def _validate_lifecycle_command_contract(
     *,
     case_id: str,
     fresh_command: list[str],
     resume_command: list[str],
     fresh_checkpoint: Path,
+    repo_root: Path,
 ) -> None:
     forbidden_options = (
         "--max_train_epochs",
@@ -196,6 +239,30 @@ def _validate_lifecycle_command_contract(
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} {phase} command may not use "
                 f"step-override option(s): {present!r}."
+            )
+
+        config = _trainer_config_values(
+            command,
+            repo_root=repo_root,
+            case_id=case_id,
+            phase=phase,
+        )
+        hidden = [
+            key
+            for key in (
+                "max_train_epochs",
+                "initial_epoch",
+                "initial_step",
+                "skip_until_initial_step",
+                "resume",
+                "resume_from_huggingface",
+            )
+            if config.get(key) not in (None, "", False)
+        ]
+        if hidden:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} trainer config may not "
+                f"override qualification lifecycle fields: {hidden!r}."
             )
 
     if _option_values(fresh_command, "--resume"):
@@ -397,6 +464,7 @@ def load_backend_feature_manifest(
             fresh_command=commands["fresh_command"],
             resume_command=commands["resume_command"],
             fresh_checkpoint=fresh_checkpoint,
+            repo_root=repo_root,
         )
 
         normalized.append(
