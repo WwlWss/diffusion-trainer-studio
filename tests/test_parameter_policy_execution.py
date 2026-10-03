@@ -372,7 +372,7 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             supported,
         )
 
-    def test_phase_b_closeout_keeps_all_execution_qualifications_closed(self):
+    def test_d0_promotes_only_shared_adamw_muon_and_keeps_backends_closed(self):
         self.assertEqual(
             {
                 name: row.status
@@ -397,7 +397,7 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
                 for name, row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.items()
             },
             {
-                "AdamW": "pending",
+                "AdamW": "qualified",
                 "AdamW8bit": "pending",
                 "PagedAdamW8bit": "pending",
                 "PagedAdamW": "pending",
@@ -410,8 +410,29 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
                 "RAdamScheduleFree": "pending",
                 "AdamWScheduleFree": "pending",
                 "SGDScheduleFree": "pending",
-                "Muon": "pending",
+                "Muon": "qualified",
             },
+        )
+
+    def test_d0_shared_optimizer_rows_use_same_stable_evidence_id(self):
+        for name in ("AdamW", "Muon"):
+            row = execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS[name]
+            self.assertEqual(row.status, "qualified")
+            self.assertEqual(
+                row.evidence_case_id,
+                execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID,
+            )
+        self.assertEqual(
+            execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID,
+            "phase-d0:shared-adamw-muon-full-bf16:v1",
+        )
+
+    def test_d0_does_not_qualify_any_backend(self):
+        self.assertFalse(
+            any(
+                row.status == "qualified"
+                for row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.values()
+            )
         )
 
     def test_sd_dreambooth_starts_explicitly_unsupported(self):
@@ -616,6 +637,11 @@ class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
             "test-only release",
             "test:muon",
         )
+        adamw_pending = execution.ExecutionFeatureQualification(
+            "pending",
+            "test-only pending fallback",
+            None,
+        )
         policy = {
             "version": 1,
             "optimizer_profiles": {
@@ -637,7 +663,10 @@ class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
             {"anima-finetune": released},
         ), patch.dict(
             execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS,
-            {"Muon": muon_released},
+            {
+                "Muon": muon_released,
+                "AdamW": adamw_pending,
+            },
         ):
             blockers = execution.parameter_policy_execution_blockers(
                 policy,

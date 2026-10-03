@@ -22,6 +22,8 @@ if _RUNTIME_DEPS_AVAILABLE:
     from mikazuki.parameter_policy_trainer import (
         PARAMETER_POLICY_CHECKPOINT_MANIFEST,
         PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
+        PARAMETER_POLICY_CHECKPOINT_PROGRESS,
+        PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION,
         ParameterPolicyTrainerRuntimeError,
         _same_runtime_device,
         create_parameter_policy_session,
@@ -276,6 +278,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         policy_path,
         *,
         optimizer_type="AdamW",
+        resume="",
     ):
         from mikazuki import parameter_policy_execution as execution
 
@@ -308,6 +311,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             policy_path,
             full_bf16=True,
             mixed_precision="bf16",
+            resume=resume,
         )
         model = TinyFlux()
         structural_bias = model.double_blocks[0].bias
@@ -644,6 +648,215 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             state_dir = Path(temp_dir) / "full-state"
             accelerator.save_state(state_dir)
             session.validate_checkpoint_manifest(state_dir, scheduler=scheduler)
+            accelerator.end_training()
+
+    def test_full_bf16_checkpoint_progress_tracks_resume_optimizer_step(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+            model.to(torch.bfloat16)
+            save_accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = save_accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=save_accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            loss = model(torch.ones(2, 4, dtype=torch.bfloat16)).sum()
+            save_accelerator.backward(loss)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+            fresh_dir = Path(temp_dir) / "fresh-step"
+            save_accelerator.save_state(fresh_dir)
+            fresh_progress = json.loads(
+                (fresh_dir / PARAMETER_POLICY_CHECKPOINT_PROGRESS).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                fresh_progress["version"],
+                PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION,
+            )
+            self.assertEqual(
+                fresh_progress["optimizer_profiles"]["main"]["step_values"],
+                [1],
+            )
+            self.assertIsNone(
+                fresh_progress["resume_source_checkpoint_id"]
+            )
+            self.assertTrue(fresh_progress["checkpoint_id"])
+            fresh_scheduler_step = fresh_progress["scheduler"]["step_count"]
+            fresh_last_epoch = fresh_progress["scheduler"]["last_epoch"]
+            save_accelerator.end_training()
+
+            args2, model2, session2 = self._build_mock_qualified_full_bf16_session(
+                policy_path,
+                resume=str(fresh_dir),
+            )
+            scheduler2 = session2.build_scheduler(self._scheduler_factory(args2))
+            model2.to(torch.bfloat16)
+            resume_accelerator = Accelerator(cpu=True)
+            model2, optimizer2, scheduler2 = resume_accelerator.prepare(
+                model2,
+                session2.optimizer,
+                scheduler2,
+            )
+            session2.finalize_after_prepare(
+                accelerator=resume_accelerator,
+                optimizer=optimizer2,
+                scheduler=scheduler2,
+            )
+            resume_accelerator.load_state(fresh_dir)
+            session2.assert_runtime_contract(
+                phase="post_resume",
+                accelerator=resume_accelerator,
+                optimizer=optimizer2,
+            )
+
+            loss2 = model2(torch.ones(2, 4, dtype=torch.bfloat16)).sum()
+            resume_accelerator.backward(loss2)
+            optimizer2.step()
+            scheduler2.step()
+            optimizer2.zero_grad()
+            resumed_dir = Path(temp_dir) / "resumed-step"
+            resume_accelerator.save_state(resumed_dir)
+            resumed_progress = json.loads(
+                (resumed_dir / PARAMETER_POLICY_CHECKPOINT_PROGRESS).read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertEqual(
+                resumed_progress["optimizer_profiles"]["main"]["step_values"],
+                [2],
+            )
+            self.assertEqual(
+                resumed_progress["resume_source_checkpoint_id"],
+                fresh_progress["checkpoint_id"],
+            )
+            self.assertNotEqual(
+                resumed_progress["checkpoint_id"],
+                fresh_progress["checkpoint_id"],
+            )
+            self.assertEqual(
+                resumed_progress["scheduler"]["step_count"],
+                fresh_scheduler_step + 1,
+            )
+            self.assertEqual(
+                resumed_progress["scheduler"]["last_epoch"],
+                fresh_last_epoch + 1,
+            )
+            resume_accelerator.end_training()
+
+    def test_full_bf16_post_resume_rejects_progress_without_optimizer_restore(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+            model.to(torch.bfloat16)
+            save_accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = save_accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=save_accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+
+            loss = model(torch.ones(2, 4, dtype=torch.bfloat16)).sum()
+            save_accelerator.backward(loss)
+            optimizer.step()
+            scheduler.step()
+            optimizer.zero_grad()
+            fresh_dir = Path(temp_dir) / "fresh-step"
+            save_accelerator.save_state(fresh_dir)
+            save_accelerator.end_training()
+
+            args2, model2, session2 = self._build_mock_qualified_full_bf16_session(
+                policy_path,
+                resume=str(fresh_dir),
+            )
+            scheduler2 = session2.build_scheduler(self._scheduler_factory(args2))
+            model2.to(torch.bfloat16)
+            resume_accelerator = Accelerator(cpu=True)
+            model2, optimizer2, scheduler2 = resume_accelerator.prepare(
+                model2,
+                session2.optimizer,
+                scheduler2,
+            )
+            session2.finalize_after_prepare(
+                accelerator=resume_accelerator,
+                optimizer=optimizer2,
+                scheduler=scheduler2,
+            )
+
+            session2._pending_resume_progress = session2._load_checkpoint_progress(
+                fresh_dir
+            )
+            self.assertEqual(
+                session2._optimizer_progress_profiles(optimizer2)["main"][
+                    "step_values"
+                ],
+                [],
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "Loaded optimizer progress does not match",
+            ):
+                session2.assert_runtime_contract(
+                    phase="post_resume",
+                    accelerator=resume_accelerator,
+                    optimizer=optimizer2,
+                )
+            resume_accelerator.end_training()
+
+    def test_full_bf16_requested_resume_requires_loaded_progress(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            policy_path = Path(temp_dir) / "policy.json"
+            policy_path.write_text(json.dumps(_policy()), encoding="utf-8")
+            args, model, session = self._build_mock_qualified_full_bf16_session(
+                policy_path,
+                resume=str(Path(temp_dir) / "expected-state"),
+            )
+            scheduler = session.build_scheduler(self._scheduler_factory(args))
+            model.to(torch.bfloat16)
+            accelerator = Accelerator(cpu=True)
+            model, optimizer, scheduler = accelerator.prepare(
+                model,
+                session.optimizer,
+                scheduler,
+            )
+            session.finalize_after_prepare(
+                accelerator=accelerator,
+                optimizer=optimizer,
+                scheduler=scheduler,
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "no checkpoint progress was loaded",
+            ):
+                session.assert_runtime_contract(
+                    phase="post_resume",
+                    accelerator=accelerator,
+                    optimizer=optimizer,
+                )
             accelerator.end_training()
 
     def test_mixed_bf16_checkpoint_rejects_full_bf16_before_state_mutation(self):

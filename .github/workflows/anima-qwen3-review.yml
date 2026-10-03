@@ -82,6 +82,8 @@ on:
       - "tools/parameter_policy_execution_gpu_support.py"
       - "tools/parameter_policy_execution_gpu_runtime.py"
       - "tools/run_parameter_policy_backend_gpu_matrix.py"
+      - "tools/run_parameter_policy_backend_feature_gpu_matrix.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
       - "scripts/stable/library/multi_caption.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/stable/library/dts_parameter_policy_bridge.py"
@@ -111,6 +113,7 @@ on:
       - "Dockerfile-for-Mainland-China"
       - ".dockerignore"
       - ".github/workflows/anima-qwen3-review.yml"
+      - ".github/workflows/parameter-policy-gpu-matrix.yml"
 
 jobs:
   validate:
@@ -176,6 +179,8 @@ jobs:
             tools/parameter_policy_execution_gpu_support.py \
             tools/parameter_policy_execution_gpu_runtime.py \
             tools/run_parameter_policy_backend_gpu_matrix.py \
+            tools/run_parameter_policy_backend_feature_gpu_matrix.py \
+            tools/parameter_policy_backend_feature_gpu_support.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
             scripts/stable/library/dts_parameter_policy_bridge.py \

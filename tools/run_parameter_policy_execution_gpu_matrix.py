@@ -17,6 +17,7 @@ and the tiny Flux scaffold is never backend-qualification evidence.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib
 import importlib.metadata
 import json
@@ -277,6 +278,8 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_adamw_full_bf16_bundle,
     summarize_muon_full_bf16_bundle,
     summarize_muon_adamw_fallback_full_bf16_bundle,
+    summarize_shared_full_bf16_promotion,
+    summarize_shared_full_bf16_regression,
     temporary_execution_qualification,
 )
 
@@ -350,6 +353,9 @@ def _cuda_environment() -> dict[str, Any]:
 
     return {
         "python": platform.python_version(),
+        "requirements_sha256": hashlib.sha256(
+            (REPO_ROOT / "requirements.txt").read_bytes()
+        ).hexdigest(),
         "platform": platform.platform(),
         "torch": torch.__version__,
         "cuda_runtime": torch.version.cuda,
@@ -364,6 +370,14 @@ def _cuda_environment() -> dict[str, Any]:
                 "lion-pytorch",
                 "schedulefree",
                 "pytorch-optimizer",
+                "transformers",
+                "diffusers",
+                "safetensors",
+                "huggingface-hub",
+                "toml",
+                "numpy",
+                "opencv-python",
+                "imagesize",
             )
         },
         "gpu_count": torch.cuda.device_count(),
@@ -2752,6 +2766,7 @@ def _worker_main(args: argparse.Namespace) -> int:
             phase=args.worker_phase,
             case_dir=case_dir,
         )
+        payload["post_run_commit"] = _assert_exact_clean_head(args.expected_commit)
         payload["status"] = "pass"
     except Exception as exc:
         payload["error"] = f"{type(exc).__name__}: {exc}"
@@ -2851,6 +2866,7 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         "version": EVIDENCE_VERSION,
         "commit": commit,
         "expected_commit": args.expected_commit,
+        "qualification_mode": args.qualification_mode,
         "environment": environment,
         "qualification_snapshot": _qualification_snapshot(),
         "cases": [],
@@ -2976,6 +2992,25 @@ def _coordinator_main(args: argparse.Namespace) -> int:
     if evidence_bundles:
         evidence["evidence_bundles"] = evidence_bundles
 
+    evidence["final_provenance_commit"] = _assert_exact_clean_head(
+        args.expected_commit
+    )
+
+    if args.qualification_mode == "d0-promotion":
+        summary = summarize_shared_full_bf16_promotion(
+            evidence["cases"],
+            evidence["qualification_snapshot"],
+        )
+        evidence["shared_optimizer_promotion"] = summary
+    else:
+        summary = summarize_shared_full_bf16_regression(
+            evidence["cases"],
+            evidence["qualification_snapshot"],
+        )
+        evidence["shared_optimizer_regression"] = summary
+    if summary["status"] != "pass":
+        failed = True
+
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
     return 1 if failed else 0
@@ -2989,6 +3024,11 @@ def main() -> int:
         default="parameter-policy-execution-gpu-matrix.json",
     )
     parser.add_argument("--case", action="append", default=[])
+    parser.add_argument(
+        "--qualification-mode",
+        choices=("d0-promotion", "regression"),
+        default="d0-promotion",
+    )
     parser.add_argument("--worker-case", default="")
     parser.add_argument("--worker-phase", default="")
     parser.add_argument("--worker-result", default="")
