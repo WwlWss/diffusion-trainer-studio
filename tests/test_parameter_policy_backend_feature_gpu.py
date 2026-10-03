@@ -391,7 +391,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["fresh_command"][0] = str(external_script)
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "existing Python entrypoint from this repository",
+                "canonical production trainer",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
