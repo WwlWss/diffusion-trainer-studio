@@ -353,7 +353,11 @@ def _assert_checkpoint_dir_absent(path: str, *, label: str) -> None:
         )
 
 
-def _run_case(case: dict[str, Any]) -> dict[str, Any]:
+def _run_case(
+    case: dict[str, Any],
+    *,
+    expected_commit: str,
+) -> dict[str, Any]:
     row: dict[str, Any] = {
         "case_id": case["case_id"],
         "train_type": case["train_type"],
@@ -366,7 +370,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
         "status": "fail",
     }
     try:
-        _repo_clean("before fresh backend command")
+        row["pre_fresh_commit"] = _assert_clean_head(expected_commit)
         _assert_checkpoint_dir_absent(
             case["fresh_checkpoint_dir"],
             label="Fresh checkpoint directory",
@@ -381,7 +385,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             environment=case["environment"],
         )
         row["fresh"] = fresh
-        _repo_clean("after fresh backend command")
+        row["post_fresh_commit"] = _assert_clean_head(expected_commit)
         if fresh["returncode"] != 0:
             raise BackendFeatureGpuMatrixError(
                 f"Fresh backend command exited with {fresh['returncode']}."
@@ -400,6 +404,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             case["resume_checkpoint_dir"],
             label="Resume checkpoint directory",
         )
+        row["pre_resume_commit"] = _assert_clean_head(expected_commit)
 
         resume = _run_command(
             case["resume_command"],
@@ -407,7 +412,7 @@ def _run_case(case: dict[str, Any]) -> dict[str, Any]:
             environment=case["environment"],
         )
         row["resume"] = resume
-        _repo_clean("after resume backend command")
+        row["post_resume_commit"] = _assert_clean_head(expected_commit)
         if resume["returncode"] != 0:
             raise BackendFeatureGpuMatrixError(
                 f"Resume backend command exited with {resume['returncode']}."
@@ -479,12 +484,17 @@ def main() -> int:
     }
     failed = False
     for case_id in selected:
-        row = _run_case(by_id[case_id])
+        row = _run_case(
+            by_id[case_id],
+            expected_commit=args.expected_commit,
+        )
         evidence["cases"].append(row)
         if row["status"] != "pass":
             failed = True
 
-    _repo_clean("after backend feature matrix")
+    evidence["final_provenance_commit"] = _assert_clean_head(
+        args.expected_commit
+    )
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
     return 1 if failed else 0
