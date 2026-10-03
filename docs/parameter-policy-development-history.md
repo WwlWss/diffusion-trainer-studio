@@ -3196,6 +3196,7 @@ D0 将 strict C1-C4 execution runner正式接入 `.github/workflows/parameter-po
 checkout exact head
 → install pinned runtime
 → strict C1-C4 execution qualification
+→ worker post-run + coordinator final exact-head/clean-tree audit
 → legacy synthetic CUDA regression
 → optional legacy all-backend regression
 → optional Phase D backend-feature runner
@@ -3212,7 +3213,8 @@ backend-feature runner在 torch/runtime import之前必须验证：
 - `--expected-commit` 与 `HEAD` 完全相等；
 - repo tracked/untracked workspace完全 clean；
 - manifest与output均位于 repo之外；
-- D0/D1 case的 `cwd` 必须是当前 exact-head repo root，fresh/resume必须引用同一个实际存在于该 repo内的 Python trainer entrypoint；不能用另一个 checkout或已安装副本冒充 exact-head backend evidence。Anima staged runtime provenance在 D2另行显式扩展。
+- D0/D1 case的 `cwd` 必须是当前 exact-head repo root；`train_type` 必须使用 `PARAMETER_POLICY_BACKEND_MATRIX` 中对应的 canonical production trainer。manifest只提供 trainer argv，不拥有 Python解释器或 Accelerate launcher；runner统一用当前 qualification process的 `sys.executable -m accelerate.commands.launch` 与 DTS `config/accelerate-gpu.yaml` 启动，从而把 package/CUDA evidence与实际 trainer runtime绑定在同一环境。不能用另一个 repo脚本、另一个 checkout、另一个 Python/venv或已安装副本冒充 exact-head backend evidence。
+- D0/D1 manifest v1只接受七个 non-Anima qualification backend：`sd-lora`、`sdxl-lora`、`sdxl-finetune`、`sd3-lora`、`flux-lora`、`chroma-lora`、`flux-finetune`；`sd-dreambooth` 继续 unsupported，Anima staged runtime provenance在 D2另行显式扩展。
 
 manifest v1允许按 case选择，不再强制一次覆盖全部10个 backend。每个 case至少包含：
 
@@ -3227,7 +3229,11 @@ fresh_checkpoint_dir
 resume_checkpoint_dir
 ```
 
-两个 checkpoint目录必须不同且位于 repo之外，并且在对应命令运行前不得已经存在，防止旧 checkpoint/manifest 被误当成本轮 qualification evidence。qualification command contract固定要求 fresh与resume都显式 `--max_train_steps=2 --save_every_n_steps=1 --save_state`，因为 production scheduler identity包含 `max_train_steps`，resume不得偷偷改变scheduler拓扑。fresh run必须生成其 step-1 state作为 `fresh_checkpoint_dir`；resume再以本地 `--resume` 精确加载该 step-1 state并推进至step 2，在独立输出位置生成 `resume_checkpoint_dir`。因此 runner不会接受两个互不相关的 fresh runs、scheduler identity变化或只恢复不继续step的伪resume。两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
+两个 checkpoint目录必须不同且位于 repo之外，并且在对应命令运行前不得已经存在，防止旧 checkpoint/manifest 被误当成本轮 qualification evidence。qualification command contract固定要求 fresh与resume都显式 `--max_train_steps=2 --save_every_n_steps=1 --save_state`，禁止 CLI 或 trainer TOML通过 `max_train_epochs`、`initial_step`、`initial_epoch`、`skip_until_initial_step`、hidden resume 等字段改变该 lifecycle。production scheduler identity继续保持 `max_train_steps=2`，因此 fresh/resume scheduler拓扑完全一致。
+
+full-BF16 production checkpoint在原 manifest v2之外新增 additive `dts_parameter_policy_progress.json`，不改变 baseline manifest ABI。该 progress sidecar由 Parameter Policy save pre-hook直接从当时的 CompositeOptimizer / CompositeLRScheduler live state生成，记录每个 optimizer Profile的真实 step values以及 scheduler `step_count/last_epoch`。D1 runner要求 `fresh_checkpoint_dir` 的所有 optimizer Profile严格处于 logical step 1；resume必须以本地 `--resume` 精确加载该 state，`resume_checkpoint_dir` 的所有 Profile严格处于 logical step 2，同时 scheduler counters只增加一次。这样即使某些 full trainer本地 `global_step` 在新进程重新从0计数，也不能用第二个独立 fresh run、只load不step、跳过多个step或仅复制静态 manifest伪造 resume evidence。
+
+两个 checkpoint manifest都必须是 production manifest v2，并包含完全匹配的：
 
 - policy hash；
 - runtime topology fingerprint；
