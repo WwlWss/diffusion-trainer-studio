@@ -30,7 +30,7 @@ def _case(root: Path) -> dict:
         "train_type": "flux-finetune",
         "feature": "full_bf16",
         "fresh_command": [
-            "python",
+            
             "scripts/dev/flux_train.py",
             "--max_train_steps",
             "2",
@@ -39,7 +39,7 @@ def _case(root: Path) -> dict:
             "--save_state",
         ],
         "resume_command": [
-            "python",
+            
             "scripts/dev/flux_train.py",
             "--resume",
             str(root / "checkpoint-1"),
@@ -257,7 +257,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             temp = Path(temp_dir)
             case = _case(temp)
             case["resume_command"] = [
-                "python",
+                
                 "scripts/dev/flux_train.py",
                 "--max_train_steps",
                 "2",
@@ -279,7 +279,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             temp = Path(temp_dir)
             case = _case(temp)
             case["resume_command"] = [
-                "python",
+                
                 "scripts/dev/flux_train.py",
                 f"--resume={case['fresh_checkpoint_dir']}",
                 "--max_train_steps=2",
@@ -297,7 +297,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             temp = Path(temp_dir)
             case = _case(temp)
             case["fresh_command"] = [
-                "python",
+                
                 "scripts/dev/flux_train.py",
                 "--max_train_steps",
                 "1",
@@ -318,7 +318,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             temp = Path(temp_dir)
             case = _case(temp)
             case["resume_command"] = [
-                "python",
+                
                 "scripts/dev/flux_train.py",
                 "--resume",
                 case["fresh_checkpoint_dir"],
@@ -370,7 +370,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             external_script = temp / "external.py"
             external_script.write_text("pass\n", encoding="utf-8")
             case = _case(temp)
-            case["fresh_command"][1] = str(external_script)
+            case["fresh_command"][0] = str(external_script)
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "existing Python entrypoint from this repository",
