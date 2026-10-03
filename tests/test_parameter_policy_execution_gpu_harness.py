@@ -521,8 +521,14 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         )
         self.assertIn("--expected-commit", workflow)
         self.assertIn("${{ github.sha }}", workflow)
+        self.assertIn("--qualification-mode", workflow)
+        self.assertIn("execution_gate_mode", workflow)
+        self.assertIn("d0-promotion", workflow)
+        self.assertIn("regression", workflow)
         self.assertIn("DTS_EVIDENCE_DIR", workflow)
         self.assertIn("runner.temp", workflow)
+        self.assertIn("-r requirements.txt", workflow)
+        self.assertIn("sys.version_info[:2] == (3, 11)", workflow)
 
     def test_host_review_tracks_and_compiles_execution_and_backend_feature_runners(self):
         workflow = HOST_WORKFLOW.read_text(encoding="utf-8")
@@ -539,11 +545,16 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             2,
         )
 
-    def test_d0_runner_emits_shared_optimizer_promotion_summary(self):
+    def test_d0_runner_emits_distinct_promotion_and_regression_summaries(self):
         source = RUNNER.read_text(encoding="utf-8")
         support = SUPPORT.read_text(encoding="utf-8")
         self.assertIn("summarize_shared_full_bf16_promotion", source)
-        self.assertIn('evidence["shared_optimizer_promotion"] = promotion', source)
+        self.assertIn("summarize_shared_full_bf16_regression", source)
+        self.assertIn('"--qualification-mode"', source)
+        self.assertIn('"d0-promotion"', source)
+        self.assertIn('"regression"', source)
+        self.assertIn('evidence["shared_optimizer_promotion"] = summary', source)
+        self.assertIn('evidence["shared_optimizer_regression"] = summary', source)
         self.assertIn("SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID", support)
         self.assertIn(
             "execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID",
