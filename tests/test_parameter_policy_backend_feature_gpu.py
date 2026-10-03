@@ -9,9 +9,12 @@ import unittest
 from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
     BACKEND_FEATURE_MANIFEST_SCHEMA,
+    CHECKPOINT_PROGRESS_SCHEMA,
     BackendFeatureGpuMatrixError,
     compare_backend_checkpoint_contracts,
+    compare_checkpoint_progress,
     load_backend_feature_manifest,
+    validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
 )
 
@@ -28,7 +31,7 @@ def _case(root: Path) -> dict:
         "feature": "full_bf16",
         "fresh_command": [
             "python",
-            "tools/run_parameter_policy_gpu_matrix.py",
+            "scripts/dev/flux_train.py",
             "--max_train_steps",
             "2",
             "--save_every_n_steps",
@@ -37,7 +40,7 @@ def _case(root: Path) -> dict:
         ],
         "resume_command": [
             "python",
-            "tools/run_parameter_policy_gpu_matrix.py",
+            "scripts/dev/flux_train.py",
             "--resume",
             str(root / "checkpoint-1"),
             "--max_train_steps",
@@ -62,6 +65,36 @@ def _signature(value: object) -> str:
         allow_nan=False,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _progress(
+    *,
+    train_type: str = "flux-finetune",
+    policy_hash: str = "policy",
+    topology: str = "topology",
+    execution_signature: str,
+    optimizer_step: int,
+    scheduler_step_count: int,
+    scheduler_last_epoch: int,
+) -> dict:
+    return {
+        "schema": CHECKPOINT_PROGRESS_SCHEMA,
+        "version": 1,
+        "train_type": train_type,
+        "policy_hash": policy_hash,
+        "runtime_topology_fingerprint": topology,
+        "execution_signature": execution_signature,
+        "optimizer_profiles": {
+            "main": {
+                "optimizer_type": "AdamW",
+                "step_values": [optimizer_step],
+            }
+        },
+        "scheduler": {
+            "step_count": scheduler_step_count,
+            "last_epoch": scheduler_last_epoch,
+        },
+    }
 
 
 def _checkpoint(train_type: str = "flux-finetune") -> dict:
@@ -135,6 +168,8 @@ class BackendFeatureManifestTests(unittest.TestCase):
         self.assertEqual(len(cases), 1)
         self.assertEqual(cases[0]["train_type"], "flux-finetune")
         self.assertEqual(cases[0]["feature"], "full_bf16")
+        self.assertEqual(cases[0]["entrypoint"], "scripts/dev/flux_train.py")
+        self.assertEqual(cases[0]["fresh_command"][0], "scripts/dev/flux_train.py")
 
     def test_manifest_must_live_outside_repository(self):
         internal = ROOT / "backend-feature-manifest-test.json"
@@ -188,13 +223,42 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
+    def test_d0_d1_scope_rejects_dreambooth_and_anima(self):
+        for train_type in ("sd-dreambooth", "anima-lora", "anima-finetune"):
+            with self.subTest(train_type=train_type), tempfile.TemporaryDirectory() as temp_dir:
+                temp = Path(temp_dir)
+                case = _case(temp)
+                case["train_type"] = train_type
+                with self.assertRaisesRegex(
+                    BackendFeatureGpuMatrixError,
+                    "outside the D0/D1 backend qualification scope",
+                ):
+                    load_backend_feature_manifest(
+                        self._write(temp, [case]),
+                        repo_root=ROOT,
+                    )
+
+    def test_command_must_start_with_canonical_production_trainer(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _case(temp)
+            case["fresh_command"][0] = "scripts/dev/flux_train_network.py"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "canonical production trainer",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
     def test_resume_command_must_reference_fresh_checkpoint(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "tools/run_parameter_policy_gpu_matrix.py",
+                "scripts/dev/flux_train.py",
                 "--max_train_steps",
                 "2",
                 "--save_every_n_steps",
@@ -216,7 +280,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "tools/run_parameter_policy_gpu_matrix.py",
+                "scripts/dev/flux_train.py",
                 f"--resume={case['fresh_checkpoint_dir']}",
                 "--max_train_steps=2",
                 "--save_every_n_steps=1",
@@ -234,7 +298,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["fresh_command"] = [
                 "python",
-                "tools/run_parameter_policy_gpu_matrix.py",
+                "scripts/dev/flux_train.py",
                 "--max_train_steps",
                 "1",
                 "--save_every_n_steps",
@@ -255,7 +319,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case = _case(temp)
             case["resume_command"] = [
                 "python",
-                "tools/run_parameter_policy_gpu_matrix.py",
+                "scripts/dev/flux_train.py",
                 "--resume",
                 case["fresh_checkpoint_dir"],
                 "--max_train_steps",
@@ -310,20 +374,6 @@ class BackendFeatureManifestTests(unittest.TestCase):
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "existing Python entrypoint from this repository",
-            ):
-                load_backend_feature_manifest(
-                    self._write(temp, [case]),
-                    repo_root=ROOT,
-                )
-
-    def test_fresh_resume_must_use_same_repo_entrypoint(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            case = _case(temp)
-            case["resume_command"][1] = "tools/run_parameter_policy_backend_gpu_matrix.py"
-            with self.assertRaisesRegex(
-                BackendFeatureGpuMatrixError,
-                "same exact repository trainer entrypoint",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
@@ -437,6 +487,65 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
                         manifest_version=2,
                     )
 
+    def test_checkpoint_progress_proves_logical_step_one_to_two(self):
+        manifest = _checkpoint()
+        fresh = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=1,
+            scheduler_step_count=2,
+            scheduler_last_epoch=1,
+        )
+        resumed = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=2,
+            scheduler_step_count=3,
+            scheduler_last_epoch=2,
+        )
+        self.assertIs(
+            validate_checkpoint_progress(
+                fresh,
+                checkpoint_manifest=manifest,
+            ),
+            fresh,
+        )
+        validate_checkpoint_progress(
+            resumed,
+            checkpoint_manifest=manifest,
+        )
+        compare_checkpoint_progress(fresh, resumed)
+
+    def test_checkpoint_progress_rejects_fake_or_skipped_resume(self):
+        manifest = _checkpoint()
+        fresh = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=1,
+            scheduler_step_count=2,
+            scheduler_last_epoch=1,
+        )
+        fake = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=1,
+            scheduler_step_count=2,
+            scheduler_last_epoch=1,
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "logical optimizer step 2",
+        ):
+            compare_checkpoint_progress(fresh, fake)
+
+        skipped = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=3,
+            scheduler_step_count=4,
+            scheduler_last_epoch=3,
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "logical optimizer step 2",
+        ):
+            compare_checkpoint_progress(fresh, skipped)
+
     def test_fresh_resume_trainable_counts_must_match(self):
         fresh = _checkpoint()
         resumed = _checkpoint()
@@ -485,9 +594,17 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         support = (
             ROOT / "tools" / "parameter_policy_backend_feature_gpu_support.py"
         ).read_text(encoding="utf-8")
-        self.assertIn("def _repo_python_entrypoint(", support)
+        self.assertIn("def _canonical_backend_entrypoint(", support)
+        self.assertIn("PARAMETER_POLICY_BACKEND_MATRIX", support)
+        self.assertIn("canonical production trainer", support)
         self.assertIn("cwd must be the exact", support)
-        self.assertIn("same exact repository trainer entrypoint", support)
+
+    def test_runner_owns_python_and_accelerate_launcher(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("def _qualification_command(", source)
+        self.assertIn("sys.executable", source)
+        self.assertIn('"accelerate.commands.launch"', source)
+        self.assertIn('"config" / "accelerate-gpu.yaml"', source)
 
     def test_runner_records_redacted_command_contract(self):
         source = RUNNER.read_text(encoding="utf-8")
@@ -504,6 +621,8 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"fresh_checkpoint_dir"', source)
         self.assertIn('"resume_checkpoint_dir"', source)
         self.assertIn("compare_backend_checkpoint_contracts", source)
+        self.assertIn("PARAMETER_POLICY_CHECKPOINT_PROGRESS", source)
+        self.assertIn("compare_checkpoint_progress", source)
 
     def test_runner_never_promotes_or_bypasses_production_qualification(self):
         source = RUNNER.read_text(encoding="utf-8")
