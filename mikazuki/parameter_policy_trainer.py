@@ -12,6 +12,7 @@ import copy
 import hashlib
 import json
 import os
+import uuid
 import weakref
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -451,6 +452,9 @@ class LegacySchedulerFactory:
     num_processes: int
     scheduler_identity: dict[str, Any] | None = None
     scheduler_signature: str | None = None
+    resume_requested: bool = False
+    _pending_resume_progress: dict[str, Any] | None = None
+    _resume_source_checkpoint_id: str | None = None
 
     def _ensure_identity(self) -> None:
         if self.scheduler_identity is not None and self.scheduler_signature is not None:
@@ -1117,6 +1121,178 @@ class ParameterPolicyTrainerSession:
                 + ", ".join(mismatches[:8])
             )
 
+    def _optimizer_progress_profiles(
+        self,
+        optimizer: object,
+    ) -> dict[str, dict[str, Any]]:
+        composite_optimizer = _unwrap_composite_optimizer(optimizer)
+        optimizer_state = composite_optimizer.state_dict()
+        if not isinstance(optimizer_state, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress state must be a mapping."
+            )
+        children = optimizer_state.get("children")
+        if not isinstance(children, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress requires CompositeOptimizer children."
+            )
+
+        expected_profiles = {
+            spec.profile_name: spec.optimizer_type
+            for spec in self.runtime_spec.optimizers
+        }
+        if set(children) != set(expected_profiles):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint optimizer progress child Profile set does not match runtime."
+            )
+
+        profiles: dict[str, dict[str, Any]] = {}
+        for profile_name, optimizer_type in expected_profiles.items():
+            child = children.get(profile_name)
+            if not isinstance(child, Mapping):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint optimizer progress child {profile_name!r} is invalid."
+                )
+            child_state = child.get("state_dict")
+            if not isinstance(child_state, Mapping):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint optimizer progress child {profile_name!r} has no state_dict."
+                )
+            profiles[profile_name] = {
+                "optimizer_type": optimizer_type,
+                "step_values": sorted(
+                    set(_collect_optimizer_step_values(child_state))
+                ),
+            }
+        return profiles
+
+    def _load_checkpoint_progress(
+        self,
+        input_dir: str | os.PathLike[str],
+    ) -> dict[str, Any]:
+        path = Path(input_dir) / PARAMETER_POLICY_CHECKPOINT_PROGRESS
+        if not path.is_file():
+            raise ParameterPolicyTrainerRuntimeError(
+                "Cannot resume full-BF16 Parameter Policy training from a state "
+                f"without {PARAMETER_POLICY_CHECKPOINT_PROGRESS}."
+            )
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid Parameter Policy checkpoint progress: {path}: {exc}"
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                f"Invalid Parameter Policy checkpoint progress object: {path}."
+            )
+        if payload.get("schema") != "dts.parameter-policy.checkpoint-progress":
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress schema does not match Parameter Policy runtime."
+            )
+        if payload.get("version") != PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress version does not match Parameter Policy runtime."
+            )
+        checkpoint_id = payload.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id.strip():
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress requires a non-empty checkpoint_id."
+            )
+        parent = payload.get("resume_source_checkpoint_id")
+        if parent is not None and (
+            not isinstance(parent, str) or not parent.strip()
+        ):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress resume_source_checkpoint_id must be null "
+                "or a non-empty string."
+            )
+
+        execution_payload = self._execution_identity_payload()
+        if execution_payload is None:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress validation requires execution identity."
+            )
+        _identity, execution_signature = execution_payload
+        expected_static = {
+            "train_type": self.train_type,
+            "policy_hash": self.policy_hash,
+            "runtime_topology_fingerprint": self.runtime_spec.topology_fingerprint,
+            "execution_signature": execution_signature,
+        }
+        for key, expected in expected_static.items():
+            if payload.get(key) != expected:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint progress {key} does not match the current run."
+                )
+
+        profiles = payload.get("optimizer_profiles")
+        if not isinstance(profiles, Mapping):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress optimizer_profiles must be an object."
+            )
+        expected_profiles = {
+            spec.profile_name: spec.optimizer_type
+            for spec in self.runtime_spec.optimizers
+        }
+        if set(profiles) != set(expected_profiles):
+            raise ParameterPolicyTrainerRuntimeError(
+                "Checkpoint progress optimizer Profile set does not match runtime."
+            )
+        for profile_name, optimizer_type in expected_profiles.items():
+            row = profiles.get(profile_name)
+            if not isinstance(row, Mapping):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint progress Profile {profile_name!r} is invalid."
+                )
+            if row.get("optimizer_type") != optimizer_type:
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint progress Profile {profile_name!r} optimizer type "
+                    "does not match runtime."
+                )
+            values = row.get("step_values")
+            if (
+                not isinstance(values, list)
+                or not all(
+                    isinstance(value, int)
+                    and not isinstance(value, bool)
+                    and value >= 0
+                    for value in values
+                )
+            ):
+                raise ParameterPolicyTrainerRuntimeError(
+                    f"Checkpoint progress Profile {profile_name!r} has invalid step_values."
+                )
+        return dict(payload)
+
+    def _verify_pending_resume_progress(
+        self,
+        optimizer: object,
+    ) -> None:
+        pending = self._pending_resume_progress
+        if pending is None:
+            if self.resume_requested:
+                raise ParameterPolicyTrainerRuntimeError(
+                    "A full-BF16 resume was requested but no checkpoint progress "
+                    "was loaded through the registered checkpoint hook."
+                )
+            return
+
+        actual_profiles = self._optimizer_progress_profiles(optimizer)
+        expected_profiles = pending.get("optimizer_profiles")
+        if actual_profiles != expected_profiles:
+            raise ParameterPolicyTrainerRuntimeError(
+                "Loaded optimizer progress does not match the resume checkpoint "
+                "progress evidence."
+            )
+        checkpoint_id = pending.get("checkpoint_id")
+        if not isinstance(checkpoint_id, str) or not checkpoint_id.strip():
+            raise ParameterPolicyTrainerRuntimeError(
+                "Loaded checkpoint progress has no usable checkpoint_id."
+            )
+        self._resume_source_checkpoint_id = checkpoint_id
+        self._pending_resume_progress = None
+
     def assert_runtime_contract(
         self,
         *,
@@ -1148,6 +1324,11 @@ class ParameterPolicyTrainerSession:
                 accelerator=accelerator,
                 optimizer=optimizer,
             )
+            if (
+                self.execution_contract is not None
+                and phase_name == "post_resume"
+            ):
+                self._verify_pending_resume_progress(optimizer)
         except ParameterPolicyTrainerRuntimeError as exc:
             raise ParameterPolicyTrainerRuntimeError(
                 f"Parameter Policy runtime contract failed at {phase_name}: {exc}"
@@ -1274,7 +1455,7 @@ class ParameterPolicyTrainerSession:
                 "Parameter Policy execution contract."
             )
 
-        composite_optimizer = _unwrap_composite_optimizer(optimizer)
+        optimizer_profiles = self._optimizer_progress_profiles(optimizer)
         composite_scheduler = _unwrap_composite_scheduler(scheduler)
         if composite_scheduler is None:
             raise ParameterPolicyTrainerRuntimeError(
@@ -1349,6 +1530,8 @@ class ParameterPolicyTrainerSession:
             "policy_hash": self.policy_hash,
             "runtime_topology_fingerprint": self.runtime_spec.topology_fingerprint,
             "execution_signature": execution_signature,
+            "checkpoint_id": uuid.uuid4().hex,
+            "resume_source_checkpoint_id": self._resume_source_checkpoint_id,
             "optimizer_profiles": optimizer_profiles,
             "scheduler": {
                 "step_count": step_count,
@@ -1408,6 +1591,10 @@ class ParameterPolicyTrainerSession:
         def load_hook(models, input_dir):
             del models
             self.validate_checkpoint_manifest(input_dir, scheduler=scheduler)
+            if self.execution_contract is not None:
+                self._pending_resume_progress = self._load_checkpoint_progress(
+                    input_dir
+                )
             self.assert_runtime_contract(
                 phase="checkpoint_load",
                 accelerator=accelerator if optimizer is not None else None,
@@ -1564,6 +1751,10 @@ def create_parameter_policy_session(
         structural_frozen_parameters=structural,
         execution_contract=execution_contract,
         execution_root_refs=execution_root_refs,
+        resume_requested=bool(
+            str(effective_config.get("resume") or "").strip()
+            or effective_config.get("resume_from_huggingface")
+        ),
     )
     session.apply_requires_grad_contract()
     session.assert_requires_grad_contract()
@@ -1573,6 +1764,8 @@ def create_parameter_policy_session(
 __all__ = [
     "PARAMETER_POLICY_CHECKPOINT_MANIFEST",
     "PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION",
+    "PARAMETER_POLICY_CHECKPOINT_PROGRESS",
+    "PARAMETER_POLICY_CHECKPOINT_PROGRESS_VERSION",
     "LegacySchedulerFactory",
     "ParameterPolicyTrainerRuntimeError",
     "ParameterPolicyTrainerSession",
