@@ -7,8 +7,8 @@ I/O-free, and must not mutate policy/config state.
 Phase A introduced fail-closed qualification for Component full BF16. Phase B
 then added a deterministic execution contract/identity ABI, physical runtime
 audits, and checkpoint/metadata persistence while keeping this host module
-torch-free. All backend and optimizer qualifications remain fail-closed until
-later exact-head CUDA evidence exists.
+torch-free. Backend qualifications and non-released optimizer families remain
+fail-closed; D0 binds the AdamW/Muon candidate rows to exact-head CUDA evidence.
 """
 
 from __future__ import annotations
