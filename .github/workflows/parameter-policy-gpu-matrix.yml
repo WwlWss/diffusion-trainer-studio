@@ -7,6 +7,14 @@ on:
         description: "Self-hosted runner label with a CUDA GPU"
         required: true
         default: "gpu"
+      execution_gate_mode:
+        description: "Shared C1-C4 gate mode"
+        required: true
+        type: choice
+        options:
+          - d0-promotion
+          - regression
+        default: d0-promotion
       backend_manifest:
         description: "Optional machine-local JSON manifest for the legacy all-backend regression matrix"
         required: false
@@ -82,7 +90,7 @@ jobs:
           $selected = $null
           foreach ($candidate in ($candidates | Select-Object -Unique)) {
             Write-Host "Probing Python: $candidate"
-            & $candidate -c "import sys, ssl, pip; print(sys.version); print(ssl.OPENSSL_VERSION); print(pip.__version__)" 2>&1
+            & $candidate -c "import sys, ssl, pip; assert sys.version_info[:2] == (3, 11), sys.version; print(sys.version); print(ssl.OPENSSL_VERSION); print(pip.__version__)" 2>&1
             if ($LASTEXITCODE -eq 0) {
               $selected = $candidate
               break
@@ -90,7 +98,7 @@ jobs:
           }
 
           if (-not $selected) {
-            throw "No Windows Python with working ssl + pip was found. Install or repair Python 3.11+ with OpenSSL support."
+            throw "No Windows Python 3.11 with working ssl + pip was found. Install or repair Python 3.11 with OpenSSL support."
           }
 
           Write-Host "Selected Python: $selected"
@@ -101,15 +109,15 @@ jobs:
         shell: powershell
         run: '& $env:DTS_PYTHON -m pip install --upgrade pip'
 
-      - name: Install pinned Component runtime dependencies on Windows
+      - name: Install production qualification dependencies on Windows
         if: runner.os == 'Windows'
         shell: powershell
-        run: '& $env:DTS_PYTHON -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0'
+        run: '& $env:DTS_PYTHON -m pip install torch==2.7.0 torchvision==0.22.0 -r requirements.txt'
 
       - name: Run strict C1-C4 execution qualification on Windows
         if: runner.os == 'Windows'
         shell: powershell
-        run: '& $env:DTS_PYTHON tools/run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}" --output "$env:DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json"'
+        run: '& $env:DTS_PYTHON tools/run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}" --qualification-mode "${{ inputs.execution_gate_mode }}" --output "$env:DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json"'
 
       - name: Run synthetic CUDA optimizer regression on Windows
         if: runner.os == 'Windows'
@@ -130,13 +138,13 @@ jobs:
         if: runner.os != 'Windows'
         run: python -m pip install --upgrade pip
 
-      - name: Install pinned Component runtime dependencies on non-Windows runners
+      - name: Install production qualification dependencies on non-Windows runners
         if: runner.os != 'Windows'
-        run: python -m pip install torch==2.7.0 torchvision==0.22.0 accelerate==1.6.0 bitsandbytes==0.46.0 lion-pytorch==0.2.3 schedulefree==1.4 pytorch-optimizer==3.10.0
+        run: python -m pip install torch==2.7.0 torchvision==0.22.0 -r requirements.txt
 
       - name: Run strict C1-C4 execution qualification on non-Windows runners
         if: runner.os != 'Windows'
-        run: python tools/run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}" --output "$DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json"
+        run: python tools/run_parameter_policy_execution_gpu_matrix.py --expected-commit "${{ github.sha }}" --qualification-mode "${{ inputs.execution_gate_mode }}" --output "$DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json"
 
       - name: Run synthetic CUDA optimizer regression on non-Windows runners
         if: runner.os != 'Windows'
