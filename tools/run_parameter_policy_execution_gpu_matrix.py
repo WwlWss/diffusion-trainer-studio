@@ -278,6 +278,7 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_muon_full_bf16_bundle,
     summarize_muon_adamw_fallback_full_bf16_bundle,
     summarize_shared_full_bf16_promotion,
+    summarize_shared_full_bf16_regression,
     temporary_execution_qualification,
 )
 
@@ -2853,6 +2854,7 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         "version": EVIDENCE_VERSION,
         "commit": commit,
         "expected_commit": args.expected_commit,
+        "qualification_mode": args.qualification_mode,
         "environment": environment,
         "qualification_snapshot": _qualification_snapshot(),
         "cases": [],
@@ -2982,12 +2984,19 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         args.expected_commit
     )
 
-    promotion = summarize_shared_full_bf16_promotion(
-        evidence["cases"],
-        evidence["qualification_snapshot"],
-    )
-    evidence["shared_optimizer_promotion"] = promotion
-    if promotion["status"] != "pass":
+    if args.qualification_mode == "d0-promotion":
+        summary = summarize_shared_full_bf16_promotion(
+            evidence["cases"],
+            evidence["qualification_snapshot"],
+        )
+        evidence["shared_optimizer_promotion"] = summary
+    else:
+        summary = summarize_shared_full_bf16_regression(
+            evidence["cases"],
+            evidence["qualification_snapshot"],
+        )
+        evidence["shared_optimizer_regression"] = summary
+    if summary["status"] != "pass":
         failed = True
 
     _write_json(output_path, evidence)
@@ -3003,6 +3012,11 @@ def main() -> int:
         default="parameter-policy-execution-gpu-matrix.json",
     )
     parser.add_argument("--case", action="append", default=[])
+    parser.add_argument(
+        "--qualification-mode",
+        choices=("d0-promotion", "regression"),
+        default="d0-promotion",
+    )
     parser.add_argument("--worker-case", default="")
     parser.add_argument("--worker-phase", default="")
     parser.add_argument("--worker-result", default="")
