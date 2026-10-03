@@ -530,6 +530,24 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
                         manifest_version=2,
                     )
 
+    def test_checkpoint_progress_requires_lineage_ids(self):
+        manifest = _checkpoint()
+        payload = _progress(
+            execution_signature=manifest["execution_signature"],
+            optimizer_step=1,
+            scheduler_step_count=2,
+            scheduler_last_epoch=1,
+            checkpoint_id="",
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "non-empty checkpoint_id",
+        ):
+            validate_checkpoint_progress(
+                payload,
+                checkpoint_manifest=manifest,
+            )
+
     def test_checkpoint_progress_proves_logical_step_one_to_two(self):
         manifest = _checkpoint()
         fresh = _progress(
@@ -668,6 +686,17 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
             source.index("import torch"),
         )
 
+    def test_runner_rechecks_exact_head_after_fresh_resume_and_final(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('row["pre_fresh_commit"] = _assert_clean_head', source)
+        self.assertIn('row["post_fresh_commit"] = _assert_clean_head', source)
+        self.assertIn('row["pre_resume_commit"] = _assert_clean_head', source)
+        self.assertIn('row["post_resume_commit"] = _assert_clean_head', source)
+        self.assertIn(
+            'evidence["final_provenance_commit"] = _assert_clean_head',
+            source,
+        )
+
     def test_runner_rejects_stale_checkpoint_directories(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn("def _assert_checkpoint_dir_absent(", source)
@@ -694,6 +723,21 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"accelerate.commands.launch"', source)
         self.assertIn('"config" / "accelerate-gpu.yaml"', source)
 
+    def test_runner_records_production_dependency_provenance(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn('"requirements_sha256"', source)
+        for package in (
+            "transformers",
+            "diffusers",
+            "safetensors",
+            "huggingface-hub",
+            "toml",
+            "numpy",
+            "opencv-python",
+            "imagesize",
+        ):
+            self.assertIn(f'"{package}"', source)
+
     def test_runner_records_redacted_command_contract(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn("def _redacted_argv(", source)
@@ -711,6 +755,11 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn("compare_backend_checkpoint_contracts", source)
         self.assertIn("PARAMETER_POLICY_CHECKPOINT_PROGRESS", source)
         self.assertIn("compare_checkpoint_progress", source)
+        support = (
+            ROOT / "tools" / "parameter_policy_backend_feature_gpu_support.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn('"resume_source_checkpoint_id"', support)
+        self.assertIn('"checkpoint_id"', support)
 
     def test_runner_never_promotes_or_bypasses_production_qualification(self):
         source = RUNNER.read_text(encoding="utf-8")
