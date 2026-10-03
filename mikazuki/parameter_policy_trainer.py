@@ -1463,43 +1463,6 @@ class ParameterPolicyTrainerSession:
                 "Checkpoint progress evidence requires CompositeLRScheduler."
             )
 
-        optimizer_state = composite_optimizer.state_dict()
-        if not isinstance(optimizer_state, Mapping):
-            raise ParameterPolicyTrainerRuntimeError(
-                "Checkpoint optimizer progress state must be a mapping."
-            )
-        children = optimizer_state.get("children")
-        if not isinstance(children, Mapping):
-            raise ParameterPolicyTrainerRuntimeError(
-                "Checkpoint optimizer progress requires CompositeOptimizer children."
-            )
-
-        optimizer_profiles: dict[str, Any] = {}
-        expected_profiles = {
-            spec.profile_name: spec.optimizer_type
-            for spec in self.runtime_spec.optimizers
-        }
-        if set(children) != set(expected_profiles):
-            raise ParameterPolicyTrainerRuntimeError(
-                "Checkpoint optimizer progress child Profile set does not match runtime."
-            )
-        for profile_name, optimizer_type in expected_profiles.items():
-            child = children.get(profile_name)
-            if not isinstance(child, Mapping):
-                raise ParameterPolicyTrainerRuntimeError(
-                    f"Checkpoint optimizer progress child {profile_name!r} is invalid."
-                )
-            child_state = child.get("state_dict")
-            if not isinstance(child_state, Mapping):
-                raise ParameterPolicyTrainerRuntimeError(
-                    f"Checkpoint optimizer progress child {profile_name!r} has no state_dict."
-                )
-            step_values = sorted(set(_collect_optimizer_step_values(child_state)))
-            optimizer_profiles[profile_name] = {
-                "optimizer_type": optimizer_type,
-                "step_values": step_values,
-            }
-
         scheduler_state = composite_scheduler.state_dict()
         if not isinstance(scheduler_state, Mapping):
             raise ParameterPolicyTrainerRuntimeError(
