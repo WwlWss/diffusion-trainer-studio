@@ -7,7 +7,10 @@ import json
 from pathlib import Path
 from typing import Any
 
-from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
+from mikazuki.parameter_policy_matrix import (
+    PARAMETER_POLICY_BACKEND_MATRIX,
+    PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+)
 
 
 BACKEND_FEATURE_MANIFEST_SCHEMA = "dts.parameter-policy.backend-feature-manifest"
@@ -15,6 +18,19 @@ BACKEND_FEATURE_MANIFEST_VERSION = 1
 BACKEND_FEATURE_EVIDENCE_SCHEMA = "dts.parameter-policy.backend-feature-gpu-matrix"
 BACKEND_FEATURE_EVIDENCE_VERSION = 1
 BACKEND_FEATURE_NAME = "full_bf16"
+D0_D1_BACKEND_FEATURE_TRAIN_TYPES = frozenset(
+    {
+        "sd-lora",
+        "sdxl-lora",
+        "sdxl-finetune",
+        "sd3-lora",
+        "flux-lora",
+        "chroma-lora",
+        "flux-finetune",
+    }
+)
+CHECKPOINT_PROGRESS_SCHEMA = "dts.parameter-policy.checkpoint-progress"
+CHECKPOINT_PROGRESS_VERSION = 1
 
 
 class BackendFeatureGpuMatrixError(RuntimeError):
@@ -93,35 +109,68 @@ def _require_resume_source(
         )
 
 
-def _repo_python_entrypoint(
-    command: list[str],
+def _canonical_backend_entrypoint(
+    train_type: str,
     *,
     repo_root: Path,
     case_id: str,
-    phase: str,
 ) -> Path:
-    candidates: list[Path] = []
-    for item in command:
-        raw = str(item or "").strip()
-        if not raw.lower().endswith(".py"):
-            continue
-        candidate = Path(raw)
-        if not candidate.is_absolute():
-            candidate = repo_root / candidate
-        resolved = candidate.expanduser().resolve(strict=False)
-        try:
-            resolved.relative_to(repo_root.resolve(strict=False))
-        except ValueError:
-            continue
-        if resolved.is_file():
-            candidates.append(resolved)
-    unique = list(dict.fromkeys(candidates))
-    if len(unique) != 1:
+    row = PARAMETER_POLICY_BACKEND_MATRIX.get(train_type)
+    if not isinstance(row, dict):
         raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} {phase} command must reference "
-            "exactly one existing Python entrypoint from this repository."
+            f"Backend feature case {case_id!r} has no production backend mapping."
         )
-    return unique[0]
+    raw = str(row.get("trainer") or "").strip()
+    if not raw:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} has no production trainer entrypoint."
+        )
+    candidate = (repo_root / raw).resolve(strict=False)
+    try:
+        candidate.relative_to(repo_root.resolve(strict=False))
+    except ValueError as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} production trainer escapes the repository."
+        ) from exc
+    if not candidate.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} production trainer is unavailable: "
+            f"{candidate}."
+        )
+    return candidate
+
+
+def _normalize_backend_command(
+    command: list[str],
+    *,
+    canonical_entrypoint: Path,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> list[str]:
+    if not command:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command is empty."
+        )
+    raw_entrypoint = Path(command[0])
+    if not raw_entrypoint.is_absolute():
+        raw_entrypoint = repo_root / raw_entrypoint
+    resolved_entrypoint = raw_entrypoint.expanduser().resolve(strict=False)
+    if resolved_entrypoint != canonical_entrypoint:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must start with "
+            "the canonical production trainer from PARAMETER_POLICY_BACKEND_MATRIX."
+        )
+    for extra in command[1:]:
+        if str(extra).strip().lower().endswith(".py"):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command may not inject "
+                "an additional Python entrypoint."
+            )
+    return [
+        str(canonical_entrypoint.relative_to(repo_root.resolve(strict=False))),
+        *command[1:],
+    ]
 
 
 def _validate_lifecycle_command_contract(
@@ -131,6 +180,24 @@ def _validate_lifecycle_command_contract(
     resume_command: list[str],
     fresh_checkpoint: Path,
 ) -> None:
+    forbidden_options = (
+        "--max_train_epochs",
+        "--initial_epoch",
+        "--initial_step",
+        "--skip_until_initial_step",
+    )
+    for phase, command in (("fresh", fresh_command), ("resume", resume_command)):
+        present = [
+            option
+            for option in forbidden_options
+            if option in command or any(item.startswith(option + "=") for item in command)
+        ]
+        if present:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command may not use "
+                f"step-override option(s): {present!r}."
+            )
+
     if _option_values(fresh_command, "--resume"):
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} fresh_command must not resume."
@@ -233,6 +300,11 @@ def load_backend_feature_manifest(
                 f"Backend feature case {case_id!r} has unknown train_type "
                 f"{train_type!r}."
             )
+        if train_type not in D0_D1_BACKEND_FEATURE_TRAIN_TYPES:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} train_type={train_type!r} is "
+                "outside the D0/D1 backend qualification scope."
+            )
         feature = str(case.get("feature") or "").strip().lower()
         if feature != BACKEND_FEATURE_NAME:
             raise BackendFeatureGpuMatrixError(
@@ -240,7 +312,7 @@ def load_backend_feature_manifest(
                 f"feature={BACKEND_FEATURE_NAME!r}."
             )
 
-        commands: dict[str, list[str]] = {}
+        raw_commands: dict[str, list[str]] = {}
         for key in ("fresh_command", "resume_command"):
             value = case.get(key)
             if (
@@ -250,9 +322,9 @@ def load_backend_feature_manifest(
             ):
                 raise BackendFeatureGpuMatrixError(
                     f"Backend feature case {case_id!r} {key} must be a "
-                    "non-empty argv list."
+                    "non-empty trainer argv list."
                 )
-            commands[key] = list(value)
+            raw_commands[key] = list(value)
 
         environment = case.get("environment", {})
         if not isinstance(environment, dict) or not all(
@@ -289,23 +361,21 @@ def load_backend_feature_manifest(
                 "qualification repository root in D0/D1."
             )
 
-        fresh_entrypoint = _repo_python_entrypoint(
-            commands["fresh_command"],
+        canonical_entrypoint = _canonical_backend_entrypoint(
+            train_type,
             repo_root=repo_root,
             case_id=case_id,
-            phase="fresh",
         )
-        resume_entrypoint = _repo_python_entrypoint(
-            commands["resume_command"],
-            repo_root=repo_root,
-            case_id=case_id,
-            phase="resume",
-        )
-        if fresh_entrypoint != resume_entrypoint:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} fresh/resume commands must "
-                "use the same exact repository trainer entrypoint."
+        commands = {
+            phase: _normalize_backend_command(
+                raw_commands[f"{phase}_command"],
+                canonical_entrypoint=canonical_entrypoint,
+                repo_root=repo_root,
+                case_id=case_id,
+                phase=phase,
             )
+            for phase in ("fresh", "resume")
+        }
 
         fresh_checkpoint = _resolved_outside_repo(
             case.get("fresh_checkpoint_dir", ""),
@@ -338,7 +408,7 @@ def load_backend_feature_manifest(
                 "resume_command": commands["resume_command"],
                 "cwd": str(cwd_path),
                 "entrypoint": str(
-                    fresh_entrypoint.relative_to(repo_root.resolve(strict=False))
+                    canonical_entrypoint.relative_to(repo_root.resolve(strict=False))
                 ),
                 "environment": dict(environment),
                 "fresh_checkpoint_dir": str(fresh_checkpoint),
@@ -444,6 +514,114 @@ def validate_full_bf16_checkpoint_manifest(
     return payload
 
 
+def validate_checkpoint_progress(
+    payload: Any,
+    *,
+    checkpoint_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress evidence must be an object."
+        )
+    if payload.get("schema") != CHECKPOINT_PROGRESS_SCHEMA:
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress evidence has unexpected schema."
+        )
+    if payload.get("version") != CHECKPOINT_PROGRESS_VERSION:
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress evidence has unexpected version."
+        )
+    for key in (
+        "train_type",
+        "policy_hash",
+        "runtime_topology_fingerprint",
+        "execution_signature",
+    ):
+        if payload.get(key) != checkpoint_manifest.get(key):
+            raise BackendFeatureGpuMatrixError(
+                f"Checkpoint progress evidence does not match manifest for {key!r}."
+            )
+
+    expected_profiles = checkpoint_manifest.get("optimizer_profiles")
+    profiles = payload.get("optimizer_profiles")
+    if not isinstance(expected_profiles, dict) or not isinstance(profiles, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress optimizer_profiles must be objects."
+        )
+    if set(profiles) != set(expected_profiles):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress optimizer Profile set does not match manifest."
+        )
+    for profile_name, optimizer_type in expected_profiles.items():
+        row = profiles.get(profile_name)
+        if not isinstance(row, dict) or row.get("optimizer_type") != optimizer_type:
+            raise BackendFeatureGpuMatrixError(
+                f"Checkpoint progress Profile {profile_name!r} optimizer type mismatch."
+            )
+        values = row.get("step_values")
+        if (
+            not isinstance(values, list)
+            or not values
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool) and value >= 0
+                for value in values
+            )
+        ):
+            raise BackendFeatureGpuMatrixError(
+                f"Checkpoint progress Profile {profile_name!r} requires optimizer "
+                "step_values."
+            )
+
+    scheduler = payload.get("scheduler")
+    if not isinstance(scheduler, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress scheduler evidence must be an object."
+        )
+    for key in ("step_count", "last_epoch"):
+        value = scheduler.get(key)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise BackendFeatureGpuMatrixError(
+                f"Checkpoint progress scheduler {key} must be an integer."
+            )
+    return payload
+
+
+def compare_checkpoint_progress(
+    fresh: dict[str, Any],
+    resumed: dict[str, Any],
+) -> None:
+    fresh_profiles = fresh["optimizer_profiles"]
+    resumed_profiles = resumed["optimizer_profiles"]
+    if set(fresh_profiles) != set(resumed_profiles):
+        raise BackendFeatureGpuMatrixError(
+            "Fresh/resume checkpoint progress Profile set mismatch."
+        )
+    for profile_name in fresh_profiles:
+        fresh_values = sorted(set(fresh_profiles[profile_name]["step_values"]))
+        resumed_values = sorted(set(resumed_profiles[profile_name]["step_values"]))
+        if fresh_values != [1]:
+            raise BackendFeatureGpuMatrixError(
+                f"Fresh checkpoint Profile {profile_name!r} must represent "
+                f"logical optimizer step 1; got {fresh_values!r}."
+            )
+        if resumed_values != [2]:
+            raise BackendFeatureGpuMatrixError(
+                f"Resumed checkpoint Profile {profile_name!r} must represent "
+                f"logical optimizer step 2; got {resumed_values!r}."
+            )
+
+    fresh_scheduler = fresh["scheduler"]
+    resumed_scheduler = resumed["scheduler"]
+    if resumed_scheduler["step_count"] != fresh_scheduler["step_count"] + 1:
+        raise BackendFeatureGpuMatrixError(
+            "Resume checkpoint scheduler step_count did not advance exactly once."
+        )
+    if resumed_scheduler["last_epoch"] != fresh_scheduler["last_epoch"] + 1:
+        raise BackendFeatureGpuMatrixError(
+            "Resume checkpoint scheduler last_epoch did not advance exactly once."
+        )
+
+
 def compare_backend_checkpoint_contracts(
     fresh: dict[str, Any],
     resumed: dict[str, Any],
@@ -477,8 +655,13 @@ __all__ = [
     "BACKEND_FEATURE_MANIFEST_SCHEMA",
     "BACKEND_FEATURE_MANIFEST_VERSION",
     "BACKEND_FEATURE_NAME",
+    "CHECKPOINT_PROGRESS_SCHEMA",
+    "CHECKPOINT_PROGRESS_VERSION",
+    "D0_D1_BACKEND_FEATURE_TRAIN_TYPES",
     "BackendFeatureGpuMatrixError",
     "compare_backend_checkpoint_contracts",
+    "compare_checkpoint_progress",
     "load_backend_feature_manifest",
+    "validate_checkpoint_progress",
     "validate_full_bf16_checkpoint_manifest",
 ]
