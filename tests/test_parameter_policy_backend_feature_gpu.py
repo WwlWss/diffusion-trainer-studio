@@ -337,6 +337,24 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
+    def test_trainer_config_cannot_hide_lifecycle_overrides(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            trainer_config = temp / "trainer.toml"
+            trainer_config.write_text("max_train_epochs = 1\n", encoding="utf-8")
+            case = _case(temp)
+            case["fresh_command"].extend(
+                ["--config_file", str(trainer_config)]
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "trainer config may not override qualification lifecycle fields",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
     def test_qualification_commands_require_state_save_each_step(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
