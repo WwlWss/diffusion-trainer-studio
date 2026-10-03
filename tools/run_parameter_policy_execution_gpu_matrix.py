@@ -2753,6 +2753,7 @@ def _worker_main(args: argparse.Namespace) -> int:
             phase=args.worker_phase,
             case_dir=case_dir,
         )
+        payload["post_run_commit"] = _assert_exact_clean_head(args.expected_commit)
         payload["status"] = "pass"
     except Exception as exc:
         payload["error"] = f"{type(exc).__name__}: {exc}"
@@ -2976,6 +2977,10 @@ def _coordinator_main(args: argparse.Namespace) -> int:
 
     if evidence_bundles:
         evidence["evidence_bundles"] = evidence_bundles
+
+    evidence["final_provenance_commit"] = _assert_exact_clean_head(
+        args.expected_commit
+    )
 
     promotion = summarize_shared_full_bf16_promotion(
         evidence["cases"],
