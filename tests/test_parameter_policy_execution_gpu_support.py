@@ -20,6 +20,7 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_muon_full_bf16_bundle,
     summarize_muon_adamw_fallback_full_bf16_bundle,
     summarize_shared_full_bf16_promotion,
+    summarize_shared_full_bf16_regression,
     temporary_execution_qualification,
 )
 
@@ -322,6 +323,44 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["unexpected_backend_promotions"], ["flux-finetune"])
         self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
+
+
+class SharedFullBf16RegressionTests(SharedFullBf16PromotionTests):
+    def test_regression_allows_candidate_backend_qualification(self):
+        snapshot = self._snapshot()
+        snapshot["backends"]["flux-finetune"] = {
+            "status": "qualified",
+            "reason": "D1 candidate",
+            "evidence_case_id": "phase-d:backend:flux-finetune:full-bf16:v1",
+        }
+        summary = summarize_shared_full_bf16_regression(
+            self._passing_rows(),
+            snapshot,
+        )
+        self.assertEqual(summary["status"], "pass")
+        self.assertEqual(summary["scope"], "shared_optimizer_regression")
+        self.assertFalse(summary["promotion_eligible"])
+        self.assertFalse(summary["optimizer_qualification_eligible"])
+
+    def test_regression_still_requires_every_c1_c4_case(self):
+        rows = self._passing_rows()
+        rows[-1] = dict(rows[-1], status="fail")
+        summary = summarize_shared_full_bf16_regression(
+            rows,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["failed_cases"])
+
+    def test_regression_requires_d0_optimizer_authority(self):
+        snapshot = self._snapshot()
+        snapshot["optimizers"]["Muon"]["evidence_case_id"] = "wrong"
+        summary = summarize_shared_full_bf16_regression(
+            self._passing_rows(),
+            snapshot,
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["target_rows_match"])
 
 
 class TemporaryExecutionQualificationTests(unittest.TestCase):
