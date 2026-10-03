@@ -34,6 +34,14 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
         self.assertIn('"promotion_eligible": False', source)
         self.assertIn('"backend_qualification_eligible": False', source)
         self.assertIn('"optimizer_qualification_eligible": False', source)
+        self.assertIn(
+            'payload["post_run_commit"] = _assert_exact_clean_head',
+            source,
+        )
+        self.assertIn(
+            'evidence["final_provenance_commit"] = _assert_exact_clean_head',
+            source,
+        )
 
     def test_strict_runners_reject_untracked_workspace_before_runtime_imports(self):
         head = subprocess.check_output(
