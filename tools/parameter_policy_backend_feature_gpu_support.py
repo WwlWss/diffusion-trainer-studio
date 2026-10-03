@@ -599,6 +599,20 @@ def validate_checkpoint_progress(
         raise BackendFeatureGpuMatrixError(
             "Checkpoint progress evidence has unexpected version."
         )
+    checkpoint_id = payload.get("checkpoint_id")
+    if not isinstance(checkpoint_id, str) or not checkpoint_id.strip():
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress requires a non-empty checkpoint_id."
+        )
+    parent = payload.get("resume_source_checkpoint_id")
+    if parent is not None and (
+        not isinstance(parent, str) or not parent.strip()
+    ):
+        raise BackendFeatureGpuMatrixError(
+            "Checkpoint progress resume_source_checkpoint_id must be null "
+            "or a non-empty string."
+        )
+
     for key in (
         "train_type",
         "policy_hash",
@@ -658,6 +672,21 @@ def compare_checkpoint_progress(
     fresh: dict[str, Any],
     resumed: dict[str, Any],
 ) -> None:
+    fresh_checkpoint_id = fresh.get("checkpoint_id")
+    resumed_checkpoint_id = resumed.get("checkpoint_id")
+    if fresh.get("resume_source_checkpoint_id") is not None:
+        raise BackendFeatureGpuMatrixError(
+            "Fresh checkpoint must not claim a resume source checkpoint."
+        )
+    if resumed.get("resume_source_checkpoint_id") != fresh_checkpoint_id:
+        raise BackendFeatureGpuMatrixError(
+            "Resumed checkpoint lineage does not reference the fresh checkpoint_id."
+        )
+    if resumed_checkpoint_id == fresh_checkpoint_id:
+        raise BackendFeatureGpuMatrixError(
+            "Fresh/resumed checkpoints must use distinct checkpoint_id values."
+        )
+
     fresh_profiles = fresh["optimizer_profiles"]
     resumed_profiles = resumed["optimizer_profiles"]
     if set(fresh_profiles) != set(resumed_profiles):
