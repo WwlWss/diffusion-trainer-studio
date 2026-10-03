@@ -1274,14 +1274,14 @@ class ParameterPolicyTrainerSession:
                 "Parameter Policy execution contract."
             )
 
-        optimizer_state_fn = getattr(optimizer, "state_dict", None)
-        scheduler_state_fn = getattr(scheduler, "state_dict", None)
-        if not callable(optimizer_state_fn) or not callable(scheduler_state_fn):
+        composite_optimizer = _unwrap_composite_optimizer(optimizer)
+        composite_scheduler = _unwrap_composite_scheduler(scheduler)
+        if composite_scheduler is None:
             raise ParameterPolicyTrainerRuntimeError(
-                "Checkpoint progress evidence requires optimizer/scheduler state_dict()."
+                "Checkpoint progress evidence requires CompositeLRScheduler."
             )
 
-        optimizer_state = optimizer_state_fn()
+        optimizer_state = composite_optimizer.state_dict()
         if not isinstance(optimizer_state, Mapping):
             raise ParameterPolicyTrainerRuntimeError(
                 "Checkpoint optimizer progress state must be a mapping."
@@ -1318,7 +1318,7 @@ class ParameterPolicyTrainerSession:
                 "step_values": step_values,
             }
 
-        scheduler_state = scheduler_state_fn()
+        scheduler_state = composite_scheduler.state_dict()
         if not isinstance(scheduler_state, Mapping):
             raise ParameterPolicyTrainerRuntimeError(
                 "Checkpoint scheduler progress state must be a mapping."
