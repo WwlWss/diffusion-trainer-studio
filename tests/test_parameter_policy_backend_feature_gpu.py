@@ -355,6 +355,27 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
+    def test_trainer_config_nested_lifecycle_override_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            trainer_config = temp / "trainer-nested.toml"
+            trainer_config.write_text(
+                "[training]\ninitial_step = 1\n",
+                encoding="utf-8",
+            )
+            case = _case(temp)
+            case["resume_command"].extend(
+                ["--config_file", str(trainer_config)]
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "trainer config may not override qualification lifecycle fields",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
     def test_qualification_commands_require_state_save_each_step(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
