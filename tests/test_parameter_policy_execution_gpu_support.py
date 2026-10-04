@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 import unittest
 from unittest import mock
 
@@ -23,6 +24,10 @@ from tools.parameter_policy_execution_gpu_support import (
     summarize_shared_full_bf16_regression,
     temporary_execution_qualification,
 )
+
+
+ROOT = Path(__file__).resolve().parents[1]
+EXECUTION_GPU_RUNNER = ROOT / "tools" / "run_parameter_policy_execution_gpu_matrix.py"
 
 
 class ExecutionGpuCaseProtocolTests(unittest.TestCase):
@@ -74,6 +79,19 @@ class ExecutionGpuCaseProtocolTests(unittest.TestCase):
         self.assertEqual(
             frozenset(MUON_FULL_BF16_ARGUMENT_FAMILY),
             MUON_ARGUMENTS,
+        )
+
+    def test_resumed_muon_accumulation_preserves_existing_intermediate_state(self):
+        source = EXECUTION_GPU_RUNNER.read_text(encoding="utf-8")
+        self.assertIn("path_before = _muon_path_evidence(session)", source)
+        self.assertIn("if path_after != path_before:", source)
+        self.assertIn(
+            "Intermediate Muon accumulation microstep changed optimizer ",
+            source,
+        )
+        self.assertNotIn(
+            "Intermediate Muon accumulation microstep created optimizer state.",
+            source,
         )
 
 
