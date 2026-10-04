@@ -1469,6 +1469,7 @@ def _run_muon_logical_step(
         optimizer_before = optimizer_state_evidence(session.optimizer)
         scheduler_before = scheduler_state_evidence(raw_scheduler)
         counters_before = _muon_group_step_counters(session)
+        path_before = _muon_path_evidence(session)
         with accelerator.accumulate(model):
             scale = 0.5 + 0.125 * (logical_step + microstep)
             value = torch.eye(
@@ -1526,8 +1527,11 @@ def _run_muon_logical_step(
                 raise AssertionError("Intermediate Muon accumulation microstep advanced group step.")
             if scheduler_step_after != before_scheduler_step:
                 raise AssertionError("Intermediate Muon accumulation microstep advanced scheduler step count.")
-            if any(keys for keys in path_after["state_keys"]):
-                raise AssertionError("Intermediate Muon accumulation microstep created optimizer state.")
+            if path_after != path_before:
+                raise AssertionError(
+                    "Intermediate Muon accumulation microstep changed optimizer "
+                    "path/state evidence."
+                )
 
     after_model = model_parameter_evidence(accelerator.unwrap_model(model))
     after_optimizer = optimizer_state_evidence(session.optimizer)
