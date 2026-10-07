@@ -10,7 +10,7 @@ from typing import Any
 
 from mikazuki import parameter_policy_execution as execution
 from mikazuki.model_component_profiles import get_model_component_profile
-from mikazuki.parameter_policy import validate_parameter_policy
+from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_BACKEND_MATRIX,
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
@@ -397,8 +397,10 @@ def _load_sd_lora_d1_policy_contract(
         contract_kind = "muon_adamw_fallback"
         fallback_component = "unet.conv.adapter"
 
+    _canonical_path, canonical_text = serialize_parameter_policy(policy)
     return {
-        "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "raw_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "policy_hash": hashlib.sha256(canonical_text.encode("utf-8")).hexdigest(),
         "kind": contract_kind,
         "profile_types": sorted(
             {
@@ -1032,12 +1034,28 @@ def summarize_sd_lora_full_bf16_promotion(
                 f"{case_id}: expected unet.conv.adapter fallback contract."
             )
 
-        fresh_types = _checkpoint_optimizer_types(
-            row.get("fresh_checkpoint_manifest")
+        fresh_manifest = row.get("fresh_checkpoint_manifest")
+        resumed_manifest = row.get("resume_checkpoint_manifest")
+        expected_policy_hash = (
+            policy_contract.get("policy_hash")
+            if isinstance(policy_contract, dict)
+            else None
         )
-        resumed_types = _checkpoint_optimizer_types(
-            row.get("resume_checkpoint_manifest")
-        )
+        if (
+            not isinstance(expected_policy_hash, str)
+            or not expected_policy_hash
+            or not isinstance(fresh_manifest, dict)
+            or not isinstance(resumed_manifest, dict)
+            or fresh_manifest.get("policy_hash") != expected_policy_hash
+            or resumed_manifest.get("policy_hash") != expected_policy_hash
+        ):
+            case_contract_errors.append(
+                f"{case_id}: checkpoint policy_hash does not match the validated "
+                "Parameter Policy sidecar."
+            )
+
+        fresh_types = _checkpoint_optimizer_types(fresh_manifest)
+        resumed_types = _checkpoint_optimizer_types(resumed_manifest)
         if fresh_types != expected_optimizers or resumed_types != expected_optimizers:
             case_contract_errors.append(
                 f"{case_id}: expected optimizer types "
