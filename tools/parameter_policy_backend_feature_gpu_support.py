@@ -217,6 +217,231 @@ def _normalize_backend_command(
     ]
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _file_identity(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Qualification identity file does not exist: {path}."
+        )
+    return {
+        "path": str(path),
+        "size": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _command_without_resume(command: list[str]) -> list[str]:
+    normalized: list[str] = []
+    index = 0
+    while index < len(command):
+        item = command[index]
+        if item == "--resume":
+            if index + 1 >= len(command):
+                raise BackendFeatureGpuMatrixError(
+                    "--resume requires a value in qualification commands."
+                )
+            index += 2
+            continue
+        if item.startswith("--resume="):
+            index += 1
+            continue
+        normalized.append(item)
+        index += 1
+    return normalized
+
+
+def _trainer_config_file_identity(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> dict[str, Any] | None:
+    values = _option_values(command, "--config_file")
+    if not values:
+        return None
+    if len(values) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must set "
+            "--config_file at most once."
+        )
+    path = Path(values[0]).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    path = path.resolve(strict=False)
+    return _file_identity(path)
+
+
+def _sd_lora_base_model_identity(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> dict[str, Any]:
+    values = _option_values(command, "--pretrained_model_name_or_path")
+    if len(values) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must set "
+            "--pretrained_model_name_or_path exactly once to a local model file."
+        )
+    path = _resolved_outside_repo(
+        values[0],
+        repo_root=repo_root,
+        field=f"{case_id} {phase} pretrained_model_name_or_path",
+    )
+    if not path.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} base model must be "
+            f"a local file: {path}."
+        )
+    return _file_identity(path)
+
+
+def _d1_input_signature(payload: dict[str, Any]) -> str:
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _build_sd_lora_d1_input_contract(
+    *,
+    case_id: str,
+    fresh_command: list[str],
+    resume_command: list[str],
+    repo_root: Path,
+    policy_contract: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    if case_id not in SD_LORA_FULL_BF16_CASE_IDS:
+        return None
+    if not isinstance(policy_contract, dict):
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} requires a D1 policy contract."
+        )
+
+    fresh_effective = _command_without_resume(fresh_command)
+    resume_effective = _command_without_resume(resume_command)
+    if fresh_effective != resume_effective:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume effective trainer "
+            "argv must match exactly except for --resume."
+        )
+
+    fresh_model = _sd_lora_base_model_identity(
+        fresh_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="fresh",
+    )
+    resume_model = _sd_lora_base_model_identity(
+        resume_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="resume",
+    )
+    if fresh_model != resume_model:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume base model identity "
+            "must match exactly."
+        )
+
+    fresh_config = _trainer_config_file_identity(
+        fresh_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="fresh",
+    )
+    resume_config = _trainer_config_file_identity(
+        resume_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="resume",
+    )
+    if fresh_config != resume_config:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume trainer config "
+            "identity must match exactly."
+        )
+
+    policy_path = Path(str(policy_contract.get("path") or "")).resolve(strict=False)
+    policy_identity = _file_identity(policy_path)
+    if policy_identity["sha256"] != policy_contract.get("raw_sha256"):
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} Parameter Policy sidecar changed "
+            "while the qualification manifest was being validated."
+        )
+
+    payload = {
+        "model_family": "sd1",
+        "v2": False,
+        "effective_argv": fresh_effective,
+        "base_model": fresh_model,
+        "trainer_config": fresh_config,
+        "parameter_policy": policy_identity,
+    }
+    return {
+        **payload,
+        "signature": _d1_input_signature(payload),
+    }
+
+
+def validate_case_input_contract(case: dict[str, Any]) -> None:
+    contract = case.get("input_contract")
+    if contract is None:
+        return
+    if not isinstance(contract, dict):
+        raise BackendFeatureGpuMatrixError("D1 input contract must be an object.")
+
+    for key in ("base_model", "parameter_policy"):
+        identity = contract.get(key)
+        if not isinstance(identity, dict):
+            raise BackendFeatureGpuMatrixError(
+                f"D1 input contract is missing {key!r} identity."
+            )
+        current = _file_identity(Path(str(identity.get("path") or "")))
+        if current != identity:
+            raise BackendFeatureGpuMatrixError(
+                f"D1 qualification input {key!r} changed after manifest validation."
+            )
+
+    trainer_config = contract.get("trainer_config")
+    if trainer_config is not None:
+        if not isinstance(trainer_config, dict):
+            raise BackendFeatureGpuMatrixError(
+                "D1 trainer_config identity must be an object or null."
+            )
+        current = _file_identity(Path(str(trainer_config.get("path") or "")))
+        if current != trainer_config:
+            raise BackendFeatureGpuMatrixError(
+                "D1 qualification trainer config changed after manifest validation."
+            )
+
+    payload = {
+        "model_family": contract.get("model_family"),
+        "v2": contract.get("v2"),
+        "effective_argv": contract.get("effective_argv"),
+        "base_model": contract.get("base_model"),
+        "trainer_config": contract.get("trainer_config"),
+        "parameter_policy": contract.get("parameter_policy"),
+    }
+    if contract.get("signature") != _d1_input_signature(payload):
+        raise BackendFeatureGpuMatrixError(
+            "D1 qualification input contract signature is invalid."
+        )
+
+
 def _trainer_config_flattened(
     command: list[str],
     *,
