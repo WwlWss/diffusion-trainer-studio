@@ -542,6 +542,8 @@ def _load_sd_lora_d1_policy_contract(
                 "network_args",
                 "network_train_unet_only",
                 "network_train_text_encoder_only",
+                "pretrained_model_name_or_path",
+                "v2",
             }.intersection(hidden)
         )
         if hidden_authority:
@@ -580,6 +582,11 @@ def _load_sd_lora_d1_policy_contract(
             case_id=case_id,
             phase=phase,
         )
+        if "--v2" in command or any(item.startswith("--v2=") for item in command):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command must remain "
+                "SD1.x; --v2 is outside the D1 qualification scope."
+            )
         for forbidden_target_flag in (
             "--network_train_unet_only",
             "--network_train_text_encoder_only",
@@ -757,8 +764,11 @@ def _load_sd_lora_d1_policy_contract(
 
     _canonical_path, canonical_text = serialize_parameter_policy(policy)
     return {
+        "path": str(policy_path),
         "raw_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "policy_hash": hashlib.sha256(canonical_text.encode("utf-8")).hexdigest(),
+        "model_family": "sd1",
+        "v2": False,
         "kind": contract_kind,
         "gradient_accumulation_steps": int(expected_accumulation),
         "mixed_precision": "bf16",
@@ -861,6 +871,13 @@ def _validate_lifecycle_command_contract(
         fresh_checkpoint=fresh_checkpoint,
         case_id=case_id,
     )
+    if _command_without_resume(fresh_command) != _command_without_resume(
+        resume_command
+    ):
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume effective trainer "
+            "argv must match exactly except for --resume."
+        )
 
 
 def load_backend_feature_manifest(
@@ -1029,6 +1046,13 @@ def load_backend_feature_manifest(
             resume_command=commands["resume_command"],
             repo_root=repo_root,
         )
+        input_contract = _build_sd_lora_d1_input_contract(
+            case_id=case_id,
+            fresh_command=commands["fresh_command"],
+            resume_command=commands["resume_command"],
+            repo_root=repo_root,
+            policy_contract=policy_contract,
+        )
 
         normalized.append(
             {
@@ -1045,6 +1069,7 @@ def load_backend_feature_manifest(
                 "fresh_checkpoint_dir": str(fresh_checkpoint),
                 "resume_checkpoint_dir": str(resume_checkpoint),
                 "policy_contract": policy_contract,
+                "input_contract": input_contract,
             }
         )
     return normalized
