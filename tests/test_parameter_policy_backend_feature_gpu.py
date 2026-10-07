@@ -63,6 +63,98 @@ def _case(root: Path) -> dict:
     }
 
 
+def _sd_lora_policy(kind: str) -> dict:
+    if kind == "adamw":
+        profiles = {
+            "main": {"type": "AdamW", "args": {}},
+        }
+        train_route = {
+            "train": True,
+            "optimizer_profile": "main",
+            "learning_rate": 1e-4,
+        }
+        components = {
+            "unet.attention.adapter": dict(train_route),
+            "unet.feed_forward.adapter": dict(train_route),
+            "unet.conv.adapter": dict(train_route),
+            "unet.other.adapter": {"train": False},
+            "text_encoder.adapter": {"train": False},
+        }
+    elif kind == "muon_adamw_fallback":
+        profiles = {
+            "muon": {"type": "Muon", "args": {}},
+            "fallback": {"type": "AdamW", "args": {}},
+        }
+        train_route = {
+            "train": True,
+            "optimizer_profile": "muon",
+            "learning_rate": 1e-3,
+            "fallback_optimizer_profile": "fallback",
+            "fallback_learning_rate": 1e-4,
+        }
+        components = {
+            "unet.attention.adapter": dict(train_route),
+            "unet.feed_forward.adapter": dict(train_route),
+            "unet.conv.adapter": dict(train_route),
+            "unet.other.adapter": {"train": False},
+            "text_encoder.adapter": {"train": False},
+        }
+    else:
+        raise AssertionError(f"unknown SD LoRA D1 policy kind: {kind}")
+    return {
+        "version": 1,
+        "optimizer_profiles": profiles,
+        "components": components,
+    }
+
+
+def _sd_lora_case(root: Path, case_id: str) -> dict:
+    kind = (
+        "adamw"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "muon_adamw_fallback"
+    )
+    policy_path = root / f"{kind}-policy.json"
+    policy_path.write_text(
+        json.dumps(_sd_lora_policy(kind)),
+        encoding="utf-8",
+    )
+    fresh_checkpoint = root / f"{kind}-checkpoint-1"
+    resume_checkpoint = root / f"{kind}-checkpoint-2"
+    common = [
+        "scripts/stable/train_network.py",
+        "--parameter_policy_config",
+        str(policy_path),
+        "--max_train_steps",
+        "2",
+        "--save_every_n_steps",
+        "1",
+        "--save_state",
+    ]
+    return {
+        "case_id": case_id,
+        "train_type": "sd-lora",
+        "feature": "full_bf16",
+        "fresh_command": list(common),
+        "resume_command": [
+            "scripts/stable/train_network.py",
+            "--parameter_policy_config",
+            str(policy_path),
+            "--resume",
+            str(fresh_checkpoint),
+            "--max_train_steps",
+            "2",
+            "--save_every_n_steps",
+            "1",
+            "--save_state",
+        ],
+        "cwd": str(ROOT),
+        "environment": {},
+        "fresh_checkpoint_dir": str(fresh_checkpoint),
+        "resume_checkpoint_dir": str(resume_checkpoint),
+    }
+
+
 def _signature(value: object) -> str:
     canonical = json.dumps(
         value,
@@ -234,6 +326,104 @@ class BackendFeatureManifestTests(unittest.TestCase):
         self.assertEqual(cases[0]["feature"], "full_bf16")
         self.assertEqual(cases[0]["entrypoint"], "scripts/dev/flux_train.py")
         self.assertEqual(cases[0]["fresh_command"][0], "scripts/dev/flux_train.py")
+
+    def test_d1_sd_lora_manifest_validates_explicit_policy_contracts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            cases = [
+                _sd_lora_case(temp, case_id)
+                for case_id in SD_LORA_FULL_BF16_CASE_IDS
+            ]
+            loaded = load_backend_feature_manifest(
+                self._write(temp, cases),
+                repo_root=ROOT,
+            )
+        self.assertEqual(
+            [case["policy_contract"]["kind"] for case in loaded],
+            ["adamw", "muon_adamw_fallback"],
+        )
+        self.assertIsNone(loaded[0]["policy_contract"]["fallback_component"])
+        self.assertEqual(
+            loaded[1]["policy_contract"]["fallback_component"],
+            "unet.conv.adapter",
+        )
+
+    def test_d1_sd_lora_requires_explicit_same_policy_sidecar(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            option_index = case["fresh_command"].index("--parameter_policy_config")
+            del case["fresh_command"][option_index : option_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--parameter_policy_config exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            second = temp / "other-policy.json"
+            second.write_text(
+                json.dumps(_sd_lora_policy("adamw")),
+                encoding="utf-8",
+            )
+            option_index = case["resume_command"].index("--parameter_policy_config")
+            case["resume_command"][option_index + 1] = str(second)
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "same Parameter Policy sidecar",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_muon_case_requires_real_conv_fallback_route(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            policy_path = Path(
+                case["fresh_command"][
+                    case["fresh_command"].index("--parameter_policy_config") + 1
+                ]
+            )
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["components"]["unet.conv.adapter"] = {"train": False}
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "must train unet.conv.adapter",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_policy_cannot_be_hidden_in_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            policy_path = case["fresh_command"][
+                case["fresh_command"].index("--parameter_policy_config") + 1
+            ]
+            trainer_config = temp / "trainer.toml"
+            trainer_config.write_text(
+                f'parameter_policy_config = "{policy_path.replace(chr(92), chr(47))}"\n',
+                encoding="utf-8",
+            )
+            case["fresh_command"].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "may not hide parameter_policy_config",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
 
     def test_manifest_must_live_outside_repository(self):
         internal = ROOT / "backend-feature-manifest-test.json"
