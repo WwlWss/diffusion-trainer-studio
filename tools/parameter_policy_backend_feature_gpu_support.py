@@ -8,6 +8,7 @@ from pathlib import Path
 import tomllib
 from typing import Any
 
+from mikazuki import parameter_policy_execution as execution
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_BACKEND_MATRIX,
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
@@ -32,6 +33,19 @@ D0_D1_BACKEND_FEATURE_TRAIN_TYPES = frozenset(
 )
 CHECKPOINT_PROGRESS_SCHEMA = "dts.parameter-policy.checkpoint-progress"
 CHECKPOINT_PROGRESS_VERSION = 1
+
+SD_LORA_FULL_BF16_EVIDENCE_ID = execution.FULL_BF16_SD_LORA_EVIDENCE_ID
+SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID = (
+    execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID
+)
+SD_LORA_FULL_BF16_CASE_IDS = (
+    "backend:sd-lora:full-bf16:adamw:v1",
+    "backend:sd-lora:full-bf16:muon-adamw-fallback:v1",
+)
+_SD_LORA_CASE_OPTIMIZER_TYPES = {
+    SD_LORA_FULL_BF16_CASE_IDS[0]: frozenset({"AdamW"}),
+    SD_LORA_FULL_BF16_CASE_IDS[1]: frozenset({"Muon", "AdamW"}),
+}
 
 
 class BackendFeatureGpuMatrixError(RuntimeError):
@@ -746,6 +760,143 @@ def compare_backend_checkpoint_contracts(
             )
 
 
+def backend_feature_qualification_snapshot() -> dict[str, dict[str, dict[str, Any]]]:
+    return {
+        "backends": {
+            name: {
+                "status": row.status,
+                "reason": row.reason,
+                "evidence_case_id": row.evidence_case_id,
+            }
+            for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
+        },
+        "optimizers": {
+            name: {
+                "status": row.status,
+                "reason": row.reason,
+                "evidence_case_id": row.evidence_case_id,
+            }
+            for name, row in execution.FULL_BF16_OPTIMIZER_QUALIFICATIONS.items()
+        },
+    }
+
+
+def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
+    if not isinstance(payload, dict):
+        return None
+    profiles = payload.get("optimizer_profiles")
+    optimizers = payload.get("optimizers")
+    if not isinstance(profiles, dict) or not isinstance(optimizers, list):
+        return None
+    profile_types = {
+        str(value)
+        for value in profiles.values()
+        if isinstance(value, str) and value
+    }
+    optimizer_types = {
+        str(row.get("optimizer_type"))
+        for row in optimizers
+        if isinstance(row, dict)
+        and isinstance(row.get("optimizer_type"), str)
+        and row.get("optimizer_type")
+    }
+    if not profile_types or profile_types != optimizer_types:
+        return None
+    return frozenset(profile_types)
+
+
+def summarize_sd_lora_full_bf16_promotion(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+) -> dict[str, Any]:
+    rows = {
+        row.get("case_id"): row
+        for row in case_rows
+        if row.get("case_id") in SD_LORA_FULL_BF16_CASE_IDS
+    }
+    missing_cases = sorted(set(SD_LORA_FULL_BF16_CASE_IDS).difference(rows))
+    failed_cases = sorted(
+        case_id
+        for case_id, row in rows.items()
+        if row.get("status") != "pass"
+    )
+
+    case_contract_errors: list[str] = []
+    for case_id, expected_optimizers in _SD_LORA_CASE_OPTIMIZER_TYPES.items():
+        row = rows.get(case_id)
+        if row is None:
+            continue
+        if row.get("train_type") != "sd-lora" or row.get("feature") != "full_bf16":
+            case_contract_errors.append(
+                f"{case_id}: expected sd-lora/full_bf16 case identity."
+            )
+            continue
+        fresh_types = _checkpoint_optimizer_types(
+            row.get("fresh_checkpoint_manifest")
+        )
+        resumed_types = _checkpoint_optimizer_types(
+            row.get("resume_checkpoint_manifest")
+        )
+        if fresh_types != expected_optimizers or resumed_types != expected_optimizers:
+            case_contract_errors.append(
+                f"{case_id}: expected optimizer types "
+                f"{sorted(expected_optimizers)!r}, got fresh="
+                f"{sorted(fresh_types) if fresh_types is not None else None!r}, "
+                f"resume={sorted(resumed_types) if resumed_types is not None else None!r}."
+            )
+
+    backends = qualification_snapshot.get("backends", {})
+    optimizers = qualification_snapshot.get("optimizers", {})
+    backend_row = backends.get("sd-lora", {})
+    backend_row_match = (
+        backend_row.get("status") == "qualified"
+        and backend_row.get("evidence_case_id") == SD_LORA_FULL_BF16_EVIDENCE_ID
+    )
+    shared_optimizer_authority_match = all(
+        optimizers.get(name, {}).get("status") == "qualified"
+        and optimizers.get(name, {}).get("evidence_case_id")
+        == SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID
+        for name in ("AdamW", "Muon")
+    )
+    unexpected_backend_promotions = sorted(
+        name
+        for name, row in backends.items()
+        if name != "sd-lora" and row.get("status") == "qualified"
+    )
+    unexpected_optimizer_promotions = sorted(
+        name
+        for name, row in optimizers.items()
+        if name not in {"AdamW", "Muon"} and row.get("status") == "qualified"
+    )
+
+    complete = not missing_cases and not failed_cases and not case_contract_errors
+    source_scope_valid = (
+        backend_row_match
+        and shared_optimizer_authority_match
+        and not unexpected_backend_promotions
+        and not unexpected_optimizer_promotions
+    )
+    status = "pass" if complete and source_scope_valid else "fail"
+    return {
+        "id": SD_LORA_FULL_BF16_EVIDENCE_ID,
+        "scope": "backend_promotion",
+        "feature": "full_bf16",
+        "train_type": "sd-lora",
+        "required_cases": list(SD_LORA_FULL_BF16_CASE_IDS),
+        "missing_cases": missing_cases,
+        "failed_cases": failed_cases,
+        "case_contract_errors": case_contract_errors,
+        "backend_row_match": backend_row_match,
+        "shared_optimizer_authority_match": shared_optimizer_authority_match,
+        "unexpected_backend_promotions": unexpected_backend_promotions,
+        "unexpected_optimizer_promotions": unexpected_optimizer_promotions,
+        "status": status,
+        "promotion_eligible": status == "pass",
+        "backend_qualification_eligible": status == "pass",
+        "production_qualification_mutated": False,
+    }
+
+
 __all__ = [
     "BACKEND_FEATURE_EVIDENCE_SCHEMA",
     "BACKEND_FEATURE_EVIDENCE_VERSION",
@@ -755,10 +906,15 @@ __all__ = [
     "CHECKPOINT_PROGRESS_SCHEMA",
     "CHECKPOINT_PROGRESS_VERSION",
     "D0_D1_BACKEND_FEATURE_TRAIN_TYPES",
+    "SD_LORA_FULL_BF16_CASE_IDS",
+    "SD_LORA_FULL_BF16_EVIDENCE_ID",
+    "SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID",
     "BackendFeatureGpuMatrixError",
+    "backend_feature_qualification_snapshot",
     "compare_backend_checkpoint_contracts",
     "compare_checkpoint_progress",
     "load_backend_feature_manifest",
+    "summarize_sd_lora_full_bf16_promotion",
     "validate_checkpoint_progress",
     "validate_full_bf16_checkpoint_manifest",
 ]
