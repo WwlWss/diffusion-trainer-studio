@@ -652,8 +652,9 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
-            module_index = case["fresh_command"].index("--network_module")
-            case["fresh_command"][module_index + 1] = "networks.other"
+            for phase_key in ("fresh_command", "resume_command"):
+                module_index = case[phase_key].index("--network_module")
+                case[phase_key][module_index + 1] = "networks.other"
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "--network_module exactly once to 'networks.lora'",
@@ -682,8 +683,9 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
-            accum_index = case["fresh_command"].index("--gradient_accumulation_steps")
-            case["fresh_command"][accum_index + 1] = "1"
+            for phase_key in ("fresh_command", "resume_command"):
+                accum_index = case[phase_key].index("--gradient_accumulation_steps")
+                case[phase_key][accum_index + 1] = "1"
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "--gradient_accumulation_steps exactly once to '2'",
@@ -696,7 +698,8 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
-            case["resume_command"].remove("--full_bf16")
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].remove("--full_bf16")
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "--full_bf16 exactly once",
@@ -715,7 +718,8 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 'gradient_accumulation_steps = 1\n',
                 encoding="utf-8",
             )
-            case["fresh_command"].extend(["--config_file", str(trainer_config)])
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "may not hide D1 qualification authority fields",
@@ -729,8 +733,9 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
-            option_index = case["fresh_command"].index("--parameter_policy_config")
-            del case["fresh_command"][option_index : option_index + 2]
+            for phase_key in ("fresh_command", "resume_command"):
+                option_index = case[phase_key].index("--parameter_policy_config")
+                del case[phase_key][option_index : option_index + 2]
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "--parameter_policy_config exactly once",
@@ -752,7 +757,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["resume_command"][option_index + 1] = str(second)
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "same Parameter Policy sidecar",
+                "effective trainer argv must match exactly except for --resume",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
