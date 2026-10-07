@@ -121,10 +121,20 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
     )
     fresh_checkpoint = root / f"{kind}-checkpoint-1"
     resume_checkpoint = root / f"{kind}-checkpoint-2"
+    accumulation = (
+        "1"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "2"
+    )
     common = [
         "scripts/stable/train_network.py",
         "--parameter_policy_config",
         str(policy_path),
+        "--gradient_accumulation_steps",
+        accumulation,
+        "--mixed_precision",
+        "bf16",
+        "--full_bf16",
         "--max_train_steps",
         "2",
         "--save_every_n_steps",
@@ -140,6 +150,11 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
             "scripts/stable/train_network.py",
             "--parameter_policy_config",
             str(policy_path),
+            "--gradient_accumulation_steps",
+            accumulation,
+            "--mixed_precision",
+            "bf16",
+            "--full_bf16",
             "--resume",
             str(fresh_checkpoint),
             "--max_train_steps",
@@ -244,6 +259,13 @@ def _d1_case_row(
         "policy_contract": {
             "policy_hash": "policy",
             "kind": policy_kind,
+            "gradient_accumulation_steps": (
+                1
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+                else 2
+            ),
+            "mixed_precision": "bf16",
+            "full_bf16": True,
             "fallback_component": (
                 None
                 if policy_kind == "adamw"
@@ -351,6 +373,60 @@ class BackendFeatureManifestTests(unittest.TestCase):
         )
         self.assertTrue(loaded[0]["policy_contract"]["policy_hash"])
         self.assertTrue(loaded[1]["policy_contract"]["policy_hash"])
+        self.assertEqual(
+            [case["policy_contract"]["gradient_accumulation_steps"] for case in loaded],
+            [1, 2],
+        )
+        self.assertTrue(
+            all(case["policy_contract"]["full_bf16"] for case in loaded)
+        )
+
+    def test_d1_cases_lock_accumulation_and_full_bf16_cli(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            accum_index = case["fresh_command"].index("--gradient_accumulation_steps")
+            case["fresh_command"][accum_index + 1] = "1"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--gradient_accumulation_steps exactly once to '2'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            case["resume_command"].remove("--full_bf16")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--full_bf16 exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_authority_fields_cannot_be_hidden_in_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-authority.toml"
+            trainer_config.write_text(
+                'gradient_accumulation_steps = 1\n',
+                encoding="utf-8",
+            )
+            case["fresh_command"].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "may not hide D1 qualification authority fields",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
 
     def test_d1_sd_lora_requires_explicit_same_policy_sidecar(self):
         with tempfile.TemporaryDirectory() as temp_dir:
