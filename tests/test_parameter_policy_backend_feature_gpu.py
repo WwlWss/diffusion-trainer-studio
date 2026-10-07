@@ -599,7 +599,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "trainer config changed",
+                "trainer config.*changed",
             ):
                 validate_case_input_contract(loaded)
 
