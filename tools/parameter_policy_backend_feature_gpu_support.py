@@ -9,6 +9,8 @@ import tomllib
 from typing import Any
 
 from mikazuki import parameter_policy_execution as execution
+from mikazuki.model_component_profiles import get_model_component_profile
+from mikazuki.parameter_policy import validate_parameter_policy
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_BACKEND_MATRIX,
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
@@ -188,16 +190,16 @@ def _normalize_backend_command(
     ]
 
 
-def _trainer_config_lifecycle_fields(
+def _trainer_config_flattened(
     command: list[str],
     *,
     repo_root: Path,
     case_id: str,
     phase: str,
-) -> set[str]:
+) -> dict[str, Any]:
     values = _option_values(command, "--config_file")
     if not values:
-        return set()
+        return {}
     if len(values) != 1:
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} {phase} command must set "
@@ -228,7 +230,22 @@ def _trainer_config_lifecycle_fields(
                 flattened[str(nested_key)] = nested_value
         else:
             flattened[str(key)] = value
+    return flattened
 
+
+def _trainer_config_lifecycle_fields(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> set[str]:
+    flattened = _trainer_config_flattened(
+        command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase=phase,
+    )
     guarded = {
         "max_train_epochs",
         "initial_epoch",
@@ -238,6 +255,162 @@ def _trainer_config_lifecycle_fields(
         "resume_from_huggingface",
     }
     return guarded.intersection(flattened)
+
+
+def _load_sd_lora_d1_policy_contract(
+    *,
+    case_id: str,
+    fresh_command: list[str],
+    resume_command: list[str],
+    repo_root: Path,
+) -> dict[str, Any] | None:
+    if case_id not in SD_LORA_FULL_BF16_CASE_IDS:
+        return None
+
+    policy_paths: list[Path] = []
+    for phase, command in (("fresh", fresh_command), ("resume", resume_command)):
+        hidden = _trainer_config_flattened(
+            command,
+            repo_root=repo_root,
+            case_id=case_id,
+            phase=phase,
+        )
+        if "parameter_policy_config" in hidden:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} trainer config may not "
+                "hide parameter_policy_config; D1 requires an explicit command option."
+            )
+
+        values = _option_values(command, "--parameter_policy_config")
+        if len(values) != 1:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command must set "
+                "--parameter_policy_config exactly once."
+            )
+        policy_path = _resolved_outside_repo(
+            values[0],
+            repo_root=repo_root,
+            field=f"{case_id} {phase} parameter_policy_config",
+        )
+        if not policy_path.is_file():
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} Parameter Policy "
+                f"sidecar does not exist: {policy_path}."
+            )
+        policy_paths.append(policy_path)
+
+    if policy_paths[0] != policy_paths[1]:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume commands must use "
+            "the same Parameter Policy sidecar."
+        )
+
+    policy_path = policy_paths[0]
+    try:
+        raw = json.loads(policy_path.read_text(encoding="utf-8"))
+        policy = validate_parameter_policy(raw)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} has invalid Parameter Policy "
+            f"sidecar {policy_path}: {exc}"
+        ) from exc
+
+    expected_components = set(get_model_component_profile("sd-lora").components)
+    actual_components = set(policy["components"])
+    if actual_components != expected_components:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} Parameter Policy Component set "
+            "does not exactly match the sd-lora model profile."
+        )
+
+    profiles = policy["optimizer_profiles"]
+    trainable = {
+        component_id: route
+        for component_id, route in policy["components"].items()
+        if bool(route.get("train"))
+    }
+    if not trainable:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} must train at least one SD LoRA component."
+        )
+
+    def _profile_type(profile_name: object) -> str:
+        profile = profiles.get(str(profile_name or ""))
+        if not isinstance(profile, dict):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} references unknown optimizer "
+                f"profile {profile_name!r}."
+            )
+        return str(profile.get("type") or "")
+
+    if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]:
+        for component_id, route in trainable.items():
+            if _profile_type(route.get("optimizer_profile")) != "AdamW":
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} AdamW case routes "
+                    f"{component_id!r} through a non-AdamW primary optimizer."
+                )
+            if route.get("fallback_optimizer_profile") not in (None, ""):
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} AdamW case must not use "
+                    "fallback routing."
+                )
+        contract_kind = "adamw"
+        fallback_component = None
+    else:
+        conv_route = trainable.get("unet.conv.adapter")
+        if not isinstance(conv_route, dict):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} must train "
+                "unet.conv.adapter so AdamW fallback is exercised."
+            )
+        if _profile_type(conv_route.get("optimizer_profile")) != "Muon":
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} unet.conv.adapter primary "
+                "optimizer must be Muon."
+            )
+        if _profile_type(conv_route.get("fallback_optimizer_profile")) != "AdamW":
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} unet.conv.adapter fallback "
+                "optimizer must be AdamW."
+            )
+        if conv_route.get("fallback_learning_rate") in (None, ""):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} unet.conv.adapter requires "
+                "fallback_learning_rate."
+            )
+        linear_muon = [
+            component_id
+            for component_id in (
+                "unet.attention.adapter",
+                "unet.feed_forward.adapter",
+            )
+            if component_id in trainable
+            and _profile_type(trainable[component_id].get("optimizer_profile"))
+            == "Muon"
+        ]
+        if not linear_muon:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} must also train at least one "
+                "hidden linear adapter component through Muon."
+            )
+        contract_kind = "muon_adamw_fallback"
+        fallback_component = "unet.conv.adapter"
+
+    return {
+        "sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
+        "kind": contract_kind,
+        "profile_types": sorted(
+            {
+                str(profile.get("type") or "")
+                for profile in profiles.values()
+                if isinstance(profile, dict)
+            }
+        ),
+        "trainable_components": sorted(trainable),
+        "fallback_component": fallback_component,
+    }
+
 
 def _validate_lifecycle_command_contract(
     *,
@@ -480,6 +653,12 @@ def load_backend_feature_manifest(
             fresh_checkpoint=fresh_checkpoint,
             repo_root=repo_root,
         )
+        policy_contract = _load_sd_lora_d1_policy_contract(
+            case_id=case_id,
+            fresh_command=commands["fresh_command"],
+            resume_command=commands["resume_command"],
+            repo_root=repo_root,
+        )
 
         normalized.append(
             {
@@ -495,6 +674,7 @@ def load_backend_feature_manifest(
                 "environment": dict(environment),
                 "fresh_checkpoint_dir": str(fresh_checkpoint),
                 "resume_checkpoint_dir": str(resume_checkpoint),
+                "policy_contract": policy_contract,
             }
         )
     return normalized
