@@ -614,6 +614,8 @@ def _load_sd_lora_d1_policy_contract(
                 "network_train_unet_only",
                 "network_train_text_encoder_only",
                 "pretrained_model_name_or_path",
+                "output_dir",
+                "output_name",
             }.intersection(hidden)
         )
         if hidden_authority:
