@@ -80,6 +80,26 @@ def _option_values(command: list[str], option: str) -> list[str]:
     return values
 
 
+def _nargs_option_values(command: list[str], option: str) -> list[str]:
+    positions = [index for index, item in enumerate(command) if item == option]
+    if len(positions) > 1:
+        raise BackendFeatureGpuMatrixError(
+            f"{option} must be supplied at most once in qualification commands."
+        )
+    if any(item.startswith(option + "=") for item in command):
+        raise BackendFeatureGpuMatrixError(
+            f"{option} must use explicit space-separated values in qualification commands."
+        )
+    if not positions:
+        return []
+    values: list[str] = []
+    for item in command[positions[0] + 1 :]:
+        if item.startswith("--"):
+            break
+        values.append(item)
+    return values
+
+
 def _require_single_option_value(
     command: list[str],
     option: str,
@@ -286,6 +306,10 @@ def _load_sd_lora_d1_policy_contract(
                 "gradient_accumulation_steps",
                 "mixed_precision",
                 "full_bf16",
+                "network_module",
+                "network_args",
+                "network_train_unet_only",
+                "network_train_text_encoder_only",
             }.intersection(hidden)
         )
         if hidden_authority:
@@ -316,6 +340,23 @@ def _load_sd_lora_d1_policy_contract(
                 f"Backend feature case {case_id!r} {phase} command must include "
                 "--full_bf16 exactly once as an explicit flag."
             )
+
+        _require_single_option_value(
+            command,
+            "--network_module",
+            expected="networks.lora",
+            case_id=case_id,
+            phase=phase,
+        )
+        for forbidden_target_flag in (
+            "--network_train_unet_only",
+            "--network_train_text_encoder_only",
+        ):
+            if forbidden_target_flag in command:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} {phase} command may not use "
+                    f"{forbidden_target_flag}; D1 must cover both U-Net and Text Encoder adapters."
+                )
 
         values = _option_values(command, "--parameter_policy_config")
         if len(values) != 1:
@@ -369,6 +410,18 @@ def _load_sd_lora_d1_policy_contract(
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} must train at least one SD LoRA component."
         )
+    required_coverage = {
+        "unet.attention.adapter",
+        "unet.feed_forward.adapter",
+        "unet.conv.adapter",
+        "text_encoder.adapter",
+    }
+    missing_coverage = sorted(required_coverage.difference(trainable))
+    if missing_coverage:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} must train D1 coverage components: "
+            f"missing={missing_coverage!r}."
+        )
 
     def _profile_type(profile_name: object) -> str:
         profile = profiles.get(str(profile_name or ""))
@@ -420,15 +473,52 @@ def _load_sd_lora_d1_policy_contract(
             for component_id in (
                 "unet.attention.adapter",
                 "unet.feed_forward.adapter",
+                "text_encoder.adapter",
             )
             if component_id in trainable
             and _profile_type(trainable[component_id].get("optimizer_profile"))
             == "Muon"
         ]
-        if not linear_muon:
+        if set(linear_muon) != {
+            "unet.attention.adapter",
+            "unet.feed_forward.adapter",
+            "text_encoder.adapter",
+        }:
             raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} must also train at least one "
-                "hidden linear adapter component through Muon."
+                f"Backend feature case {case_id!r} must train U-Net hidden linear "
+                "and Text Encoder adapters through Muon."
+            )
+        network_args = _nargs_option_values(fresh_command, "--network_args")
+        resume_network_args = _nargs_option_values(resume_command, "--network_args")
+        if network_args != resume_network_args:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} fresh/resume network_args must match."
+            )
+        parsed_network_args: dict[str, str] = {}
+        for item in network_args:
+            if "=" not in item:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args must use key=value."
+                )
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key or key in parsed_network_args:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args contain an "
+                    "empty or duplicate key."
+                )
+            parsed_network_args[key] = value.strip()
+        try:
+            conv_dim = int(parsed_network_args.get("conv_dim", ""))
+        except ValueError as exc:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} Muon/fallback case requires "
+                "integer conv_dim>0 in explicit --network_args."
+            ) from exc
+        if conv_dim <= 0:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} Muon/fallback case requires "
+                "conv_dim>0 so real Conv LoRA fallback parameters are created."
             )
         contract_kind = "muon_adamw_fallback"
         fallback_component = "unet.conv.adapter"
@@ -441,6 +531,13 @@ def _load_sd_lora_d1_policy_contract(
         "gradient_accumulation_steps": int(expected_accumulation),
         "mixed_precision": "bf16",
         "full_bf16": True,
+        "network_module": "networks.lora",
+        "covers_text_encoder_adapter": "text_encoder.adapter" in trainable,
+        "conv_dim": (
+            conv_dim
+            if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+            else None
+        ),
         "profile_types": sorted(
             {
                 str(profile.get("type") or "")
@@ -1070,6 +1167,15 @@ def summarize_sd_lora_full_bf16_promotion(
             != expected_accumulation
             or policy_contract.get("mixed_precision") != "bf16"
             or policy_contract.get("full_bf16") is not True
+            or policy_contract.get("network_module") != "networks.lora"
+            or policy_contract.get("covers_text_encoder_adapter") is not True
+            or (
+                case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+                and (
+                    not isinstance(policy_contract.get("conv_dim"), int)
+                    or policy_contract.get("conv_dim") <= 0
+                )
+            )
         ):
             case_contract_errors.append(
                 f"{case_id}: expected policy/execution contract kind "
