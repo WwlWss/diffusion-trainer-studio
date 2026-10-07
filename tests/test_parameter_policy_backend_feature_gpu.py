@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -11,10 +12,15 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
     BACKEND_FEATURE_MANIFEST_SCHEMA,
     CHECKPOINT_PROGRESS_SCHEMA,
+    SD_LORA_FULL_BF16_CASE_IDS,
+    SD_LORA_FULL_BF16_EVIDENCE_ID,
+    SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID,
     BackendFeatureGpuMatrixError,
+    backend_feature_qualification_snapshot,
     compare_backend_checkpoint_contracts,
     compare_checkpoint_progress,
     load_backend_feature_manifest,
+    summarize_sd_lora_full_bf16_promotion,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
 )
@@ -99,6 +105,46 @@ def _progress(
             "step_count": scheduler_step_count,
             "last_epoch": scheduler_last_epoch,
         },
+    }
+
+
+def _d1_case_row(
+    case_id: str,
+    *,
+    status: str = "pass",
+    train_type: str = "sd-lora",
+    feature: str = "full_bf16",
+    optimizer_types: tuple[str, ...] | None = None,
+) -> dict:
+    if optimizer_types is None:
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]:
+            optimizer_types = ("AdamW",)
+        elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1]:
+            optimizer_types = ("Muon", "AdamW")
+        else:
+            optimizer_types = ("AdamW",)
+
+    profiles = {
+        f"profile_{index}": optimizer_type
+        for index, optimizer_type in enumerate(optimizer_types)
+    }
+    manifest = {
+        "optimizer_profiles": profiles,
+        "optimizers": [
+            {
+                "profile_name": profile_name,
+                "optimizer_type": optimizer_type,
+            }
+            for profile_name, optimizer_type in profiles.items()
+        ],
+    }
+    return {
+        "case_id": case_id,
+        "train_type": train_type,
+        "feature": feature,
+        "status": status,
+        "fresh_checkpoint_manifest": copy.deepcopy(manifest),
+        "resume_checkpoint_manifest": copy.deepcopy(manifest),
     }
 
 
@@ -677,6 +723,126 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
             compare_backend_checkpoint_contracts(fresh, resumed)
 
 
+class SdLoraFullBf16PromotionTests(unittest.TestCase):
+    def _snapshot(self):
+        return copy.deepcopy(backend_feature_qualification_snapshot())
+
+    def _passing_rows(self):
+        return [_d1_case_row(case_id) for case_id in SD_LORA_FULL_BF16_CASE_IDS]
+
+    def test_complete_d1_matrix_is_promotion_eligible(self):
+        summary = summarize_sd_lora_full_bf16_promotion(
+            self._passing_rows(),
+            self._snapshot(),
+        )
+        self.assertEqual(summary["id"], SD_LORA_FULL_BF16_EVIDENCE_ID)
+        self.assertEqual(
+            SD_LORA_FULL_BF16_EVIDENCE_ID,
+            "phase-d1:backend:sd-lora:full-bf16:v1",
+        )
+        self.assertEqual(summary["status"], "pass")
+        self.assertTrue(summary["promotion_eligible"])
+        self.assertTrue(summary["backend_qualification_eligible"])
+        self.assertTrue(summary["backend_row_match"])
+        self.assertTrue(summary["shared_optimizer_authority_match"])
+        self.assertEqual(summary["case_contract_errors"], [])
+        self.assertEqual(summary["unexpected_backend_promotions"], [])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], [])
+        self.assertFalse(summary["production_qualification_mutated"])
+
+    def test_missing_or_failed_case_blocks_promotion(self):
+        rows = self._passing_rows()
+        summary = summarize_sd_lora_full_bf16_promotion(
+            rows[:-1],
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["missing_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
+
+        failed = self._passing_rows()
+        failed[1]["status"] = "fail"
+        summary = summarize_sd_lora_full_bf16_promotion(
+            failed,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["failed_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
+
+    def test_case_identity_and_optimizer_topology_are_verified(self):
+        wrong_identity = self._passing_rows()
+        wrong_identity[0]["train_type"] = "flux-lora"
+        summary = summarize_sd_lora_full_bf16_promotion(
+            wrong_identity,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        wrong_topology = self._passing_rows()
+        wrong_topology[1] = _d1_case_row(
+            SD_LORA_FULL_BF16_CASE_IDS[1],
+            optimizer_types=("Muon",),
+        )
+        summary = summarize_sd_lora_full_bf16_promotion(
+            wrong_topology,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+    def test_source_backend_authority_must_match_exact_d1_evidence(self):
+        for status, evidence in (
+            ("pending", None),
+            ("qualified", "wrong:evidence"),
+        ):
+            with self.subTest(status=status, evidence=evidence):
+                snapshot = self._snapshot()
+                snapshot["backends"]["sd-lora"]["status"] = status
+                snapshot["backends"]["sd-lora"]["evidence_case_id"] = evidence
+                summary = summarize_sd_lora_full_bf16_promotion(
+                    self._passing_rows(),
+                    snapshot,
+                )
+                self.assertEqual(summary["status"], "fail")
+                self.assertFalse(summary["backend_row_match"])
+
+    def test_d0_optimizer_authority_is_required_for_both_shared_optimizers(self):
+        self.assertEqual(
+            SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID,
+            "phase-d0:shared-adamw-muon-full-bf16:v1",
+        )
+        for optimizer_name in ("AdamW", "Muon"):
+            with self.subTest(optimizer=optimizer_name):
+                snapshot = self._snapshot()
+                snapshot["optimizers"][optimizer_name]["evidence_case_id"] = "wrong"
+                summary = summarize_sd_lora_full_bf16_promotion(
+                    self._passing_rows(),
+                    snapshot,
+                )
+                self.assertEqual(summary["status"], "fail")
+                self.assertFalse(summary["shared_optimizer_authority_match"])
+
+    def test_unexpected_backend_or_optimizer_promotion_blocks_d1(self):
+        snapshot = self._snapshot()
+        snapshot["backends"]["sdxl-lora"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:backend",
+        }
+        snapshot["optimizers"]["Lion"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:optimizer",
+        }
+        summary = summarize_sd_lora_full_bf16_promotion(
+            self._passing_rows(),
+            snapshot,
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["unexpected_backend_promotions"], ["sdxl-lora"])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
+
+
 class BackendFeatureRunnerSourceTests(unittest.TestCase):
     def test_runner_checks_exact_clean_head_before_torch_import(self):
         source = RUNNER.read_text(encoding="utf-8")
@@ -819,6 +985,13 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertNotIn("DTS_FULL_BF16_BYPASS", source)
         self.assertIn('"backend_qualification_eligible": False', source)
         self.assertIn('"production_qualification_mutated": False', source)
+
+    def test_runner_emits_d1_sd_lora_promotion_summary(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("backend_feature_qualification_snapshot", source)
+        self.assertIn("summarize_sd_lora_full_bf16_promotion", source)
+        self.assertIn('"backend_promotion"', source)
+        self.assertIn("SD_LORA_FULL_BF16_CASE_IDS", source)
 
     def test_workflow_uses_external_evidence_directory(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
