@@ -55,6 +55,8 @@ def _case(root: Path) -> dict:
             "--save_every_n_steps",
             "1",
             "--save_state",
+            "--output_dir",
+            str(resume_output),
         ],
         "resume_command": [
             
@@ -133,8 +135,10 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
     base_model = root / "sd1-base.safetensors"
     if not base_model.exists():
         base_model.write_bytes(b"sd1-base-model")
-    fresh_checkpoint = root / f"{kind}-checkpoint-1"
-    resume_checkpoint = root / f"{kind}-checkpoint-2"
+    fresh_output = root / f"{kind}-fresh-output"
+    resume_output = root / f"{kind}-resume-output"
+    fresh_checkpoint = fresh_output / "at-step00000001-state"
+    resume_checkpoint = resume_output / "at-step00000002-state"
     accumulation = (
         "1"
         if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
@@ -168,7 +172,11 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
         "case_id": case_id,
         "train_type": "sd-lora",
         "feature": "full_bf16",
-        "fresh_command": list(common),
+        "fresh_command": [
+            *common,
+            "--output_dir",
+            str(fresh_output),
+        ],
         "resume_command": [
             "scripts/stable/train_network.py",
             "--parameter_policy_config",
@@ -317,6 +325,10 @@ def _d1_case_row(
             "model_family": "sd1",
             "v2": False,
             "signature": "input-signature",
+            "output_contract": {
+                "fresh_output_dir": "fresh",
+                "resume_output_dir": "resume",
+            },
             "base_model": {"sha256": "base-model"},
             "parameter_policy": {"sha256": "policy-file"},
         },
@@ -518,7 +530,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["resume_command"].extend(["--caption_dropout_rate", "0.1"])
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "effective trainer argv must match exactly except for --resume",
+                "training-input argv must match exactly",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
@@ -757,7 +769,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["resume_command"][option_index + 1] = str(second)
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "effective trainer argv must match exactly except for --resume",
+                "training-input argv must match exactly",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
