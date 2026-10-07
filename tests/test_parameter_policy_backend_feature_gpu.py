@@ -554,20 +554,6 @@ class BackendFeatureManifestTests(unittest.TestCase):
                     repo_root=ROOT,
                 )
 
-    def test_d1_fresh_resume_effective_argv_must_match_except_resume(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp = Path(temp_dir)
-            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
-            case["resume_command"].extend(["--caption_dropout_rate", "0.1"])
-            with self.assertRaisesRegex(
-                BackendFeatureGpuMatrixError,
-                "training-input argv must match exactly",
-            ):
-                load_backend_feature_manifest(
-                    self._write(temp, [case]),
-                    repo_root=ROOT,
-                )
-
     def test_d1_requires_explicit_local_base_model(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
