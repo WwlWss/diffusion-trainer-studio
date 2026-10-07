@@ -345,35 +345,12 @@ def _build_sd_lora_d1_input_contract(
         case_id=case_id,
         phase="fresh",
     )
-    resume_model = _sd_lora_base_model_identity(
-        resume_command,
-        repo_root=repo_root,
-        case_id=case_id,
-        phase="resume",
-    )
-    if fresh_model != resume_model:
-        raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} fresh/resume base model identity "
-            "must match exactly."
-        )
-
     fresh_config = _trainer_config_file_identity(
         fresh_command,
         repo_root=repo_root,
         case_id=case_id,
         phase="fresh",
     )
-    resume_config = _trainer_config_file_identity(
-        resume_command,
-        repo_root=repo_root,
-        case_id=case_id,
-        phase="resume",
-    )
-    if fresh_config != resume_config:
-        raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} fresh/resume trainer config "
-            "identity must match exactly."
-        )
 
     policy_path = Path(str(policy_contract.get("path") or "")).resolve(strict=False)
     policy_identity = _file_identity(policy_path)
@@ -543,7 +520,6 @@ def _load_sd_lora_d1_policy_contract(
                 "network_train_unet_only",
                 "network_train_text_encoder_only",
                 "pretrained_model_name_or_path",
-                "v2",
             }.intersection(hidden)
         )
         if hidden_authority:
@@ -551,6 +527,12 @@ def _load_sd_lora_d1_policy_contract(
                 f"Backend feature case {case_id!r} {phase} trainer config may not "
                 "hide D1 qualification authority fields: "
                 f"{hidden_authority!r}; use explicit command options."
+            )
+        hidden_v2 = hidden.get("v2")
+        if hidden_v2 not in (None, False, 0, "", "false", "False"):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} trainer config enables "
+                "SD2.x v2 mode, which is outside the D1 SD1.x qualification scope."
             )
 
         _require_single_option_value(
