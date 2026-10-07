@@ -1161,21 +1161,30 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
     def _passing_rows(self):
         return [_d1_case_row(case_id) for case_id in SD_LORA_FULL_BF16_CASE_IDS]
 
-    def test_complete_d1_matrix_is_promotion_eligible(self):
-        summary = summarize_sd_lora_full_bf16_promotion(
-            self._passing_rows(),
-            self._snapshot(),
+    def _summary(self, rows=None, snapshot=None, regression=None):
+        return summarize_sd_lora_full_bf16_promotion(
+            self._passing_rows() if rows is None else rows,
+            self._snapshot() if snapshot is None else snapshot,
+            _shared_regression_contract() if regression is None else regression,
         )
+
+    def test_complete_d1_matrix_is_promotion_eligible(self):
+        summary = self._summary()
         self.assertEqual(summary["id"], SD_LORA_FULL_BF16_EVIDENCE_ID)
         self.assertEqual(
             SD_LORA_FULL_BF16_EVIDENCE_ID,
-            "phase-d1:backend:sd-lora:full-bf16:v1",
+            "phase-d1:backend:sd-lora-sd1:full-bf16:v2",
         )
         self.assertEqual(summary["status"], "pass")
         self.assertTrue(summary["promotion_eligible"])
         self.assertTrue(summary["backend_qualification_eligible"])
         self.assertTrue(summary["backend_row_match"])
         self.assertTrue(summary["shared_optimizer_authority_match"])
+        self.assertTrue(summary["shared_regression_match"])
+        self.assertEqual(
+            summary["shared_regression_id"],
+            SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        )
         self.assertEqual(summary["case_contract_errors"], [])
         self.assertEqual(summary["unexpected_backend_promotions"], [])
         self.assertEqual(summary["unexpected_optimizer_promotions"], [])
@@ -1183,29 +1192,20 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
 
     def test_missing_or_failed_case_blocks_promotion(self):
         rows = self._passing_rows()
-        summary = summarize_sd_lora_full_bf16_promotion(
-            rows[:-1],
-            self._snapshot(),
-        )
+        summary = self._summary(rows=rows[:-1])
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["missing_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
 
         failed = self._passing_rows()
         failed[1]["status"] = "fail"
-        summary = summarize_sd_lora_full_bf16_promotion(
-            failed,
-            self._snapshot(),
-        )
+        summary = self._summary(rows=failed)
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["failed_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
 
-    def test_case_identity_and_optimizer_topology_are_verified(self):
+    def test_case_identity_optimizer_topology_and_input_identity_are_verified(self):
         wrong_identity = self._passing_rows()
         wrong_identity[0]["train_type"] = "flux-lora"
-        summary = summarize_sd_lora_full_bf16_promotion(
-            wrong_identity,
-            self._snapshot(),
-        )
+        summary = self._summary(rows=wrong_identity)
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["case_contract_errors"])
 
@@ -1214,28 +1214,25 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
             SD_LORA_FULL_BF16_CASE_IDS[1],
             optimizer_types=("Muon",),
         )
-        summary = summarize_sd_lora_full_bf16_promotion(
-            wrong_topology,
-            self._snapshot(),
-        )
+        summary = self._summary(rows=wrong_topology)
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["case_contract_errors"])
 
         wrong_policy = self._passing_rows()
         wrong_policy[1]["policy_contract"]["kind"] = "adamw"
-        summary = summarize_sd_lora_full_bf16_promotion(
-            wrong_policy,
-            self._snapshot(),
-        )
+        summary = self._summary(rows=wrong_policy)
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["case_contract_errors"])
 
         wrong_hash = self._passing_rows()
         wrong_hash[0]["fresh_checkpoint_manifest"]["policy_hash"] = "other"
-        summary = summarize_sd_lora_full_bf16_promotion(
-            wrong_hash,
-            self._snapshot(),
-        )
+        summary = self._summary(rows=wrong_hash)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        stale_input = self._passing_rows()
+        stale_input[0]["pre_resume_input_contract_valid"] = False
+        summary = self._summary(rows=stale_input)
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["case_contract_errors"])
 
@@ -1248,10 +1245,7 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
                 snapshot = self._snapshot()
                 snapshot["backends"]["sd-lora"]["status"] = status
                 snapshot["backends"]["sd-lora"]["evidence_case_id"] = evidence
-                summary = summarize_sd_lora_full_bf16_promotion(
-                    self._passing_rows(),
-                    snapshot,
-                )
+                summary = self._summary(snapshot=snapshot)
                 self.assertEqual(summary["status"], "fail")
                 self.assertFalse(summary["backend_row_match"])
 
@@ -1264,12 +1258,20 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
             with self.subTest(optimizer=optimizer_name):
                 snapshot = self._snapshot()
                 snapshot["optimizers"][optimizer_name]["evidence_case_id"] = "wrong"
-                summary = summarize_sd_lora_full_bf16_promotion(
-                    self._passing_rows(),
-                    snapshot,
-                )
+                summary = self._summary(snapshot=snapshot)
                 self.assertEqual(summary["status"], "fail")
                 self.assertFalse(summary["shared_optimizer_authority_match"])
+
+    def test_shared_regression_contract_is_mandatory(self):
+        summary = self._summary(regression={})
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["shared_regression_match"])
+
+        wrong = _shared_regression_contract()
+        wrong["id"] = "wrong:regression"
+        summary = self._summary(regression=wrong)
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["shared_regression_match"])
 
     def test_unexpected_backend_or_optimizer_promotion_blocks_d1(self):
         snapshot = self._snapshot()
@@ -1283,10 +1285,7 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
             "reason": "unexpected",
             "evidence_case_id": "unexpected:optimizer",
         }
-        summary = summarize_sd_lora_full_bf16_promotion(
-            self._passing_rows(),
-            snapshot,
-        )
+        summary = self._summary(snapshot=snapshot)
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["unexpected_backend_promotions"], ["sdxl-lora"])
         self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
