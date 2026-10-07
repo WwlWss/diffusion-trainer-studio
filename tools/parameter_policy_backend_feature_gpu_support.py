@@ -268,6 +268,11 @@ def _load_sd_lora_d1_policy_contract(
         return None
 
     policy_paths: list[Path] = []
+    expected_accumulation = (
+        "1"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "2"
+    )
     for phase, command in (("fresh", fresh_command), ("resume", resume_command)):
         hidden = _trainer_config_flattened(
             command,
@@ -275,10 +280,41 @@ def _load_sd_lora_d1_policy_contract(
             case_id=case_id,
             phase=phase,
         )
-        if "parameter_policy_config" in hidden:
+        hidden_authority = sorted(
+            {
+                "parameter_policy_config",
+                "gradient_accumulation_steps",
+                "mixed_precision",
+                "full_bf16",
+            }.intersection(hidden)
+        )
+        if hidden_authority:
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} {phase} trainer config may not "
-                "hide parameter_policy_config; D1 requires an explicit command option."
+                "hide D1 qualification authority fields: "
+                f"{hidden_authority!r}; use explicit command options."
+            )
+
+        _require_single_option_value(
+            command,
+            "--gradient_accumulation_steps",
+            expected=expected_accumulation,
+            case_id=case_id,
+            phase=phase,
+        )
+        _require_single_option_value(
+            command,
+            "--mixed_precision",
+            expected="bf16",
+            case_id=case_id,
+            phase=phase,
+        )
+        if command.count("--full_bf16") != 1 or any(
+            item.startswith("--full_bf16=") for item in command
+        ):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} command must include "
+                "--full_bf16 exactly once as an explicit flag."
             )
 
         values = _option_values(command, "--parameter_policy_config")
@@ -402,6 +438,9 @@ def _load_sd_lora_d1_policy_contract(
         "raw_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "policy_hash": hashlib.sha256(canonical_text.encode("utf-8")).hexdigest(),
         "kind": contract_kind,
+        "gradient_accumulation_steps": int(expected_accumulation),
+        "mixed_precision": "bf16",
+        "full_bf16": True,
         "profile_types": sorted(
             {
                 str(profile.get("type") or "")
@@ -1019,13 +1058,23 @@ def summarize_sd_lora_full_bf16_promotion(
             if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
             else "muon_adamw_fallback"
         )
+        expected_accumulation = (
+            1
+            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+            else 2
+        )
         if (
             not isinstance(policy_contract, dict)
             or policy_contract.get("kind") != expected_policy_kind
+            or policy_contract.get("gradient_accumulation_steps")
+            != expected_accumulation
+            or policy_contract.get("mixed_precision") != "bf16"
+            or policy_contract.get("full_bf16") is not True
         ):
             case_contract_errors.append(
-                f"{case_id}: expected policy contract kind "
-                f"{expected_policy_kind!r}."
+                f"{case_id}: expected policy/execution contract kind "
+                f"{expected_policy_kind!r}, accumulation={expected_accumulation}, "
+                "mixed_precision='bf16', full_bf16=true."
             )
         elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1] and (
             policy_contract.get("fallback_component") != "unet.conv.adapter"
