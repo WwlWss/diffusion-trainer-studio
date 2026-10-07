@@ -1078,6 +1078,137 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 )
 
 
+class SharedRegressionEvidenceTests(unittest.TestCase):
+    def test_exact_head_regression_evidence_passes(self):
+        contract = _qualification_contract()
+        validated = validate_shared_full_bf16_regression_evidence(
+            _shared_regression_evidence(
+                commit="exact-head",
+                qualification_contract=contract,
+            ),
+            expected_commit="exact-head",
+            qualification_contract=contract,
+        )
+        self.assertEqual(validated["status"], "pass")
+        self.assertEqual(
+            validated["id"],
+            SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        )
+        self.assertEqual(validated["commit"], "exact-head")
+
+    def test_wrong_commit_or_mode_fails_closed(self):
+        contract = _qualification_contract()
+
+        wrong_commit = _shared_regression_evidence(
+            commit="other-head",
+            qualification_contract=contract,
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "does not match the D1 exact head",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_commit,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        wrong_mode = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        wrong_mode["qualification_mode"] = "d0-promotion"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "qualification_mode='regression'",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_mode,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+    def test_failed_or_incomplete_c1_c4_matrix_fails_closed(self):
+        contract = _qualification_contract()
+        failed = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        failed["cases"][-1]["status"] = "fail"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "complete PASS C1-C4 matrix",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                failed,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        incomplete = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        incomplete["cases"] = incomplete["cases"][:-1]
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "complete PASS C1-C4 matrix",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                incomplete,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+    def test_wrong_summary_id_status_or_environment_fails_closed(self):
+        contract = _qualification_contract()
+
+        wrong_id = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        wrong_id["shared_optimizer_regression"]["id"] = "wrong"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "unexpected summary id",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_id,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        failed_summary = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        failed_summary["shared_optimizer_regression"]["status"] = "fail"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "summary did not pass",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                failed_summary,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        other_contract = copy.deepcopy(contract)
+        other_contract["torch_base_version"] = "2.8.0"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "qualification environment does not match",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                _shared_regression_evidence(
+                    commit="exact-head",
+                    qualification_contract=other_contract,
+                ),
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+
 class BackendFeatureCheckpointTests(unittest.TestCase):
     def test_full_bf16_manifest_contract_passes(self):
         payload = _checkpoint()
