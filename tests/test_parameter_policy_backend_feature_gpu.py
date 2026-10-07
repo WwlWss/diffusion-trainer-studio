@@ -498,7 +498,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["fresh_command"].extend(["--config_file", str(trainer_config)])
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "may not hide parameter_policy_config",
+                "may not hide D1 qualification authority fields",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
