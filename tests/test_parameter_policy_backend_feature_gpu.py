@@ -427,8 +427,9 @@ class BackendFeatureManifestTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
             case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
-            args_index = case["fresh_command"].index("--network_args")
-            del case["fresh_command"][args_index : args_index + 2]
+            for phase_key in ("fresh_command", "resume_command"):
+                args_index = case[phase_key].index("--network_args")
+                del case[phase_key][args_index : args_index + 2]
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "requires integer conv_dim>0",
@@ -533,7 +534,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "must train unet.conv.adapter",
+                "must train D1 coverage components",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
