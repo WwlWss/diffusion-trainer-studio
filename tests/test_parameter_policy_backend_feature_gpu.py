@@ -371,7 +371,14 @@ def _shared_regression_evidence(
 ) -> dict:
     contract = qualification_contract or _qualification_contract()
     cases = [
-        {"case_id": case_id, "status": "pass"}
+        {
+            "case_id": case_id,
+            "status": "pass",
+            "phases": [
+                {"phase": phase, "status": "pass"}
+                for phase in EXECUTION_GPU_CASE_PHASES[case_id]
+            ],
+        }
         for case_id in EXECUTION_GPU_CASE_PHASES
     ]
     return {
