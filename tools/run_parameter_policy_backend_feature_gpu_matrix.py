@@ -288,6 +288,7 @@ def _command_contract(case: dict[str, Any]) -> dict[str, Any]:
         "environment_keys": sorted(case["environment"]),
         "fresh_checkpoint_dir": case["fresh_checkpoint_dir"],
         "resume_checkpoint_dir": case["resume_checkpoint_dir"],
+        "policy_contract": case.get("policy_contract"),
     }
 
 
@@ -382,6 +383,7 @@ def _run_case(
         "backend_qualification_eligible": False,
         "production_qualification_mutated": False,
         "command_contract": _command_contract(case),
+        "policy_contract": case.get("policy_contract"),
         "status": "fail",
     }
     try:
