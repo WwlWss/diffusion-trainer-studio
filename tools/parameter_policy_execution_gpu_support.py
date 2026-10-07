@@ -18,6 +18,9 @@ class ExecutionGpuMatrixError(RuntimeError):
 SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID = (
     execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID
 )
+SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID = (
+    "phase-d:shared-adamw-muon-full-bf16-regression:v1"
+)
 
 ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:adamw-full-bf16:v1"
 MUON_FULL_BF16_EVIDENCE_BUNDLE_ID = "phase-c:muon-full-bf16:v1"
@@ -292,7 +295,7 @@ def summarize_shared_full_bf16_regression(
     status = "pass" if complete and target_rows_match else "fail"
 
     return {
-        "id": "phase-d:shared-adamw-muon-full-bf16-regression:v1",
+        "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
         "scope": "shared_optimizer_regression",
         "feature": "full_bf16",
         "targets": list(expected_targets),
@@ -406,6 +409,7 @@ def temporary_execution_qualification(
 
 __all__ = [
     "SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID",
+    "SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID",
     "EXECUTION_INFRA_CASE_IDS",
     "ADAMW_FULL_BF16_CASE_IDS",
     "ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID",
