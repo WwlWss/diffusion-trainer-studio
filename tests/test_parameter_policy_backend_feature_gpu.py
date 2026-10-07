@@ -523,6 +523,37 @@ class BackendFeatureManifestTests(unittest.TestCase):
             all(case["input_contract"]["base_model"]["sha256"] for case in loaded)
         )
 
+    def test_d1_fresh_resume_training_inputs_match_and_output_dirs_are_distinct(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            case["resume_command"].extend(["--caption_dropout_rate", "0.1"])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "training-input argv must match exactly",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            fresh_output = case["fresh_command"][
+                case["fresh_command"].index("--output_dir") + 1
+            ]
+            resume_output_index = case["resume_command"].index("--output_dir")
+            case["resume_command"][resume_output_index + 1] = fresh_output
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--output_dir must be distinct",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
     def test_d1_fresh_resume_effective_argv_must_match_except_resume(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             temp = Path(temp_dir)
