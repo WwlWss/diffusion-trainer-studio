@@ -15,6 +15,9 @@ class ExecutionGpuMatrixError(RuntimeError):
     pass
 
 
+EXECUTION_GPU_EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
+EXECUTION_GPU_EVIDENCE_VERSION = 2
+
 SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID = (
     execution.FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID
 )
@@ -408,6 +411,8 @@ def temporary_execution_qualification(
 
 
 __all__ = [
+    "EXECUTION_GPU_EVIDENCE_SCHEMA",
+    "EXECUTION_GPU_EVIDENCE_VERSION",
     "SHARED_FULL_BF16_PROMOTION_EVIDENCE_ID",
     "SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID",
     "EXECUTION_INFRA_CASE_IDS",
