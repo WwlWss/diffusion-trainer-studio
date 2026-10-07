@@ -1595,6 +1595,11 @@ def summarize_sd_lora_full_bf16_promotion(
             or input_contract.get("v2") is not False
             or not isinstance(input_contract.get("signature"), str)
             or not input_contract.get("signature")
+            or not isinstance(input_contract.get("output_contract"), dict)
+            or not input_contract["output_contract"].get("fresh_output_dir")
+            or not input_contract["output_contract"].get("resume_output_dir")
+            or input_contract["output_contract"].get("fresh_output_dir")
+            == input_contract["output_contract"].get("resume_output_dir")
             or not isinstance(input_contract.get("base_model"), dict)
             or not input_contract["base_model"].get("sha256")
             or not isinstance(input_contract.get("parameter_policy"), dict)
