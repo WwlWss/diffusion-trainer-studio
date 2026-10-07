@@ -10,6 +10,7 @@ import unittest
 
 from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
+    BACKEND_FEATURE_EVIDENCE_VERSION,
     BACKEND_FEATURE_MANIFEST_SCHEMA,
     CHECKPOINT_PROGRESS_SCHEMA,
     SD_LORA_FULL_BF16_CASE_IDS,
@@ -21,9 +22,19 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     compare_checkpoint_progress,
     load_backend_feature_manifest,
     summarize_sd_lora_full_bf16_promotion,
+    validate_case_input_contract,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
+    validate_shared_full_bf16_regression_evidence,
 )
+from tools.parameter_policy_execution_gpu_support import (
+    EXECUTION_GPU_CASE_PHASES,
+    EXECUTION_GPU_EVIDENCE_SCHEMA,
+    EXECUTION_GPU_EVIDENCE_VERSION,
+    EXECUTION_INFRA_CASE_IDS,
+    SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+)
+
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +130,9 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
         json.dumps(_sd_lora_policy(kind)),
         encoding="utf-8",
     )
+    base_model = root / "sd1-base.safetensors"
+    if not base_model.exists():
+        base_model.write_bytes(b"sd1-base-model")
     fresh_checkpoint = root / f"{kind}-checkpoint-1"
     resume_checkpoint = root / f"{kind}-checkpoint-2"
     accumulation = (
@@ -130,6 +144,8 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
         "scripts/stable/train_network.py",
         "--parameter_policy_config",
         str(policy_path),
+        "--pretrained_model_name_or_path",
+        str(base_model),
         "--network_module",
         "networks.lora",
         "--gradient_accumulation_steps",
@@ -157,6 +173,8 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
             "scripts/stable/train_network.py",
             "--parameter_policy_config",
             str(policy_path),
+            "--pretrained_model_name_or_path",
+            str(base_model),
             "--network_module",
             "networks.lora",
             "--gradient_accumulation_steps",
@@ -272,6 +290,8 @@ def _d1_case_row(
         "status": status,
         "policy_contract": {
             "policy_hash": "policy",
+            "model_family": "sd1",
+            "v2": False,
             "kind": policy_kind,
             "gradient_accumulation_steps": (
                 1
@@ -293,8 +313,78 @@ def _d1_case_row(
                 else "unet.conv.adapter"
             ),
         },
+        "input_contract": {
+            "model_family": "sd1",
+            "v2": False,
+            "signature": "input-signature",
+            "base_model": {"sha256": "base-model"},
+            "parameter_policy": {"sha256": "policy-file"},
+        },
+        "pre_fresh_input_contract_valid": True,
+        "pre_resume_input_contract_valid": True,
         "fresh_checkpoint_manifest": copy.deepcopy(manifest),
         "resume_checkpoint_manifest": copy.deepcopy(manifest),
+    }
+
+
+def _qualification_contract() -> dict:
+    return {
+        "schema": "dts.parameter-policy.gpu-qualification-environment",
+        "version": 1,
+        "status": "pass",
+        "python_major_minor": "3.11",
+        "torch_base_version": "2.7.0",
+        "torchvision_version": "0.22.0",
+        "pytorch_optimizer_version": "3.10.0",
+        "requirements_sha256": "requirements",
+        "cuda_available": True,
+        "bf16_supported": True,
+    }
+
+
+def _shared_regression_contract(commit: str = "exact-head") -> dict:
+    return {
+        "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        "status": "pass",
+        "commit": commit,
+        "qualification_contract": _qualification_contract(),
+        "required_cases": list(EXECUTION_GPU_CASE_PHASES),
+    }
+
+
+def _shared_regression_evidence(
+    *,
+    commit: str = "exact-head",
+    qualification_contract: dict | None = None,
+) -> dict:
+    contract = qualification_contract or _qualification_contract()
+    cases = [
+        {"case_id": case_id, "status": "pass"}
+        for case_id in EXECUTION_GPU_CASE_PHASES
+    ]
+    return {
+        "schema": EXECUTION_GPU_EVIDENCE_SCHEMA,
+        "version": EXECUTION_GPU_EVIDENCE_VERSION,
+        "commit": commit,
+        "expected_commit": commit,
+        "final_provenance_commit": commit,
+        "qualification_mode": "regression",
+        "qualification_contract": contract,
+        "cases": cases,
+        "shared_optimizer_regression": {
+            "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+            "scope": "shared_optimizer_regression",
+            "status": "pass",
+            "target_rows_match": True,
+            "infra_complete": all(
+                row["status"] == "pass"
+                for row in cases
+                if row["case_id"] in EXECUTION_INFRA_CASE_IDS
+            ),
+            "required_cases": list(EXECUTION_GPU_CASE_PHASES),
+            "missing_cases": [],
+            "failed_cases": [],
+        },
     }
 
 
