@@ -138,11 +138,24 @@ def _d1_case_row(
             for profile_name, optimizer_type in profiles.items()
         ],
     }
+    policy_kind = (
+        "adamw"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "muon_adamw_fallback"
+    )
     return {
         "case_id": case_id,
         "train_type": train_type,
         "feature": feature,
         "status": status,
+        "policy_contract": {
+            "kind": policy_kind,
+            "fallback_component": (
+                None
+                if policy_kind == "adamw"
+                else "unet.conv.adapter"
+            ),
+        },
         "fresh_checkpoint_manifest": copy.deepcopy(manifest),
         "resume_checkpoint_manifest": copy.deepcopy(manifest),
     }
@@ -790,6 +803,15 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["case_contract_errors"])
 
+        wrong_policy = self._passing_rows()
+        wrong_policy[1]["policy_contract"]["kind"] = "adamw"
+        summary = summarize_sd_lora_full_bf16_promotion(
+            wrong_policy,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
     def test_source_backend_authority_must_match_exact_d1_evidence(self):
         for status, evidence in (
             ("pending", None),
@@ -961,6 +983,7 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"<redacted>"', source)
         self.assertIn('"command_contract": _command_contract(case)', source)
         self.assertIn('"environment_keys": sorted(case["environment"])', source)
+        self.assertIn('"policy_contract": case.get("policy_contract")', source)
 
     def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
         source = RUNNER.read_text(encoding="utf-8")
