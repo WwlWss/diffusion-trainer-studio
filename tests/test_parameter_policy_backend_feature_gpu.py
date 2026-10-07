@@ -55,8 +55,6 @@ def _case(root: Path) -> dict:
             "--save_every_n_steps",
             "1",
             "--save_state",
-            "--output_dir",
-            str(resume_output),
         ],
         "resume_command": [
             
@@ -202,6 +200,8 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
             "--save_every_n_steps",
             "1",
             "--save_state",
+            "--output_dir",
+            str(resume_output),
         ],
         "cwd": str(ROOT),
         "environment": {},
