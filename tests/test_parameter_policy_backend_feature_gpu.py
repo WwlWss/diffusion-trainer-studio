@@ -1679,6 +1679,7 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
             "numpy",
             "opencv-python",
             "imagesize",
+            "torchvision",
         ):
             self.assertIn(f'"{package}"', source)
 
@@ -1690,10 +1691,13 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"command_contract": _command_contract(case)', source)
         self.assertIn('"environment_keys": sorted(case["environment"])', source)
         self.assertIn('"policy_contract": case.get("policy_contract")', source)
+        self.assertIn('"input_contract": case.get("input_contract")', source)
+        self.assertIn("validate_case_input_contract(case)", source)
 
     def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('field="Backend feature --manifest"', source)
+        self.assertIn('field="Backend feature --shared-regression-evidence"', source)
         self.assertIn('field="Backend feature --output"', source)
         self.assertIn('"fresh_checkpoint_dir"', source)
         self.assertIn('"resume_checkpoint_dir"', source)
@@ -1721,6 +1725,9 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn("summarize_sd_lora_full_bf16_promotion", source)
         self.assertIn('"backend_promotion"', source)
         self.assertIn("SD_LORA_FULL_BF16_CASE_IDS", source)
+        self.assertIn("validate_shared_full_bf16_regression_evidence", source)
+        self.assertIn('"shared_regression_contract"', source)
+        self.assertIn("validate_qualification_environment", source)
 
     def test_workflow_uses_external_evidence_directory(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
@@ -1732,12 +1739,15 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn("run_parameter_policy_backend_feature_gpu_matrix.py", workflow)
         self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
         self.assertIn("parameter-policy-backend-feature-gpu-matrix.json", workflow)
+        self.assertIn("--shared-regression-evidence", workflow)
+        self.assertIn("execution_gate_mode=regression", workflow)
 
     def test_evidence_schema_is_stable(self):
         self.assertEqual(
             BACKEND_FEATURE_EVIDENCE_SCHEMA,
             "dts.parameter-policy.backend-feature-gpu-matrix",
         )
+        self.assertEqual(BACKEND_FEATURE_EVIDENCE_VERSION, 2)
 
 
 if __name__ == "__main__":
