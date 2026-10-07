@@ -402,7 +402,13 @@ def _build_sd_lora_d1_input_contract(
     )
 
     policy_path = Path(str(policy_contract.get("path") or "")).resolve(strict=False)
-    policy_identity = _file_identity(policy_path)
+    policy_command_path = Path(
+        str(policy_contract.get("command_path") or policy_path)
+    )
+    policy_identity = _file_identity(
+        policy_path,
+        command_path=policy_command_path,
+    )
     if policy_identity["sha256"] != policy_contract.get("raw_sha256"):
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} Parameter Policy sidecar changed "
@@ -538,6 +544,7 @@ def _load_sd_lora_d1_policy_contract(
         return None
 
     policy_paths: list[Path] = []
+    policy_command_paths: list[Path] = []
     expected_accumulation = (
         "1"
         if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
@@ -626,8 +633,9 @@ def _load_sd_lora_d1_policy_contract(
                 f"Backend feature case {case_id!r} {phase} command must set "
                 "--parameter_policy_config exactly once."
             )
+        policy_command_path = _command_path(values[0], repo_root=repo_root)
         policy_path = _resolved_outside_repo(
-            values[0],
+            policy_command_path,
             repo_root=repo_root,
             field=f"{case_id} {phase} parameter_policy_config",
         )
@@ -637,6 +645,7 @@ def _load_sd_lora_d1_policy_contract(
                 f"sidecar does not exist: {policy_path}."
             )
         policy_paths.append(policy_path)
+        policy_command_paths.append(policy_command_path)
 
     if policy_paths[0] != policy_paths[1]:
         raise BackendFeatureGpuMatrixError(
@@ -788,6 +797,7 @@ def _load_sd_lora_d1_policy_contract(
     _canonical_path, canonical_text = serialize_parameter_policy(policy)
     return {
         "path": str(policy_path),
+        "command_path": str(policy_command_paths[0]),
         "raw_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "policy_hash": hashlib.sha256(canonical_text.encode("utf-8")).hexdigest(),
         "model_family": "sd1",
