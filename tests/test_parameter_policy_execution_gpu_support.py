@@ -269,6 +269,15 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
             },
         }
 
+    def _d0_snapshot(self):
+        snapshot = self._snapshot()
+        snapshot["backends"]["sd-lora"] = {
+            "status": "pending",
+            "reason": "D0 source scope keeps every backend closed.",
+            "evidence_case_id": None,
+        }
+        return snapshot
+
     def _passing_rows(self):
         return [
             {"case_id": case_id, "status": "pass"}
@@ -278,7 +287,7 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
     def test_complete_c1_c4_matrix_promotes_candidate_rows(self):
         summary = summarize_shared_full_bf16_promotion(
             self._passing_rows(),
-            self._snapshot(),
+            self._d0_snapshot(),
         )
         self.assertEqual(
             summary["id"],
@@ -297,7 +306,7 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
         missing = rows[:-1]
         summary = summarize_shared_full_bf16_promotion(
             missing,
-            self._snapshot(),
+            self._d0_snapshot(),
         )
         self.assertEqual(summary["status"], "fail")
         self.assertFalse(summary["promotion_eligible"])
@@ -307,13 +316,13 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
         failed[0] = dict(failed[0], status="fail")
         summary = summarize_shared_full_bf16_promotion(
             failed,
-            self._snapshot(),
+            self._d0_snapshot(),
         )
         self.assertEqual(summary["status"], "fail")
         self.assertTrue(summary["failed_cases"])
 
     def test_wrong_candidate_metadata_blocks_promotion(self):
-        snapshot = self._snapshot()
+        snapshot = self._d0_snapshot()
         snapshot["optimizers"]["AdamW"]["evidence_case_id"] = "wrong:evidence"
         summary = summarize_shared_full_bf16_promotion(
             self._passing_rows(),
@@ -323,7 +332,7 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
         self.assertFalse(summary["target_rows_match"])
 
     def test_unexpected_backend_or_optimizer_promotion_blocks_d0(self):
-        snapshot = self._snapshot()
+        snapshot = self._d0_snapshot()
         snapshot["backends"]["flux-finetune"] = {
             "status": "qualified",
             "reason": "unexpected",
@@ -344,16 +353,18 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
 
 
 class SharedFullBf16RegressionTests(SharedFullBf16PromotionTests):
-    def test_regression_allows_candidate_backend_qualification(self):
-        snapshot = self._snapshot()
-        snapshot["backends"]["flux-finetune"] = {
-            "status": "qualified",
-            "reason": "D1 candidate",
-            "evidence_case_id": "phase-d:backend:flux-finetune:full-bf16:v1",
-        }
+    def test_d0_promotion_rejects_current_d1_backend_release_state(self):
+        summary = summarize_shared_full_bf16_promotion(
+            self._passing_rows(),
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["unexpected_backend_promotions"], ["sd-lora"])
+
+    def test_regression_allows_current_d1_backend_qualification(self):
         summary = summarize_shared_full_bf16_regression(
             self._passing_rows(),
-            snapshot,
+            self._snapshot(),
         )
         self.assertEqual(summary["status"], "pass")
         self.assertEqual(summary["scope"], "shared_optimizer_regression")
