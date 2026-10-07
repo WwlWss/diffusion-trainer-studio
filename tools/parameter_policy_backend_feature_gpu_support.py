@@ -225,16 +225,62 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _file_identity(path: Path) -> dict[str, Any]:
+def _file_identity(
+    path: Path,
+    *,
+    command_path: Path | None = None,
+) -> dict[str, Any]:
     if not path.is_file():
         raise BackendFeatureGpuMatrixError(
             f"Qualification identity file does not exist: {path}."
         )
-    return {
+    identity = {
         "path": str(path),
         "size": path.stat().st_size,
         "sha256": _sha256_file(path),
     }
+    if command_path is not None:
+        identity["command_path"] = str(command_path)
+    return identity
+
+
+def _command_path(raw: str, *, repo_root: Path) -> Path:
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = repo_root / path
+    return path.absolute()
+
+
+def _revalidate_file_identity(
+    identity: dict[str, Any],
+    *,
+    label: str,
+) -> None:
+    command_raw = identity.get("command_path")
+    resolved_raw = identity.get("path")
+    if not isinstance(resolved_raw, str) or not resolved_raw:
+        raise BackendFeatureGpuMatrixError(
+            f"D1 qualification input {label!r} lacks a resolved path."
+        )
+    command = (
+        Path(command_raw)
+        if isinstance(command_raw, str) and command_raw
+        else Path(resolved_raw)
+    )
+    current_resolved = command.resolve(strict=False)
+    if str(current_resolved) != resolved_raw:
+        raise BackendFeatureGpuMatrixError(
+            f"D1 qualification input {label!r} resolved target changed after "
+            "manifest validation."
+        )
+    current = _file_identity(
+        current_resolved,
+        command_path=command if command_raw else None,
+    )
+    if current != identity:
+        raise BackendFeatureGpuMatrixError(
+            f"D1 qualification input {label!r} changed after manifest validation."
+        )
 
 
 def _command_without_resume(command: list[str]) -> list[str]:
@@ -276,11 +322,9 @@ def _trainer_config_file_identity(
             f"Backend feature case {case_id!r} {phase} command must set "
             "--config_file at most once."
         )
-    path = Path(values[0]).expanduser()
-    if not path.is_absolute():
-        path = repo_root / path
-    path = path.resolve(strict=False)
-    return _file_identity(path)
+    command_path = _command_path(values[0], repo_root=repo_root)
+    path = command_path.resolve(strict=False)
+    return _file_identity(path, command_path=command_path)
 
 
 def _sd_lora_base_model_identity(
@@ -296,8 +340,9 @@ def _sd_lora_base_model_identity(
             f"Backend feature case {case_id!r} {phase} command must set "
             "--pretrained_model_name_or_path exactly once to a local model file."
         )
+    command_path = _command_path(values[0], repo_root=repo_root)
     path = _resolved_outside_repo(
-        values[0],
+        command_path,
         repo_root=repo_root,
         field=f"{case_id} {phase} pretrained_model_name_or_path",
     )
@@ -306,7 +351,7 @@ def _sd_lora_base_model_identity(
             f"Backend feature case {case_id!r} {phase} base model must be "
             f"a local file: {path}."
         )
-    return _file_identity(path)
+    return _file_identity(path, command_path=command_path)
 
 
 def _d1_input_signature(payload: dict[str, Any]) -> str:
@@ -391,11 +436,7 @@ def validate_case_input_contract(case: dict[str, Any]) -> None:
             raise BackendFeatureGpuMatrixError(
                 f"D1 input contract is missing {key!r} identity."
             )
-        current = _file_identity(Path(str(identity.get("path") or "")))
-        if current != identity:
-            raise BackendFeatureGpuMatrixError(
-                f"D1 qualification input {key!r} changed after manifest validation."
-            )
+        _revalidate_file_identity(identity, label=key)
 
     trainer_config = contract.get("trainer_config")
     if trainer_config is not None:
@@ -403,11 +444,7 @@ def validate_case_input_contract(case: dict[str, Any]) -> None:
             raise BackendFeatureGpuMatrixError(
                 "D1 trainer_config identity must be an object or null."
             )
-        current = _file_identity(Path(str(trainer_config.get("path") or "")))
-        if current != trainer_config:
-            raise BackendFeatureGpuMatrixError(
-                "D1 qualification trainer config changed after manifest validation."
-            )
+        _revalidate_file_identity(trainer_config, label="trainer config")
 
     payload = {
         "model_family": contract.get("model_family"),
