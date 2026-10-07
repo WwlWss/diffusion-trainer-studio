@@ -372,14 +372,14 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             supported,
         )
 
-    def test_d0_promotes_only_shared_adamw_muon_and_keeps_backends_closed(self):
+    def test_d1_promotes_only_sd_lora_backend_and_preserves_d0_optimizer_authority(self):
         self.assertEqual(
             {
                 name: row.status
                 for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
             },
             {
-                "sd-lora": "pending",
+                "sd-lora": "qualified",
                 "sdxl-lora": "pending",
                 "sd-dreambooth": "unsupported",
                 "sdxl-finetune": "pending",
@@ -427,13 +427,25 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             "phase-d0:shared-adamw-muon-full-bf16:v1",
         )
 
-    def test_d0_does_not_qualify_any_backend(self):
-        self.assertFalse(
-            any(
-                row.status == "qualified"
-                for row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.values()
-            )
+    def test_d1_sd_lora_row_uses_stable_backend_evidence_id(self):
+        row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-lora"]
+        self.assertEqual(row.status, "qualified")
+        self.assertEqual(
+            row.evidence_case_id,
+            execution.FULL_BF16_SD_LORA_EVIDENCE_ID,
         )
+        self.assertEqual(
+            execution.FULL_BF16_SD_LORA_EVIDENCE_ID,
+            "phase-d1:backend:sd-lora:full-bf16:v1",
+        )
+
+    def test_d1_does_not_qualify_any_other_backend(self):
+        qualified = {
+            name
+            for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
+            if row.status == "qualified"
+        }
+        self.assertEqual(qualified, {"sd-lora"})
 
     def test_sd_dreambooth_starts_explicitly_unsupported(self):
         row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-dreambooth"]
