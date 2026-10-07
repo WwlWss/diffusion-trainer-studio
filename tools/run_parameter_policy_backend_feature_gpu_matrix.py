@@ -111,6 +111,10 @@ _BOOTSTRAP_MANIFEST = _outside_repo(
     _argv_value(sys.argv[1:], "--manifest"),
     field="Backend feature --manifest",
 )
+_BOOTSTRAP_SHARED_REGRESSION = _outside_repo(
+    _argv_value(sys.argv[1:], "--shared-regression-evidence"),
+    field="Backend feature --shared-regression-evidence",
+)
 _BOOTSTRAP_COMMIT = _assert_clean_head(_BOOTSTRAP_EXPECTED_COMMIT)
 
 
@@ -120,6 +124,10 @@ if str(REPO_ROOT) not in sys.path:
 
 import torch
 
+from tools.parameter_policy_gpu_qualification_environment import (
+    QualificationEnvironmentError,
+    validate_qualification_environment,
+)
 from mikazuki.parameter_policy_trainer import (
     PARAMETER_POLICY_CHECKPOINT_MANIFEST,
     PARAMETER_POLICY_CHECKPOINT_MANIFEST_VERSION,
@@ -135,8 +143,10 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     compare_checkpoint_progress,
     load_backend_feature_manifest,
     summarize_sd_lora_full_bf16_promotion,
+    validate_case_input_contract,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
+    validate_shared_full_bf16_regression_evidence,
 )
 
 
@@ -207,6 +217,7 @@ def _cuda_environment() -> dict[str, Any]:
                 "lion-pytorch",
                 "schedulefree",
                 "pytorch-optimizer",
+                "torchvision",
                 "transformers",
                 "diffusers",
                 "safetensors",
@@ -384,10 +395,13 @@ def _run_case(
         "production_qualification_mutated": False,
         "command_contract": _command_contract(case),
         "policy_contract": case.get("policy_contract"),
+        "input_contract": case.get("input_contract"),
         "status": "fail",
     }
     try:
         row["pre_fresh_commit"] = _assert_clean_head(expected_commit)
+        validate_case_input_contract(case)
+        row["pre_fresh_input_contract_valid"] = True
         _assert_checkpoint_dir_absent(
             case["fresh_checkpoint_dir"],
             label="Fresh checkpoint directory",
@@ -422,6 +436,8 @@ def _run_case(
             label="Resume checkpoint directory",
         )
         row["pre_resume_commit"] = _assert_clean_head(expected_commit)
+        validate_case_input_contract(case)
+        row["pre_resume_input_contract_valid"] = True
 
         resume = _run_command(
             case["resume_command"],
@@ -465,17 +481,49 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--expected-commit", required=True)
     parser.add_argument("--manifest", required=True)
+    parser.add_argument("--shared-regression-evidence", required=True)
     parser.add_argument("--output", required=True)
     parser.add_argument("--case", action="append", default=[])
     args = parser.parse_args()
 
     commit = _assert_clean_head(args.expected_commit)
     manifest_path = _outside_repo(args.manifest, field="Backend feature --manifest")
+    shared_regression_path = _outside_repo(
+        args.shared_regression_evidence,
+        field="Backend feature --shared-regression-evidence",
+    )
     output_path = _outside_repo(args.output, field="Backend feature --output")
-    if manifest_path != _BOOTSTRAP_MANIFEST or output_path != _BOOTSTRAP_OUTPUT:
+    if (
+        manifest_path != _BOOTSTRAP_MANIFEST
+        or shared_regression_path != _BOOTSTRAP_SHARED_REGRESSION
+        or output_path != _BOOTSTRAP_OUTPUT
+    ):
         raise BackendFeatureGpuMatrixError(
             "Backend feature bootstrap paths changed after runtime import."
         )
+
+    try:
+        qualification_contract = validate_qualification_environment(
+            repo_root=REPO_ROOT,
+            torch_module=torch,
+            require_muon=True,
+        )
+    except QualificationEnvironmentError as exc:
+        raise BackendFeatureGpuMatrixError(str(exc)) from exc
+
+    try:
+        shared_regression_payload = json.loads(
+            shared_regression_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise BackendFeatureGpuMatrixError(
+            f"Invalid shared regression evidence {shared_regression_path}: {exc}"
+        ) from exc
+    shared_regression_contract = validate_shared_full_bf16_regression_evidence(
+        shared_regression_payload,
+        expected_commit=args.expected_commit,
+        qualification_contract=qualification_contract,
+    )
 
     cases = load_backend_feature_manifest(manifest_path, repo_root=REPO_ROOT)
     by_id = {case["case_id"]: case for case in cases}
@@ -497,7 +545,10 @@ def main() -> int:
         "commit": commit,
         "expected_commit": args.expected_commit,
         "manifest": str(manifest_path),
+        "shared_regression_evidence": str(shared_regression_path),
         "environment": _cuda_environment(),
+        "qualification_contract": qualification_contract,
+        "shared_regression_contract": shared_regression_contract,
         "qualification_snapshot": qualification_snapshot,
         "cases": [],
     }
@@ -518,6 +569,7 @@ def main() -> int:
         backend_promotion = summarize_sd_lora_full_bf16_promotion(
             evidence["cases"],
             qualification_snapshot,
+            shared_regression_contract,
         )
         evidence["backend_promotion"] = backend_promotion
         if backend_promotion["status"] != "pass":
