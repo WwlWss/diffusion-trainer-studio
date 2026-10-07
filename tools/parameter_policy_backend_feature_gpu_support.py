@@ -283,19 +283,22 @@ def _revalidate_file_identity(
         )
 
 
-def _command_without_resume(command: list[str]) -> list[str]:
+def _command_training_identity(command: list[str]) -> list[str]:
+    """Normalize qualification argv while removing lifecycle/output-only fields."""
+
     normalized: list[str] = []
     index = 0
+    value_options_to_ignore = {"--resume", "--output_dir"}
     while index < len(command):
         item = command[index]
-        if item == "--resume":
+        if item in value_options_to_ignore:
             if index + 1 >= len(command):
                 raise BackendFeatureGpuMatrixError(
-                    "--resume requires a value in qualification commands."
+                    f"{item} requires a value in qualification commands."
                 )
             index += 2
             continue
-        if item.startswith("--resume="):
+        if any(item.startswith(option + "=") for option in value_options_to_ignore):
             index += 1
             continue
         if item.startswith("--") and "=" in item:
@@ -305,6 +308,26 @@ def _command_without_resume(command: list[str]) -> list[str]:
             normalized.append(item)
         index += 1
     return normalized
+
+
+def _qualification_output_dir(
+    command: list[str],
+    *,
+    repo_root: Path,
+    case_id: str,
+    phase: str,
+) -> Path:
+    values = _option_values(command, "--output_dir")
+    if len(values) != 1:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} {phase} command must set "
+            "--output_dir exactly once."
+        )
+    return _resolved_outside_repo(
+        values[0],
+        repo_root=repo_root,
+        field=f"{case_id} {phase} output_dir",
+    )
 
 
 def _trainer_config_file_identity(
@@ -380,12 +403,30 @@ def _build_sd_lora_d1_input_contract(
             f"Backend feature case {case_id!r} requires a D1 policy contract."
         )
 
-    fresh_effective = _command_without_resume(fresh_command)
-    resume_effective = _command_without_resume(resume_command)
+    fresh_effective = _command_training_identity(fresh_command)
+    resume_effective = _command_training_identity(resume_command)
     if fresh_effective != resume_effective:
         raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} fresh/resume effective trainer "
-            "argv must match exactly except for --resume."
+            f"Backend feature case {case_id!r} fresh/resume training-input argv "
+            "must match exactly; only --resume and --output_dir may differ."
+        )
+
+    fresh_output_dir = _qualification_output_dir(
+        fresh_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="fresh",
+    )
+    resume_output_dir = _qualification_output_dir(
+        resume_command,
+        repo_root=repo_root,
+        case_id=case_id,
+        phase="resume",
+    )
+    if fresh_output_dir == resume_output_dir:
+        raise BackendFeatureGpuMatrixError(
+            f"Backend feature case {case_id!r} fresh/resume --output_dir must be "
+            "distinct so fresh step-2 state cannot pre-create resumed evidence."
         )
 
     fresh_model = _sd_lora_base_model_identity(
@@ -419,6 +460,10 @@ def _build_sd_lora_d1_input_contract(
         "model_family": "sd1",
         "v2": False,
         "effective_argv": fresh_effective,
+        "output_contract": {
+            "fresh_output_dir": str(fresh_output_dir),
+            "resume_output_dir": str(resume_output_dir),
+        },
         "base_model": fresh_model,
         "trainer_config": fresh_config,
         "parameter_policy": policy_identity,
@@ -456,6 +501,7 @@ def validate_case_input_contract(case: dict[str, Any]) -> None:
         "model_family": contract.get("model_family"),
         "v2": contract.get("v2"),
         "effective_argv": contract.get("effective_argv"),
+        "output_contract": contract.get("output_contract"),
         "base_model": contract.get("base_model"),
         "trainer_config": contract.get("trainer_config"),
         "parameter_policy": contract.get("parameter_policy"),
@@ -904,13 +950,6 @@ def _validate_lifecycle_command_contract(
         fresh_checkpoint=fresh_checkpoint,
         case_id=case_id,
     )
-    if _command_without_resume(fresh_command) != _command_without_resume(
-        resume_command
-    ):
-        raise BackendFeatureGpuMatrixError(
-            f"Backend feature case {case_id!r} fresh/resume effective trainer "
-            "argv must match exactly except for --resume."
-        )
 
 
 def load_backend_feature_manifest(
