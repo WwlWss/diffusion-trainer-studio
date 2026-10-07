@@ -1498,6 +1498,25 @@ def summarize_sd_lora_full_bf16_promotion(
                 f"{case_id}: expected sd-lora/full_bf16 case identity."
             )
             continue
+        input_contract = row.get("input_contract")
+        if (
+            not isinstance(input_contract, dict)
+            or input_contract.get("model_family") != "sd1"
+            or input_contract.get("v2") is not False
+            or not isinstance(input_contract.get("signature"), str)
+            or not input_contract.get("signature")
+            or not isinstance(input_contract.get("base_model"), dict)
+            or not input_contract["base_model"].get("sha256")
+            or not isinstance(input_contract.get("parameter_policy"), dict)
+            or not input_contract["parameter_policy"].get("sha256")
+            or row.get("pre_fresh_input_contract_valid") is not True
+            or row.get("pre_resume_input_contract_valid") is not True
+        ):
+            case_contract_errors.append(
+                f"{case_id}: D1 SD1 lifecycle input identity is incomplete or "
+                "was not revalidated before fresh/resume."
+            )
+
         policy_contract = row.get("policy_contract")
         expected_policy_kind = (
             "adamw"
@@ -1517,6 +1536,8 @@ def summarize_sd_lora_full_bf16_promotion(
             or policy_contract.get("mixed_precision") != "bf16"
             or policy_contract.get("full_bf16") is not True
             or policy_contract.get("network_module") != "networks.lora"
+            or policy_contract.get("model_family") != "sd1"
+            or policy_contract.get("v2") is not False
             or policy_contract.get("covers_text_encoder_adapter") is not True
             or (
                 case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
