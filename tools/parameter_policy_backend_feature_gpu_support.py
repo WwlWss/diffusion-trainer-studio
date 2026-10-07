@@ -252,7 +252,11 @@ def _command_without_resume(command: list[str]) -> list[str]:
         if item.startswith("--resume="):
             index += 1
             continue
-        normalized.append(item)
+        if item.startswith("--") and "=" in item:
+            option, value = item.split("=", 1)
+            normalized.extend([option, value])
+        else:
+            normalized.append(item)
         index += 1
     return normalized
 
