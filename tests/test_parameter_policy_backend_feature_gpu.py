@@ -797,7 +797,8 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 f'parameter_policy_config = "{policy_path.replace(chr(92), chr(47))}"\n',
                 encoding="utf-8",
             )
-            case["fresh_command"].extend(["--config_file", str(trainer_config)])
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
                 "may not hide D1 qualification authority fields",
