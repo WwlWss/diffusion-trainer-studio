@@ -498,6 +498,155 @@ class BackendFeatureManifestTests(unittest.TestCase):
             )
         )
         self.assertEqual(loaded[1]["policy_contract"]["conv_dim"], 4)
+        self.assertTrue(
+            all(case["policy_contract"]["model_family"] == "sd1" for case in loaded)
+        )
+        self.assertTrue(
+            all(case["policy_contract"]["v2"] is False for case in loaded)
+        )
+        self.assertTrue(
+            all(case["input_contract"]["signature"] for case in loaded)
+        )
+        self.assertTrue(
+            all(case["input_contract"]["base_model"]["sha256"] for case in loaded)
+        )
+
+    def test_d1_fresh_resume_effective_argv_must_match_except_resume(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            case["resume_command"].extend(["--caption_dropout_rate", "0.1"])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "effective trainer argv must match exactly except for --resume",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_requires_explicit_local_base_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                option_index = case[phase_key].index(
+                    "--pretrained_model_name_or_path"
+                )
+                del case[phase_key][option_index : option_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--pretrained_model_name_or_path exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_input_files_are_revalidated_before_each_phase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            validate_case_input_contract(loaded)
+
+            model_path = Path(loaded["input_contract"]["base_model"]["path"])
+            model_path.write_bytes(b"changed-model")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "base_model.*changed",
+            ):
+                validate_case_input_contract(loaded)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            policy_path = Path(loaded["input_contract"]["parameter_policy"]["path"])
+            policy_path.write_text(
+                json.dumps(_sd_lora_policy("adamw"), indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "parameter_policy.*changed",
+            ):
+                validate_case_input_contract(loaded)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer.toml"
+            trainer_config.write_text(
+                "caption_dropout_rate = 0.0\n",
+                encoding="utf-8",
+            )
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            trainer_config.write_text(
+                "caption_dropout_rate = 0.5\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "trainer config changed",
+            ):
+                validate_case_input_contract(loaded)
+
+    def test_d1_rejects_sd2_v2_from_cli_or_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].append("--v2")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "outside the D1 qualification scope",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-v2.toml"
+            trainer_config.write_text("v2 = true\n", encoding="utf-8")
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "enables SD2.x v2 mode",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_config_v2_false_remains_sd1(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-sd1.toml"
+            trainer_config.write_text("v2 = false\n", encoding="utf-8")
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )
+        self.assertEqual(loaded[0]["policy_contract"]["model_family"], "sd1")
 
     def test_d1_cases_require_stock_network_module_and_real_conv_lora(self):
         with tempfile.TemporaryDirectory() as temp_dir:
