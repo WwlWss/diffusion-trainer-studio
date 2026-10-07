@@ -78,7 +78,7 @@ def _sd_lora_policy(kind: str) -> dict:
             "unet.feed_forward.adapter": dict(train_route),
             "unet.conv.adapter": dict(train_route),
             "unet.other.adapter": {"train": False},
-            "text_encoder.adapter": {"train": False},
+            "text_encoder.adapter": dict(train_route),
         }
     elif kind == "muon_adamw_fallback":
         profiles = {
@@ -97,7 +97,7 @@ def _sd_lora_policy(kind: str) -> dict:
             "unet.feed_forward.adapter": dict(train_route),
             "unet.conv.adapter": dict(train_route),
             "unet.other.adapter": {"train": False},
-            "text_encoder.adapter": {"train": False},
+            "text_encoder.adapter": dict(train_route),
         }
     else:
         raise AssertionError(f"unknown SD LoRA D1 policy kind: {kind}")
@@ -130,11 +130,18 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
         "scripts/stable/train_network.py",
         "--parameter_policy_config",
         str(policy_path),
+        "--network_module",
+        "networks.lora",
         "--gradient_accumulation_steps",
         accumulation,
         "--mixed_precision",
         "bf16",
         "--full_bf16",
+        *(
+            ["--network_args", "conv_dim=4"]
+            if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+            else []
+        ),
         "--max_train_steps",
         "2",
         "--save_every_n_steps",
@@ -150,11 +157,18 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
             "scripts/stable/train_network.py",
             "--parameter_policy_config",
             str(policy_path),
+            "--network_module",
+            "networks.lora",
             "--gradient_accumulation_steps",
             accumulation,
             "--mixed_precision",
             "bf16",
             "--full_bf16",
+            *(
+                ["--network_args", "conv_dim=4"]
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+                else []
+            ),
             "--resume",
             str(fresh_checkpoint),
             "--max_train_steps",
@@ -266,6 +280,13 @@ def _d1_case_row(
             ),
             "mixed_precision": "bf16",
             "full_bf16": True,
+            "network_module": "networks.lora",
+            "covers_text_encoder_adapter": True,
+            "conv_dim": (
+                None
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+                else 4
+            ),
             "fallback_component": (
                 None
                 if policy_kind == "adamw"
@@ -380,6 +401,42 @@ class BackendFeatureManifestTests(unittest.TestCase):
         self.assertTrue(
             all(case["policy_contract"]["full_bf16"] for case in loaded)
         )
+        self.assertTrue(
+            all(
+                case["policy_contract"]["covers_text_encoder_adapter"]
+                for case in loaded
+            )
+        )
+        self.assertEqual(loaded[1]["policy_contract"]["conv_dim"], 4)
+
+    def test_d1_cases_require_stock_network_module_and_real_conv_lora(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            module_index = case["fresh_command"].index("--network_module")
+            case["fresh_command"][module_index + 1] = "networks.other"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--network_module exactly once to 'networks.lora'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            args_index = case["fresh_command"].index("--network_args")
+            del case["fresh_command"][args_index : args_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "requires integer conv_dim>0",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
 
     def test_d1_cases_lock_accumulation_and_full_bf16_cli(self):
         with tempfile.TemporaryDirectory() as temp_dir:
