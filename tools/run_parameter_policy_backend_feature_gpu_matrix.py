@@ -128,10 +128,13 @@ from mikazuki.parameter_policy_trainer import (
 from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
     BACKEND_FEATURE_EVIDENCE_VERSION,
+    SD_LORA_FULL_BF16_CASE_IDS,
     BackendFeatureGpuMatrixError,
+    backend_feature_qualification_snapshot,
     compare_backend_checkpoint_contracts,
     compare_checkpoint_progress,
     load_backend_feature_manifest,
+    summarize_sd_lora_full_bf16_promotion,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
 )
@@ -485,6 +488,7 @@ def main() -> int:
             "Unknown backend feature case(s): " + ", ".join(unknown)
         )
 
+    qualification_snapshot = backend_feature_qualification_snapshot()
     evidence: dict[str, Any] = {
         "schema": BACKEND_FEATURE_EVIDENCE_SCHEMA,
         "version": BACKEND_FEATURE_EVIDENCE_VERSION,
@@ -492,6 +496,7 @@ def main() -> int:
         "expected_commit": args.expected_commit,
         "manifest": str(manifest_path),
         "environment": _cuda_environment(),
+        "qualification_snapshot": qualification_snapshot,
         "cases": [],
     }
     failed = False
@@ -507,6 +512,15 @@ def main() -> int:
     evidence["final_provenance_commit"] = _assert_clean_head(
         args.expected_commit
     )
+    if set(selected).intersection(SD_LORA_FULL_BF16_CASE_IDS):
+        backend_promotion = summarize_sd_lora_full_bf16_promotion(
+            evidence["cases"],
+            qualification_snapshot,
+        )
+        evidence["backend_promotion"] = backend_promotion
+        if backend_promotion["status"] != "pass":
+            failed = True
+
     _write_json(output_path, evidence)
     print(f"wrote {output_path}")
     return 1 if failed else 0
