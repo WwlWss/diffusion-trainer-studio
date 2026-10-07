@@ -1011,6 +1011,27 @@ def summarize_sd_lora_full_bf16_promotion(
                 f"{case_id}: expected sd-lora/full_bf16 case identity."
             )
             continue
+        policy_contract = row.get("policy_contract")
+        expected_policy_kind = (
+            "adamw"
+            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+            else "muon_adamw_fallback"
+        )
+        if (
+            not isinstance(policy_contract, dict)
+            or policy_contract.get("kind") != expected_policy_kind
+        ):
+            case_contract_errors.append(
+                f"{case_id}: expected policy contract kind "
+                f"{expected_policy_kind!r}."
+            )
+        elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1] and (
+            policy_contract.get("fallback_component") != "unet.conv.adapter"
+        ):
+            case_contract_errors.append(
+                f"{case_id}: expected unet.conv.adapter fallback contract."
+            )
+
         fresh_types = _checkpoint_optimizer_types(
             row.get("fresh_checkpoint_manifest")
         )
