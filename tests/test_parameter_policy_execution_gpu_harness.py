@@ -22,7 +22,7 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             'EXECUTION_GPU_EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"',
             support,
         )
-        self.assertIn("EXECUTION_GPU_EVIDENCE_VERSION = 2", support)
+        self.assertIn("EXECUTION_GPU_EVIDENCE_VERSION = 3", support)
         self.assertIn("EVIDENCE_SCHEMA = EXECUTION_GPU_EVIDENCE_SCHEMA", source)
         self.assertIn("EVIDENCE_VERSION = EXECUTION_GPU_EVIDENCE_VERSION", source)
         self.assertIn("validate_qualification_environment", source)
