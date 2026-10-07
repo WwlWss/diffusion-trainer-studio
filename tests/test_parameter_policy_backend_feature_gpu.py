@@ -793,7 +793,7 @@ class BackendFeatureManifestTests(unittest.TestCase):
             case["resume_command"][option_index + 1] = str(second)
             with self.assertRaisesRegex(
                 BackendFeatureGpuMatrixError,
-                "training-input argv must match exactly",
+                "same Parameter Policy sidecar",
             ):
                 load_backend_feature_manifest(
                     self._write(temp, [case]),
