@@ -1356,6 +1356,115 @@ def backend_feature_qualification_snapshot() -> dict[str, dict[str, dict[str, An
     }
 
 
+def validate_shared_full_bf16_regression_evidence(
+    payload: Any,
+    *,
+    expected_commit: str,
+    qualification_contract: dict[str, Any],
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence must be an object."
+        )
+    if payload.get("schema") != EXECUTION_GPU_EVIDENCE_SCHEMA:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence has unexpected schema."
+        )
+    if payload.get("version") != EXECUTION_GPU_EVIDENCE_VERSION:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence has unexpected version."
+        )
+    expected = str(expected_commit or "").strip()
+    for field in ("commit", "expected_commit", "final_provenance_commit"):
+        if payload.get(field) != expected:
+            raise BackendFeatureGpuMatrixError(
+                f"Shared optimizer regression evidence {field} does not match "
+                "the D1 exact head."
+            )
+    if payload.get("qualification_mode") != "regression":
+        raise BackendFeatureGpuMatrixError(
+            "D1 backend promotion requires shared optimizer evidence produced "
+            "with qualification_mode='regression'."
+        )
+    if payload.get("qualification_contract") != qualification_contract:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression qualification environment does not "
+            "match the D1 backend qualification environment."
+        )
+
+    rows_raw = payload.get("cases")
+    if not isinstance(rows_raw, list):
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence cases must be a list."
+        )
+    required_cases = tuple(EXECUTION_GPU_CASE_PHASES)
+    rows = {
+        row.get("case_id"): row
+        for row in rows_raw
+        if isinstance(row, dict) and row.get("case_id") in required_cases
+    }
+    missing_cases = sorted(set(required_cases).difference(rows))
+    failed_cases = sorted(
+        case_id
+        for case_id, row in rows.items()
+        if row.get("status") != "pass"
+    )
+    if missing_cases or failed_cases:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence does not contain a complete "
+            f"PASS C1-C4 matrix: missing={missing_cases!r}, failed={failed_cases!r}."
+        )
+
+    summary = payload.get("shared_optimizer_regression")
+    if not isinstance(summary, dict):
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence is missing its summary."
+        )
+    if summary.get("id") != SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence has an unexpected summary id."
+        )
+    if summary.get("scope") != "shared_optimizer_regression":
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression evidence has an unexpected scope."
+        )
+    if summary.get("status") != "pass":
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression summary did not pass."
+        )
+    if summary.get("target_rows_match") is not True:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression source optimizer authority does not match."
+        )
+    if summary.get("infra_complete") is not True:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression CUDA/BF16 infrastructure is incomplete."
+        )
+    if summary.get("required_cases") != list(required_cases):
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression required case set does not match source."
+        )
+    if summary.get("missing_cases") != [] or summary.get("failed_cases") != []:
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression summary reports missing or failed cases."
+        )
+    if not all(
+        rows.get(case_id, {}).get("status") == "pass"
+        for case_id in EXECUTION_INFRA_CASE_IDS
+    ):
+        raise BackendFeatureGpuMatrixError(
+            "Shared optimizer regression infrastructure cases did not pass."
+        )
+
+    return {
+        "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        "status": "pass",
+        "commit": expected,
+        "qualification_contract": qualification_contract,
+        "required_cases": list(required_cases),
+    }
+
+
 def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
     if not isinstance(payload, dict):
         return None
@@ -1383,6 +1492,7 @@ def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
 def summarize_sd_lora_full_bf16_promotion(
     case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+    shared_regression_contract: dict[str, Any] | None,
 ) -> dict[str, Any]:
     rows = {
         row.get("case_id"): row
@@ -1500,10 +1610,20 @@ def summarize_sd_lora_full_bf16_promotion(
         if name not in {"AdamW", "Muon"} and row.get("status") == "qualified"
     )
 
+    shared_regression_match = bool(
+        isinstance(shared_regression_contract, dict)
+        and shared_regression_contract.get("id")
+        == SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID
+        and shared_regression_contract.get("status") == "pass"
+        and isinstance(shared_regression_contract.get("commit"), str)
+        and bool(shared_regression_contract.get("commit"))
+    )
+
     complete = not missing_cases and not failed_cases and not case_contract_errors
     source_scope_valid = (
         backend_row_match
         and shared_optimizer_authority_match
+        and shared_regression_match
         and not unexpected_backend_promotions
         and not unexpected_optimizer_promotions
     )
@@ -1519,6 +1639,17 @@ def summarize_sd_lora_full_bf16_promotion(
         "case_contract_errors": case_contract_errors,
         "backend_row_match": backend_row_match,
         "shared_optimizer_authority_match": shared_optimizer_authority_match,
+        "shared_regression_match": shared_regression_match,
+        "shared_regression_id": (
+            shared_regression_contract.get("id")
+            if isinstance(shared_regression_contract, dict)
+            else None
+        ),
+        "shared_regression_commit": (
+            shared_regression_contract.get("commit")
+            if isinstance(shared_regression_contract, dict)
+            else None
+        ),
         "unexpected_backend_promotions": unexpected_backend_promotions,
         "unexpected_optimizer_promotions": unexpected_optimizer_promotions,
         "status": status,
@@ -1546,6 +1677,8 @@ __all__ = [
     "compare_checkpoint_progress",
     "load_backend_feature_manifest",
     "summarize_sd_lora_full_bf16_promotion",
+    "validate_case_input_contract",
     "validate_checkpoint_progress",
     "validate_full_bf16_checkpoint_manifest",
+    "validate_shared_full_bf16_regression_evidence",
 ]
