@@ -1472,6 +1472,25 @@ def validate_shared_full_bf16_regression_evidence(
             "Shared optimizer regression evidence cases must be a list."
         )
     required_cases = tuple(EXECUTION_GPU_CASE_PHASES)
+    raw_case_ids = [
+        row.get("case_id")
+        for row in rows_raw
+        if isinstance(row, dict)
+    ]
+    duplicate_cases = sorted(
+        {
+            case_id
+            for case_id in raw_case_ids
+            if raw_case_ids.count(case_id) > 1
+        }
+    )
+    unknown_cases = sorted(
+        {
+            str(case_id)
+            for case_id in raw_case_ids
+            if case_id not in required_cases
+        }
+    )
     rows = {
         row.get("case_id"): row
         for row in rows_raw
@@ -1483,10 +1502,46 @@ def validate_shared_full_bf16_regression_evidence(
         for case_id, row in rows.items()
         if row.get("status") != "pass"
     )
-    if missing_cases or failed_cases:
+    phase_errors: list[str] = []
+    for case_id, expected_phases in EXECUTION_GPU_CASE_PHASES.items():
+        row = rows.get(case_id)
+        if row is None:
+            continue
+        phases = row.get("phases")
+        if not isinstance(phases, list):
+            phase_errors.append(f"{case_id}: missing phases")
+            continue
+        actual_phases = [
+            phase.get("phase")
+            for phase in phases
+            if isinstance(phase, dict)
+        ]
+        if actual_phases != list(expected_phases):
+            phase_errors.append(
+                f"{case_id}: expected phases {list(expected_phases)!r}, "
+                f"got {actual_phases!r}"
+            )
+            continue
+        if any(
+            not isinstance(phase, dict) or phase.get("status") != "pass"
+            for phase in phases
+        ):
+            phase_errors.append(f"{case_id}: one or more phases did not pass")
+
+    if (
+        len(rows_raw) != len(required_cases)
+        or duplicate_cases
+        or unknown_cases
+        or missing_cases
+        or failed_cases
+        or phase_errors
+    ):
         raise BackendFeatureGpuMatrixError(
-            "Shared optimizer regression evidence does not contain a complete "
-            f"PASS C1-C4 matrix: missing={missing_cases!r}, failed={failed_cases!r}."
+            "Shared optimizer regression evidence does not contain an exact "
+            "complete PASS C1-C4 matrix: "
+            f"duplicates={duplicate_cases!r}, unknown={unknown_cases!r}, "
+            f"missing={missing_cases!r}, failed={failed_cases!r}, "
+            f"phase_errors={phase_errors!r}."
         )
 
     summary = payload.get("shared_optimizer_regression")
