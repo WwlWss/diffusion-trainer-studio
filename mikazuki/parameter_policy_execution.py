@@ -159,14 +159,14 @@ FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID = (
 )
 
 FULL_BF16_SD_LORA_EVIDENCE_ID = (
-    "phase-d1:backend:sd-lora:full-bf16:v1"
+    "phase-d1:backend:sd-lora-sd1:full-bf16:v2"
 )
 
 
 FULL_BF16_BACKEND_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
     "sd-lora": ExecutionFeatureQualification(
         "qualified",
-        "SD LoRA true-BF16 Parameter Policy execution is qualified by the D1 exact-head production-backend CUDA gate.",
+        "SD1.x LoRA true-BF16 Parameter Policy execution is qualified by the D1 exact-head production-backend CUDA gate; SD2.x remains pending.",
         FULL_BF16_SD_LORA_EVIDENCE_ID,
     ),
     "sdxl-lora": ExecutionFeatureQualification(
@@ -510,6 +510,17 @@ def parameter_policy_execution_blockers(
         return [str(exc)]
 
     normalized_train_type = str(train_type or "").strip().lower()
+    if normalized_train_type == "sd-lora":
+        try:
+            sd_v2 = _strict_bool(effective_config.get("v2"), field="v2")
+        except ValueError as exc:
+            return [str(exc)]
+        if sd_v2:
+            return [
+                "SD LoRA full-BF16 D1 qualification currently covers SD1.x only; "
+                "SD2.x (--v2) remains pending exact-head CUDA qualification."
+            ]
+
     backend_qualification = FULL_BF16_BACKEND_QUALIFICATIONS.get(
         normalized_train_type
     )
