@@ -258,6 +258,10 @@ from mikazuki.parameter_policy_trainer import (
     create_parameter_policy_session,
     make_legacy_scheduler_factory,
 )
+from tools.parameter_policy_gpu_qualification_environment import (
+    QualificationEnvironmentError,
+    validate_qualification_environment,
+)
 from tools.parameter_policy_execution_gpu_runtime import (
     gradient_evidence,
     model_parameter_evidence,
@@ -2852,6 +2856,14 @@ def _coordinator_main(args: argparse.Namespace) -> int:
             "Coordinator execution is missing its validated external output path."
         )
     output_path = _BOOTSTRAP_OUTPUT
+    try:
+        qualification_contract = validate_qualification_environment(
+            repo_root=REPO_ROOT,
+            torch_module=torch,
+            require_muon=True,
+        )
+    except QualificationEnvironmentError as exc:
+        raise ExecutionGpuMatrixError(str(exc)) from exc
     environment = _cuda_environment()
 
     selected = tuple(args.case) if args.case else _CASES
@@ -2872,6 +2884,7 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         "expected_commit": args.expected_commit,
         "qualification_mode": args.qualification_mode,
         "environment": environment,
+        "qualification_contract": qualification_contract,
         "qualification_snapshot": _qualification_snapshot(),
         "cases": [],
     }
