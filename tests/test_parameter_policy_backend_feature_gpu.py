@@ -221,6 +221,7 @@ def _d1_case_row(
         for index, optimizer_type in enumerate(optimizer_types)
     }
     manifest = {
+        "policy_hash": "policy",
         "optimizer_profiles": profiles,
         "optimizers": [
             {
@@ -241,6 +242,7 @@ def _d1_case_row(
         "feature": feature,
         "status": status,
         "policy_contract": {
+            "policy_hash": "policy",
             "kind": policy_kind,
             "fallback_component": (
                 None
@@ -347,6 +349,8 @@ class BackendFeatureManifestTests(unittest.TestCase):
             loaded[1]["policy_contract"]["fallback_component"],
             "unet.conv.adapter",
         )
+        self.assertTrue(loaded[0]["policy_contract"]["policy_hash"])
+        self.assertTrue(loaded[1]["policy_contract"]["policy_hash"])
 
     def test_d1_sd_lora_requires_explicit_same_policy_sidecar(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -997,6 +1001,15 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
         wrong_policy[1]["policy_contract"]["kind"] = "adamw"
         summary = summarize_sd_lora_full_bf16_promotion(
             wrong_policy,
+            self._snapshot(),
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        wrong_hash = self._passing_rows()
+        wrong_hash[0]["fresh_checkpoint_manifest"]["policy_hash"] = "other"
+        summary = summarize_sd_lora_full_bf16_promotion(
+            wrong_hash,
             self._snapshot(),
         )
         self.assertEqual(summary["status"], "fail")
