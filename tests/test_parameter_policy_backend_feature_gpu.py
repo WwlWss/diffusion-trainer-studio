@@ -340,15 +340,23 @@ def _d1_case_row(
 
 
 def _qualification_contract() -> dict:
+    pinned = {
+        "accelerate": "1.6.0",
+        "diffusers": "0.32.1",
+        "pytorch-optimizer": "3.10.0",
+        "transformers": "4.54.1",
+    }
     return {
         "schema": "dts.parameter-policy.gpu-qualification-environment",
-        "version": 1,
+        "version": 2,
         "status": "pass",
         "python_major_minor": "3.11",
         "torch_base_version": "2.7.0",
         "torchvision_version": "0.22.0",
         "pytorch_optimizer_version": "3.10.0",
         "requirements_sha256": "requirements",
+        "requirements_exact_pins": dict(pinned),
+        "installed_requirement_versions": dict(pinned),
         "cuda_available": True,
         "bf16_supported": True,
     }
