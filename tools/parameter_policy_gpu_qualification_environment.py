@@ -35,6 +35,13 @@ def _base_version(value: object) -> str:
     return str(value or "").split("+", 1)[0].strip()
 
 
+def _local_build_tag(value: object) -> str | None:
+    raw = str(value or "")
+    if "+" not in raw:
+        return None
+    return raw.split("+", 1)[1].strip().lower() or None
+
+
 def _canonical_distribution_name(value: str) -> str:
     return re.sub(r"[-_.]+", "-", str(value or "").strip()).lower()
 
@@ -177,10 +184,22 @@ def validate_qualification_environment_snapshot(
             f"torch base version {QUALIFICATION_TORCH_BASE_VERSION} is required; "
             f"found {snapshot.get('torch_full_version')!r}."
         )
-    if snapshot.get("torchvision_version") != QUALIFICATION_TORCHVISION_VERSION:
+    torchvision_full_version = snapshot.get("torchvision_version")
+    if _base_version(torchvision_full_version) != QUALIFICATION_TORCHVISION_VERSION:
         mismatches.append(
             f"torchvision {QUALIFICATION_TORCHVISION_VERSION} is required; "
-            f"found {snapshot.get('torchvision_version')!r}."
+            f"found {torchvision_full_version!r}."
+        )
+    torchvision_build = _local_build_tag(torchvision_full_version)
+    torch_build = _local_build_tag(snapshot.get("torch_full_version"))
+    if torchvision_build == "cpu" and snapshot.get("cuda_available") is True:
+        mismatches.append(
+            "A torchvision CPU build cannot qualify a CUDA runtime."
+        )
+    elif torchvision_build and torch_build and torchvision_build != torch_build:
+        mismatches.append(
+            f"torchvision build {torchvision_build!r} does not match "
+            f"torch build {torch_build!r}."
         )
     if (
         require_muon
@@ -246,7 +265,9 @@ def validate_qualification_environment_snapshot(
             f"{QUALIFICATION_PYTHON_MAJOR_MINOR[1]}"
         ),
         "torch_base_version": QUALIFICATION_TORCH_BASE_VERSION,
+        "torch_full_version": snapshot.get("torch_full_version"),
         "torchvision_version": QUALIFICATION_TORCHVISION_VERSION,
+        "torchvision_full_version": torchvision_full_version,
         "pytorch_optimizer_version": (
             QUALIFICATION_MUON_PROVIDER_VERSION if require_muon else None
         ),
