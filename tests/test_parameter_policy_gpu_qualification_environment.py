@@ -30,7 +30,7 @@ def _snapshot() -> dict:
         "python_major_minor": [3, 11],
         "torch_full_version": "2.7.0+cu128",
         "torch_base_version": "2.7.0",
-        "torchvision_version": "0.22.0",
+        "torchvision_version": "0.22.0+cu128",
         "pytorch_optimizer_version": "3.10.0",
         "requirements_sha256": "abc123",
         "requirements_exact_pins": dict(pins),
@@ -71,6 +71,8 @@ class QualificationEnvironmentTests(unittest.TestCase):
             contract["torchvision_version"],
             QUALIFICATION_TORCHVISION_VERSION,
         )
+        self.assertEqual(contract["torch_full_version"], "2.7.0+cu128")
+        self.assertEqual(contract["torchvision_full_version"], "0.22.0+cu128")
         self.assertEqual(
             contract["pytorch_optimizer_version"],
             QUALIFICATION_MUON_PROVIDER_VERSION,
@@ -112,6 +114,42 @@ class QualificationEnvironmentTests(unittest.TestCase):
                         snapshot,
                         require_muon=True,
                     )
+
+    def test_untagged_torchvision_base_version_remains_accepted(self):
+        snapshot = _snapshot()
+        snapshot["torchvision_version"] = "0.22.0"
+        contract = validate_qualification_environment_snapshot(
+            snapshot,
+            require_muon=True,
+        )
+        self.assertEqual(contract["torchvision_version"], "0.22.0")
+        self.assertEqual(contract["torchvision_full_version"], "0.22.0")
+
+    def test_incompatible_torchvision_cuda_or_cpu_build_fails_closed(self):
+        for torchvision_version in ("0.22.0+cu126", "0.22.0+cpu"):
+            with self.subTest(torchvision_version=torchvision_version):
+                snapshot = _snapshot()
+                snapshot["torchvision_version"] = torchvision_version
+                with self.assertRaisesRegex(
+                    QualificationEnvironmentError,
+                    "torchvision (?:build|CPU build)",
+                ):
+                    validate_qualification_environment_snapshot(
+                        snapshot,
+                        require_muon=True,
+                    )
+
+    def test_wrong_torchvision_base_with_cuda_suffix_fails_closed(self):
+        snapshot = _snapshot()
+        snapshot["torchvision_version"] = "0.23.0+cu128"
+        with self.assertRaisesRegex(
+            QualificationEnvironmentError,
+            "torchvision 0.22.0 is required",
+        ):
+            validate_qualification_environment_snapshot(
+                snapshot,
+                require_muon=True,
+            )
 
     def test_wrong_muon_provider_fails_closed(self):
         snapshot = _snapshot()
