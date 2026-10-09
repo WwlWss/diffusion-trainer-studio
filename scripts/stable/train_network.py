@@ -566,6 +566,7 @@ class NetworkTrainer:
                 json.dump({"current_epoch": current_epoch.value, "current_step": current_step.value + 1}, f)
 
         steps_from_state = None
+        epoch_from_state = None
 
         def load_model_hook(models, input_dir):
             # remove models except network
@@ -578,12 +579,13 @@ class NetworkTrainer:
             # print(f"load model hook: {len(models)} models will be loaded")
 
             # load current epoch and step to
-            nonlocal steps_from_state
+            nonlocal steps_from_state, epoch_from_state
             train_state_file = os.path.join(input_dir, "train_state.json")
             if os.path.exists(train_state_file):
                 with open(train_state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 steps_from_state = data["current_step"]
+                epoch_from_state = data.get("current_epoch")
                 logger.info(f"load train state from {train_state_file}: {data}")
 
         accelerator.register_save_state_pre_hook(save_model_hook)
@@ -838,6 +840,38 @@ class NetworkTrainer:
             if key in metadata:
                 minimum_metadata[key] = metadata[key]
 
+        # D1 SD1 stock LoRA full-BF16 restores optimizer/scheduler via Accelerate,
+        # but the legacy loop owns the logical step and dataloader position.
+        # Keep this opt-in path isolated from Standard, SDXL and other backends.
+        d1_resume_cursor = None
+        if (
+            parameter_policy_session is not None
+            and parameter_policy_train_type == "sd-lora"
+            and args.full_bf16
+            and not args.v2
+            and args.network_module == "networks.lora"
+            and bool(args.resume)
+        ):
+            d1_resume_cursor = parameter_policy_bridge.plan_sd_lora_full_bf16_resume(
+                saved_step=steps_from_state,
+                saved_epoch=epoch_from_state,
+                max_train_steps=args.max_train_steps,
+                dataloader_batches=len(train_dataloader),
+                gradient_accumulation_steps=args.gradient_accumulation_steps,
+                initial_step=args.initial_step,
+                initial_epoch=args.initial_epoch,
+                max_train_epochs=args.max_train_epochs,
+                skip_until_initial_step=args.skip_until_initial_step,
+            )
+            logger.info(
+                "D1 SD1 LoRA resume: completed optimizer steps=%d, "
+                "next epoch=%d, skip batches=%d, remaining optimizer steps=%d",
+                d1_resume_cursor.completed_steps,
+                d1_resume_cursor.epoch_to_start + 1,
+                d1_resume_cursor.batches_to_skip,
+                d1_resume_cursor.remaining_steps,
+            )
+
         # calculate steps to skip when resuming or starting from a specific step
         initial_step = 0
         if args.initial_epoch is not None or args.initial_step is not None:
@@ -887,6 +921,12 @@ class NetworkTrainer:
                 initial_step = 0  # do not skip
 
         global_step = 0
+        if d1_resume_cursor is not None:
+            # The legacy no-skip branch cleared initial_step, but checkpoint
+            # optimizer states have already advanced to completed_steps.
+            # The logical counter and dataloader cursor must advance together.
+            global_step = d1_resume_cursor.completed_steps
+            epoch_to_start = d1_resume_cursor.epoch_to_start
 
         noise_scheduler = DDPMScheduler(
             beta_start=0.00085, beta_end=0.012, beta_schedule="scaled_linear", num_train_timesteps=1000, clip_sample=False
@@ -967,7 +1007,16 @@ class NetworkTrainer:
                 )
 
             skipped_dataloader = None
-            if initial_step > 0:
+            d1_resume_skip = (
+                d1_resume_cursor.skipped_batches_for_epoch(epoch)
+                if d1_resume_cursor is not None
+                else 0
+            )
+            if d1_resume_skip:
+                skipped_dataloader = accelerator.skip_first_batches(
+                    train_dataloader, d1_resume_skip
+                )
+            elif initial_step > 0:
                 skipped_dataloader = accelerator.skip_first_batches(train_dataloader, initial_step - 1)
                 initial_step = 1
 
