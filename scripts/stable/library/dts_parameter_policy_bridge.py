@@ -41,9 +41,19 @@ def make_legacy_scheduler_factory(*args, **kwargs):
     return load_parameter_policy_trainer().make_legacy_scheduler_factory(*args, **kwargs)
 
 
+def plan_sd_lora_full_bf16_resume(**kwargs):
+    # The stock trainer imports this bridge only in Component-wise mode.
+    # Reuse its root bootstrap and keep the pure cursor helper lazy.
+    load_parameter_policy_trainer()
+    return importlib.import_module(
+        "mikazuki.parameter_policy_resume"
+    ).plan_sd_lora_full_bf16_resume(**kwargs)
+
+
 __all__ = [
     "create_parameter_policy_session",
     "load_parameter_policy_file",
     "load_parameter_policy_trainer",
     "make_legacy_scheduler_factory",
+    "plan_sd_lora_full_bf16_resume",
 ]

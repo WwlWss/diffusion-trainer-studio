@@ -258,6 +258,10 @@ from mikazuki.parameter_policy_trainer import (
     create_parameter_policy_session,
     make_legacy_scheduler_factory,
 )
+from tools.parameter_policy_gpu_qualification_environment import (
+    QualificationEnvironmentError,
+    validate_qualification_environment,
+)
 from tools.parameter_policy_execution_gpu_runtime import (
     gradient_evidence,
     model_parameter_evidence,
@@ -269,6 +273,8 @@ from tools.parameter_policy_execution_gpu_support import (
     ADAMW_FULL_BF16_CASE_IDS,
     ADAMW_FULL_BF16_EVIDENCE_BUNDLE_ID,
     EXECUTION_GPU_CASE_PHASES,
+    EXECUTION_GPU_EVIDENCE_SCHEMA,
+    EXECUTION_GPU_EVIDENCE_VERSION,
     ExecutionGpuMatrixError,
     MUON_FULL_BF16_ARGUMENT_FAMILY,
     MUON_FULL_BF16_CASE_IDS,
@@ -284,8 +290,8 @@ from tools.parameter_policy_execution_gpu_support import (
 )
 
 
-EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"
-EVIDENCE_VERSION = 2
+EVIDENCE_SCHEMA = EXECUTION_GPU_EVIDENCE_SCHEMA
+EVIDENCE_VERSION = EXECUTION_GPU_EVIDENCE_VERSION
 _CASES = tuple(EXECUTION_GPU_CASE_PHASES)
 _ADAMW_CASES = ADAMW_FULL_BF16_CASE_IDS
 _MUON_CASES = MUON_FULL_BF16_CASE_IDS
@@ -2852,6 +2858,14 @@ def _coordinator_main(args: argparse.Namespace) -> int:
             "Coordinator execution is missing its validated external output path."
         )
     output_path = _BOOTSTRAP_OUTPUT
+    try:
+        qualification_contract = validate_qualification_environment(
+            repo_root=REPO_ROOT,
+            torch_module=torch,
+            require_muon=True,
+        )
+    except QualificationEnvironmentError as exc:
+        raise ExecutionGpuMatrixError(str(exc)) from exc
     environment = _cuda_environment()
 
     selected = tuple(args.case) if args.case else _CASES
@@ -2872,6 +2886,7 @@ def _coordinator_main(args: argparse.Namespace) -> int:
         "expected_commit": args.expected_commit,
         "qualification_mode": args.qualification_mode,
         "environment": environment,
+        "qualification_contract": qualification_contract,
         "qualification_snapshot": _qualification_snapshot(),
         "cases": [],
     }

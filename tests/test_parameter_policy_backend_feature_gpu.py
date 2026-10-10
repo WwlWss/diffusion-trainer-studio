@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -9,15 +10,31 @@ import unittest
 
 from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
+    BACKEND_FEATURE_EVIDENCE_VERSION,
     BACKEND_FEATURE_MANIFEST_SCHEMA,
     CHECKPOINT_PROGRESS_SCHEMA,
+    SD_LORA_FULL_BF16_CASE_IDS,
+    SD_LORA_FULL_BF16_EVIDENCE_ID,
+    SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID,
     BackendFeatureGpuMatrixError,
+    backend_feature_qualification_snapshot,
     compare_backend_checkpoint_contracts,
     compare_checkpoint_progress,
     load_backend_feature_manifest,
+    summarize_sd_lora_full_bf16_promotion,
+    validate_case_input_contract,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
+    validate_shared_full_bf16_regression_evidence,
 )
+from tools.parameter_policy_execution_gpu_support import (
+    EXECUTION_GPU_CASE_PHASES,
+    EXECUTION_GPU_EVIDENCE_SCHEMA,
+    EXECUTION_GPU_EVIDENCE_VERSION,
+    EXECUTION_INFRA_CASE_IDS,
+    SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+)
+
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +71,142 @@ def _case(root: Path) -> dict:
         "environment": {"DTS_TEST": "1"},
         "fresh_checkpoint_dir": str(root / "checkpoint-1"),
         "resume_checkpoint_dir": str(root / "checkpoint-2"),
+    }
+
+
+def _sd_lora_policy(kind: str) -> dict:
+    if kind == "adamw":
+        profiles = {
+            "main": {"type": "AdamW", "args": {}},
+        }
+        train_route = {
+            "train": True,
+            "optimizer_profile": "main",
+            "learning_rate": 1e-4,
+        }
+        components = {
+            "unet.attention.adapter": dict(train_route),
+            "unet.feed_forward.adapter": dict(train_route),
+            "unet.conv.adapter": dict(train_route),
+            "unet.other.adapter": {"train": False},
+            "text_encoder.adapter": dict(train_route),
+        }
+    elif kind == "muon_adamw_fallback":
+        profiles = {
+            "muon": {"type": "Muon", "args": {}},
+            "fallback": {"type": "AdamW", "args": {}},
+        }
+        train_route = {
+            "train": True,
+            "optimizer_profile": "muon",
+            "learning_rate": 1e-3,
+            "fallback_optimizer_profile": "fallback",
+            "fallback_learning_rate": 1e-4,
+        }
+        components = {
+            "unet.attention.adapter": dict(train_route),
+            "unet.feed_forward.adapter": dict(train_route),
+            "unet.conv.adapter": dict(train_route),
+            "unet.other.adapter": {"train": False},
+            "text_encoder.adapter": dict(train_route),
+        }
+    else:
+        raise AssertionError(f"unknown SD LoRA D1 policy kind: {kind}")
+    return {
+        "version": 1,
+        "optimizer_profiles": profiles,
+        "components": components,
+    }
+
+
+def _sd_lora_case(root: Path, case_id: str) -> dict:
+    kind = (
+        "adamw"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "muon_adamw_fallback"
+    )
+    policy_path = root / f"{kind}-policy.json"
+    policy_path.write_text(
+        json.dumps(_sd_lora_policy(kind)),
+        encoding="utf-8",
+    )
+    base_model = root / "sd1-base.safetensors"
+    if not base_model.exists():
+        base_model.write_bytes(b"sd1-base-model")
+    fresh_output = root / f"{kind}-fresh-output"
+    resume_output = root / f"{kind}-resume-output"
+    fresh_checkpoint = fresh_output / "at-step00000001-state"
+    resume_checkpoint = resume_output / "at-step00000002-state"
+    accumulation = (
+        "1"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "2"
+    )
+    common = [
+        "scripts/stable/train_network.py",
+        "--parameter_policy_config",
+        str(policy_path),
+        "--pretrained_model_name_or_path",
+        str(base_model),
+        "--network_module",
+        "networks.lora",
+        "--gradient_accumulation_steps",
+        accumulation,
+        "--mixed_precision",
+        "bf16",
+        "--full_bf16",
+        *(
+            ["--network_args", "conv_dim=4"]
+            if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+            else []
+        ),
+        "--max_train_steps",
+        "2",
+        "--save_every_n_steps",
+        "1",
+        "--save_state",
+    ]
+    return {
+        "case_id": case_id,
+        "train_type": "sd-lora",
+        "feature": "full_bf16",
+        "fresh_command": [
+            *common,
+            "--output_dir",
+            str(fresh_output),
+        ],
+        "resume_command": [
+            "scripts/stable/train_network.py",
+            "--parameter_policy_config",
+            str(policy_path),
+            "--pretrained_model_name_or_path",
+            str(base_model),
+            "--network_module",
+            "networks.lora",
+            "--gradient_accumulation_steps",
+            accumulation,
+            "--mixed_precision",
+            "bf16",
+            "--full_bf16",
+            *(
+                ["--network_args", "conv_dim=4"]
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+                else []
+            ),
+            "--resume",
+            str(fresh_checkpoint),
+            "--max_train_steps",
+            "2",
+            "--save_every_n_steps",
+            "1",
+            "--save_state",
+            "--output_dir",
+            str(resume_output),
+        ],
+        "cwd": str(ROOT),
+        "environment": {},
+        "fresh_checkpoint_dir": str(fresh_checkpoint),
+        "resume_checkpoint_dir": str(resume_checkpoint),
     }
 
 
@@ -98,6 +251,168 @@ def _progress(
         "scheduler": {
             "step_count": scheduler_step_count,
             "last_epoch": scheduler_last_epoch,
+        },
+    }
+
+
+def _d1_case_row(
+    case_id: str,
+    *,
+    status: str = "pass",
+    train_type: str = "sd-lora",
+    feature: str = "full_bf16",
+    optimizer_types: tuple[str, ...] | None = None,
+) -> dict:
+    if optimizer_types is None:
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]:
+            optimizer_types = ("AdamW",)
+        elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1]:
+            optimizer_types = ("Muon", "AdamW")
+        else:
+            optimizer_types = ("AdamW",)
+
+    profiles = {
+        f"profile_{index}": optimizer_type
+        for index, optimizer_type in enumerate(optimizer_types)
+    }
+    manifest = {
+        "policy_hash": "policy",
+        "optimizer_profiles": profiles,
+        "optimizers": [
+            {
+                "profile_name": profile_name,
+                "optimizer_type": optimizer_type,
+            }
+            for profile_name, optimizer_type in profiles.items()
+        ],
+    }
+    policy_kind = (
+        "adamw"
+        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+        else "muon_adamw_fallback"
+    )
+    return {
+        "case_id": case_id,
+        "train_type": train_type,
+        "feature": feature,
+        "status": status,
+        "policy_contract": {
+            "policy_hash": "policy",
+            "model_family": "sd1",
+            "v2": False,
+            "kind": policy_kind,
+            "gradient_accumulation_steps": (
+                1
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+                else 2
+            ),
+            "mixed_precision": "bf16",
+            "full_bf16": True,
+            "network_module": "networks.lora",
+            "covers_text_encoder_adapter": True,
+            "conv_dim": (
+                None
+                if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
+                else 4
+            ),
+            "fallback_component": (
+                None
+                if policy_kind == "adamw"
+                else "unet.conv.adapter"
+            ),
+        },
+        "input_contract": {
+            "model_family": "sd1",
+            "v2": False,
+            "signature": "input-signature",
+            "output_contract": {
+                "fresh_output_dir": "fresh",
+                "resume_output_dir": "resume",
+            },
+            "base_model": {"sha256": "base-model"},
+            "parameter_policy": {"sha256": "policy-file"},
+        },
+        "pre_fresh_input_contract_valid": True,
+        "pre_resume_input_contract_valid": True,
+        "fresh_checkpoint_manifest": copy.deepcopy(manifest),
+        "resume_checkpoint_manifest": copy.deepcopy(manifest),
+    }
+
+
+def _qualification_contract() -> dict:
+    pinned = {
+        "accelerate": "1.6.0",
+        "diffusers": "0.32.1",
+        "pytorch-optimizer": "3.10.0",
+        "transformers": "4.54.1",
+    }
+    return {
+        "schema": "dts.parameter-policy.gpu-qualification-environment",
+        "version": 2,
+        "status": "pass",
+        "python_major_minor": "3.11",
+        "torch_base_version": "2.7.0",
+        "torch_full_version": "2.7.0+cu128",
+        "torchvision_version": "0.22.0",
+        "torchvision_full_version": "0.22.0+cu128",
+        "pytorch_optimizer_version": "3.10.0",
+        "requirements_sha256": "requirements",
+        "requirements_exact_pins": dict(pinned),
+        "installed_requirement_versions": dict(pinned),
+        "cuda_available": True,
+        "bf16_supported": True,
+    }
+
+
+def _shared_regression_contract(commit: str = "exact-head") -> dict:
+    return {
+        "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        "status": "pass",
+        "commit": commit,
+        "qualification_contract": _qualification_contract(),
+        "required_cases": list(EXECUTION_GPU_CASE_PHASES),
+    }
+
+
+def _shared_regression_evidence(
+    *,
+    commit: str = "exact-head",
+    qualification_contract: dict | None = None,
+) -> dict:
+    contract = qualification_contract or _qualification_contract()
+    cases = [
+        {
+            "case_id": case_id,
+            "status": "pass",
+            "phases": [
+                {"phase": phase, "status": "pass"}
+                for phase in EXECUTION_GPU_CASE_PHASES[case_id]
+            ],
+        }
+        for case_id in EXECUTION_GPU_CASE_PHASES
+    ]
+    return {
+        "schema": EXECUTION_GPU_EVIDENCE_SCHEMA,
+        "version": EXECUTION_GPU_EVIDENCE_VERSION,
+        "commit": commit,
+        "expected_commit": commit,
+        "final_provenance_commit": commit,
+        "qualification_mode": "regression",
+        "qualification_contract": contract,
+        "cases": cases,
+        "shared_optimizer_regression": {
+            "id": SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+            "scope": "shared_optimizer_regression",
+            "status": "pass",
+            "target_rows_match": True,
+            "infra_complete": all(
+                row["status"] == "pass"
+                for row in cases
+                if row["case_id"] in EXECUTION_INFRA_CASE_IDS
+            ),
+            "required_cases": list(EXECUTION_GPU_CASE_PHASES),
+            "missing_cases": [],
+            "failed_cases": [],
         },
     }
 
@@ -175,6 +490,369 @@ class BackendFeatureManifestTests(unittest.TestCase):
         self.assertEqual(cases[0]["feature"], "full_bf16")
         self.assertEqual(cases[0]["entrypoint"], "scripts/dev/flux_train.py")
         self.assertEqual(cases[0]["fresh_command"][0], "scripts/dev/flux_train.py")
+
+    def test_d1_sd_lora_manifest_validates_explicit_policy_contracts(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            cases = [
+                _sd_lora_case(temp, case_id)
+                for case_id in SD_LORA_FULL_BF16_CASE_IDS
+            ]
+            loaded = load_backend_feature_manifest(
+                self._write(temp, cases),
+                repo_root=ROOT,
+            )
+        self.assertEqual(
+            [case["policy_contract"]["kind"] for case in loaded],
+            ["adamw", "muon_adamw_fallback"],
+        )
+        self.assertIsNone(loaded[0]["policy_contract"]["fallback_component"])
+        self.assertEqual(
+            loaded[1]["policy_contract"]["fallback_component"],
+            "unet.conv.adapter",
+        )
+        self.assertTrue(loaded[0]["policy_contract"]["policy_hash"])
+        self.assertTrue(loaded[1]["policy_contract"]["policy_hash"])
+        self.assertEqual(
+            [case["policy_contract"]["gradient_accumulation_steps"] for case in loaded],
+            [1, 2],
+        )
+        self.assertTrue(
+            all(case["policy_contract"]["full_bf16"] for case in loaded)
+        )
+        self.assertTrue(
+            all(
+                case["policy_contract"]["covers_text_encoder_adapter"]
+                for case in loaded
+            )
+        )
+        self.assertEqual(loaded[1]["policy_contract"]["conv_dim"], 4)
+        self.assertTrue(
+            all(case["policy_contract"]["model_family"] == "sd1" for case in loaded)
+        )
+        self.assertTrue(
+            all(case["policy_contract"]["v2"] is False for case in loaded)
+        )
+        self.assertTrue(
+            all(case["input_contract"]["signature"] for case in loaded)
+        )
+        self.assertTrue(
+            all(case["input_contract"]["base_model"]["sha256"] for case in loaded)
+        )
+
+    def test_d1_fresh_resume_training_inputs_match_and_output_dirs_are_distinct(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            case["resume_command"].extend(["--caption_dropout_rate", "0.1"])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "training-input argv must match exactly",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            fresh_output = case["fresh_command"][
+                case["fresh_command"].index("--output_dir") + 1
+            ]
+            resume_output_index = case["resume_command"].index("--output_dir")
+            case["resume_command"][resume_output_index + 1] = fresh_output
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--output_dir must be distinct",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_requires_explicit_local_base_model(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                option_index = case[phase_key].index(
+                    "--pretrained_model_name_or_path"
+                )
+                del case[phase_key][option_index : option_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--pretrained_model_name_or_path exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_input_files_are_revalidated_before_each_phase(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            validate_case_input_contract(loaded)
+
+            model_path = Path(loaded["input_contract"]["base_model"]["path"])
+            model_path.write_bytes(b"changed-model")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "base_model.*changed",
+            ):
+                validate_case_input_contract(loaded)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            policy_path = Path(loaded["input_contract"]["parameter_policy"]["path"])
+            policy_path.write_text(
+                json.dumps(_sd_lora_policy("adamw"), indent=2),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "parameter_policy.*changed",
+            ):
+                validate_case_input_contract(loaded)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer.toml"
+            trainer_config.write_text(
+                "caption_dropout_rate = 0.0\n",
+                encoding="utf-8",
+            )
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )[0]
+            trainer_config.write_text(
+                "caption_dropout_rate = 0.5\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "trainer config.*changed",
+            ):
+                validate_case_input_contract(loaded)
+
+    def test_d1_rejects_sd2_v2_from_cli_or_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].append("--v2")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "outside the D1 qualification scope",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-v2.toml"
+            trainer_config.write_text("v2 = true\n", encoding="utf-8")
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "enables SD2.x v2 mode",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_config_v2_false_remains_sd1(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-sd1.toml"
+            trainer_config.write_text("v2 = false\n", encoding="utf-8")
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            loaded = load_backend_feature_manifest(
+                self._write(temp, [case]),
+                repo_root=ROOT,
+            )
+        self.assertEqual(loaded[0]["policy_contract"]["model_family"], "sd1")
+
+    def test_d1_cases_require_stock_network_module_and_real_conv_lora(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                module_index = case[phase_key].index("--network_module")
+                case[phase_key][module_index + 1] = "networks.other"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--network_module exactly once to 'networks.lora'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            for phase_key in ("fresh_command", "resume_command"):
+                args_index = case[phase_key].index("--network_args")
+                del case[phase_key][args_index : args_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "requires integer conv_dim>0",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_cases_lock_accumulation_and_full_bf16_cli(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            for phase_key in ("fresh_command", "resume_command"):
+                accum_index = case[phase_key].index("--gradient_accumulation_steps")
+                case[phase_key][accum_index + 1] = "1"
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--gradient_accumulation_steps exactly once to '2'",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].remove("--full_bf16")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--full_bf16 exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_authority_fields_cannot_be_hidden_in_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            trainer_config = temp / "trainer-authority.toml"
+            trainer_config.write_text(
+                'gradient_accumulation_steps = 1\n',
+                encoding="utf-8",
+            )
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "may not hide D1 qualification authority fields",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_sd_lora_requires_explicit_same_policy_sidecar(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            for phase_key in ("fresh_command", "resume_command"):
+                option_index = case[phase_key].index("--parameter_policy_config")
+                del case[phase_key][option_index : option_index + 2]
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "--parameter_policy_config exactly once",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            second = temp / "other-policy.json"
+            second.write_text(
+                json.dumps(_sd_lora_policy("adamw")),
+                encoding="utf-8",
+            )
+            option_index = case["resume_command"].index("--parameter_policy_config")
+            case["resume_command"][option_index + 1] = str(second)
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "same Parameter Policy sidecar",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_muon_case_requires_real_conv_fallback_route(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[1])
+            policy_path = Path(
+                case["fresh_command"][
+                    case["fresh_command"].index("--parameter_policy_config") + 1
+                ]
+            )
+            policy = json.loads(policy_path.read_text(encoding="utf-8"))
+            policy["components"]["unet.conv.adapter"] = {"train": False}
+            policy_path.write_text(json.dumps(policy), encoding="utf-8")
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "must train D1 coverage components",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
+
+    def test_d1_policy_cannot_be_hidden_in_trainer_config(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            case = _sd_lora_case(temp, SD_LORA_FULL_BF16_CASE_IDS[0])
+            policy_path = case["fresh_command"][
+                case["fresh_command"].index("--parameter_policy_config") + 1
+            ]
+            trainer_config = temp / "trainer.toml"
+            trainer_config.write_text(
+                f'parameter_policy_config = "{policy_path.replace(chr(92), chr(47))}"\n',
+                encoding="utf-8",
+            )
+            for phase_key in ("fresh_command", "resume_command"):
+                case[phase_key].extend(["--config_file", str(trainer_config)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError,
+                "may not hide D1 qualification authority fields",
+            ):
+                load_backend_feature_manifest(
+                    self._write(temp, [case]),
+                    repo_root=ROOT,
+                )
 
     def test_manifest_must_live_outside_repository(self):
         internal = ROOT / "backend-feature-manifest-test.json"
@@ -452,6 +1130,137 @@ class BackendFeatureManifestTests(unittest.TestCase):
                 )
 
 
+class SharedRegressionEvidenceTests(unittest.TestCase):
+    def test_exact_head_regression_evidence_passes(self):
+        contract = _qualification_contract()
+        validated = validate_shared_full_bf16_regression_evidence(
+            _shared_regression_evidence(
+                commit="exact-head",
+                qualification_contract=contract,
+            ),
+            expected_commit="exact-head",
+            qualification_contract=contract,
+        )
+        self.assertEqual(validated["status"], "pass")
+        self.assertEqual(
+            validated["id"],
+            SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        )
+        self.assertEqual(validated["commit"], "exact-head")
+
+    def test_wrong_commit_or_mode_fails_closed(self):
+        contract = _qualification_contract()
+
+        wrong_commit = _shared_regression_evidence(
+            commit="other-head",
+            qualification_contract=contract,
+        )
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "does not match the D1 exact head",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_commit,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        wrong_mode = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        wrong_mode["qualification_mode"] = "d0-promotion"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "qualification_mode='regression'",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_mode,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+    def test_failed_or_incomplete_c1_c4_matrix_fails_closed(self):
+        contract = _qualification_contract()
+        failed = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        failed["cases"][-1]["status"] = "fail"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "complete PASS C1-C4 matrix",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                failed,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        incomplete = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        incomplete["cases"] = incomplete["cases"][:-1]
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "complete PASS C1-C4 matrix",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                incomplete,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+    def test_wrong_summary_id_status_or_environment_fails_closed(self):
+        contract = _qualification_contract()
+
+        wrong_id = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        wrong_id["shared_optimizer_regression"]["id"] = "wrong"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "unexpected summary id",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                wrong_id,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        failed_summary = _shared_regression_evidence(
+            commit="exact-head",
+            qualification_contract=contract,
+        )
+        failed_summary["shared_optimizer_regression"]["status"] = "fail"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "summary did not pass",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                failed_summary,
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+        other_contract = copy.deepcopy(contract)
+        other_contract["torch_base_version"] = "2.8.0"
+        with self.assertRaisesRegex(
+            BackendFeatureGpuMatrixError,
+            "qualification environment does not match",
+        ):
+            validate_shared_full_bf16_regression_evidence(
+                _shared_regression_evidence(
+                    commit="exact-head",
+                    qualification_contract=other_contract,
+                ),
+                expected_commit="exact-head",
+                qualification_contract=contract,
+            )
+
+
 class BackendFeatureCheckpointTests(unittest.TestCase):
     def test_full_bf16_manifest_contract_passes(self):
         payload = _checkpoint()
@@ -677,6 +1486,143 @@ class BackendFeatureCheckpointTests(unittest.TestCase):
             compare_backend_checkpoint_contracts(fresh, resumed)
 
 
+class SdLoraFullBf16PromotionTests(unittest.TestCase):
+    def _snapshot(self):
+        return copy.deepcopy(backend_feature_qualification_snapshot())
+
+    def _passing_rows(self):
+        return [_d1_case_row(case_id) for case_id in SD_LORA_FULL_BF16_CASE_IDS]
+
+    def _summary(self, rows=None, snapshot=None, regression=None):
+        return summarize_sd_lora_full_bf16_promotion(
+            self._passing_rows() if rows is None else rows,
+            self._snapshot() if snapshot is None else snapshot,
+            _shared_regression_contract() if regression is None else regression,
+        )
+
+    def test_complete_d1_matrix_is_promotion_eligible(self):
+        summary = self._summary()
+        self.assertEqual(summary["id"], SD_LORA_FULL_BF16_EVIDENCE_ID)
+        self.assertEqual(
+            SD_LORA_FULL_BF16_EVIDENCE_ID,
+            "phase-d1:backend:sd-lora-sd1:full-bf16:v2",
+        )
+        self.assertEqual(summary["status"], "pass")
+        self.assertTrue(summary["promotion_eligible"])
+        self.assertTrue(summary["backend_qualification_eligible"])
+        self.assertTrue(summary["backend_row_match"])
+        self.assertTrue(summary["shared_optimizer_authority_match"])
+        self.assertTrue(summary["shared_regression_match"])
+        self.assertEqual(
+            summary["shared_regression_id"],
+            SHARED_FULL_BF16_REGRESSION_EVIDENCE_ID,
+        )
+        self.assertEqual(summary["case_contract_errors"], [])
+        self.assertEqual(summary["unexpected_backend_promotions"], [])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], [])
+        self.assertFalse(summary["production_qualification_mutated"])
+
+    def test_missing_or_failed_case_blocks_promotion(self):
+        rows = self._passing_rows()
+        summary = self._summary(rows=rows[:-1])
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["missing_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
+
+        failed = self._passing_rows()
+        failed[1]["status"] = "fail"
+        summary = self._summary(rows=failed)
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["failed_cases"], [SD_LORA_FULL_BF16_CASE_IDS[1]])
+
+    def test_case_identity_optimizer_topology_and_input_identity_are_verified(self):
+        wrong_identity = self._passing_rows()
+        wrong_identity[0]["train_type"] = "flux-lora"
+        summary = self._summary(rows=wrong_identity)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        wrong_topology = self._passing_rows()
+        wrong_topology[1] = _d1_case_row(
+            SD_LORA_FULL_BF16_CASE_IDS[1],
+            optimizer_types=("Muon",),
+        )
+        summary = self._summary(rows=wrong_topology)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        wrong_policy = self._passing_rows()
+        wrong_policy[1]["policy_contract"]["kind"] = "adamw"
+        summary = self._summary(rows=wrong_policy)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        wrong_hash = self._passing_rows()
+        wrong_hash[0]["fresh_checkpoint_manifest"]["policy_hash"] = "other"
+        summary = self._summary(rows=wrong_hash)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+        stale_input = self._passing_rows()
+        stale_input[0]["pre_resume_input_contract_valid"] = False
+        summary = self._summary(rows=stale_input)
+        self.assertEqual(summary["status"], "fail")
+        self.assertTrue(summary["case_contract_errors"])
+
+    def test_source_backend_authority_must_match_exact_d1_evidence(self):
+        for status, evidence in (
+            ("pending", None),
+            ("qualified", "wrong:evidence"),
+        ):
+            with self.subTest(status=status, evidence=evidence):
+                snapshot = self._snapshot()
+                snapshot["backends"]["sd-lora"]["status"] = status
+                snapshot["backends"]["sd-lora"]["evidence_case_id"] = evidence
+                summary = self._summary(snapshot=snapshot)
+                self.assertEqual(summary["status"], "fail")
+                self.assertFalse(summary["backend_row_match"])
+
+    def test_d0_optimizer_authority_is_required_for_both_shared_optimizers(self):
+        self.assertEqual(
+            SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID,
+            "phase-d0:shared-adamw-muon-full-bf16:v1",
+        )
+        for optimizer_name in ("AdamW", "Muon"):
+            with self.subTest(optimizer=optimizer_name):
+                snapshot = self._snapshot()
+                snapshot["optimizers"][optimizer_name]["evidence_case_id"] = "wrong"
+                summary = self._summary(snapshot=snapshot)
+                self.assertEqual(summary["status"], "fail")
+                self.assertFalse(summary["shared_optimizer_authority_match"])
+
+    def test_shared_regression_contract_is_mandatory(self):
+        summary = self._summary(regression={})
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["shared_regression_match"])
+
+        wrong = _shared_regression_contract()
+        wrong["id"] = "wrong:regression"
+        summary = self._summary(regression=wrong)
+        self.assertEqual(summary["status"], "fail")
+        self.assertFalse(summary["shared_regression_match"])
+
+    def test_unexpected_backend_or_optimizer_promotion_blocks_d1(self):
+        snapshot = self._snapshot()
+        snapshot["backends"]["sdxl-lora"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:backend",
+        }
+        snapshot["optimizers"]["Lion"] = {
+            "status": "qualified",
+            "reason": "unexpected",
+            "evidence_case_id": "unexpected:optimizer",
+        }
+        summary = self._summary(snapshot=snapshot)
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["unexpected_backend_promotions"], ["sdxl-lora"])
+        self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
+
+
 class BackendFeatureRunnerSourceTests(unittest.TestCase):
     def test_runner_checks_exact_clean_head_before_torch_import(self):
         source = RUNNER.read_text(encoding="utf-8")
@@ -785,6 +1731,7 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
             "numpy",
             "opencv-python",
             "imagesize",
+            "torchvision",
         ):
             self.assertIn(f'"{package}"', source)
 
@@ -795,10 +1742,14 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"<redacted>"', source)
         self.assertIn('"command_contract": _command_contract(case)', source)
         self.assertIn('"environment_keys": sorted(case["environment"])', source)
+        self.assertIn('"policy_contract": case.get("policy_contract")', source)
+        self.assertIn('"input_contract": case.get("input_contract")', source)
+        self.assertIn("validate_case_input_contract(case)", source)
 
     def test_runner_requires_external_manifest_output_and_two_checkpoints(self):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn('field="Backend feature --manifest"', source)
+        self.assertIn('field="Backend feature --shared-regression-evidence"', source)
         self.assertIn('field="Backend feature --output"', source)
         self.assertIn('"fresh_checkpoint_dir"', source)
         self.assertIn('"resume_checkpoint_dir"', source)
@@ -820,6 +1771,16 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn('"backend_qualification_eligible": False', source)
         self.assertIn('"production_qualification_mutated": False', source)
 
+    def test_runner_emits_d1_sd_lora_promotion_summary(self):
+        source = RUNNER.read_text(encoding="utf-8")
+        self.assertIn("backend_feature_qualification_snapshot", source)
+        self.assertIn("summarize_sd_lora_full_bf16_promotion", source)
+        self.assertIn('"backend_promotion"', source)
+        self.assertIn("SD_LORA_FULL_BF16_CASE_IDS", source)
+        self.assertIn("validate_shared_full_bf16_regression_evidence", source)
+        self.assertIn('"shared_regression_contract"', source)
+        self.assertIn("validate_qualification_environment", source)
+
     def test_workflow_uses_external_evidence_directory(self):
         workflow = WORKFLOW.read_text(encoding="utf-8")
         self.assertIn("DTS_EVIDENCE_DIR", workflow)
@@ -830,12 +1791,15 @@ class BackendFeatureRunnerSourceTests(unittest.TestCase):
         self.assertIn("run_parameter_policy_backend_feature_gpu_matrix.py", workflow)
         self.assertIn("parameter-policy-execution-gpu-matrix.json", workflow)
         self.assertIn("parameter-policy-backend-feature-gpu-matrix.json", workflow)
+        self.assertIn("--shared-regression-evidence", workflow)
+        self.assertIn("execution_gate_mode=regression", workflow)
 
     def test_evidence_schema_is_stable(self):
         self.assertEqual(
             BACKEND_FEATURE_EVIDENCE_SCHEMA,
             "dts.parameter-policy.backend-feature-gpu-matrix",
         )
+        self.assertEqual(BACKEND_FEATURE_EVIDENCE_VERSION, 2)
 
 
 if __name__ == "__main__":

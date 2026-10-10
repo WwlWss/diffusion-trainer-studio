@@ -372,14 +372,14 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             supported,
         )
 
-    def test_d0_promotes_only_shared_adamw_muon_and_keeps_backends_closed(self):
+    def test_d1_promotes_only_sd_lora_backend_and_preserves_d0_optimizer_authority(self):
         self.assertEqual(
             {
                 name: row.status
                 for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
             },
             {
-                "sd-lora": "pending",
+                "sd-lora": "qualified",
                 "sdxl-lora": "pending",
                 "sd-dreambooth": "unsupported",
                 "sdxl-finetune": "pending",
@@ -427,13 +427,25 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             "phase-d0:shared-adamw-muon-full-bf16:v1",
         )
 
-    def test_d0_does_not_qualify_any_backend(self):
-        self.assertFalse(
-            any(
-                row.status == "qualified"
-                for row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.values()
-            )
+    def test_d1_sd_lora_row_uses_stable_backend_evidence_id(self):
+        row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-lora"]
+        self.assertEqual(row.status, "qualified")
+        self.assertEqual(
+            row.evidence_case_id,
+            execution.FULL_BF16_SD_LORA_EVIDENCE_ID,
         )
+        self.assertEqual(
+            execution.FULL_BF16_SD_LORA_EVIDENCE_ID,
+            "phase-d1:backend:sd-lora-sd1:full-bf16:v2",
+        )
+
+    def test_d1_does_not_qualify_any_other_backend(self):
+        qualified = {
+            name
+            for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
+            if row.status == "qualified"
+        }
+        self.assertEqual(qualified, {"sd-lora"})
 
     def test_sd_dreambooth_starts_explicitly_unsupported(self):
         row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-dreambooth"]
@@ -550,6 +562,31 @@ class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
 
 
 class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
+    def test_d1_sd_lora_full_bf16_is_scoped_to_sd1(self):
+        allowed = execution.parameter_policy_execution_blockers(
+            _policy(),
+            train_type="sd-lora",
+            effective_config={
+                "full_bf16": True,
+                "mixed_precision": "bf16",
+                "v2": False,
+            },
+        )
+        self.assertEqual(allowed, [])
+
+        blocked = execution.parameter_policy_execution_blockers(
+            _policy(),
+            train_type="sd-lora",
+            effective_config={
+                "full_bf16": True,
+                "mixed_precision": "bf16",
+                "v2": True,
+            },
+        )
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("SD1.x only", blocked[0])
+        self.assertIn("SD2.x", blocked[0])
+
     def test_pending_and_unsupported_backends_fail_closed(self):
         pending = execution.parameter_policy_execution_blockers(
             _policy(),

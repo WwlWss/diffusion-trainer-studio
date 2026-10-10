@@ -17,8 +17,16 @@ HOST_WORKFLOW = ROOT / ".github" / "workflows" / "anima-qwen3-review.yml"
 class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
     def test_runner_is_exact_head_subprocess_evidence_harness(self):
         source = RUNNER.read_text(encoding="utf-8")
-        self.assertIn('EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"', source)
-        self.assertIn('EVIDENCE_VERSION = 2', source)
+        support = SUPPORT.read_text(encoding="utf-8")
+        self.assertIn(
+            'EXECUTION_GPU_EVIDENCE_SCHEMA = "dts.parameter-policy.execution-gpu-matrix"',
+            support,
+        )
+        self.assertIn("EXECUTION_GPU_EVIDENCE_VERSION = 3", support)
+        self.assertIn("EVIDENCE_SCHEMA = EXECUTION_GPU_EVIDENCE_SCHEMA", source)
+        self.assertIn("EVIDENCE_VERSION = EXECUTION_GPU_EVIDENCE_VERSION", source)
+        self.assertIn("validate_qualification_environment", source)
+        self.assertIn('"qualification_contract": qualification_contract', source)
         self.assertIn('"infra:cuda-bf16-capability:v1"', source)
         self.assertIn('"infra:full-bf16-session:v1"', source)
         self.assertIn('"--expected-commit"', source)

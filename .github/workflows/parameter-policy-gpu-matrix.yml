@@ -114,6 +114,14 @@ jobs:
         shell: powershell
         run: '& $env:DTS_PYTHON -m pip install torch==2.7.0 torchvision==0.22.0 -r requirements.txt'
 
+      - name: Require regression mode for backend feature qualification on Windows
+        if: runner.os == 'Windows' && inputs.backend_feature_manifest != ''
+        shell: powershell
+        run: |
+          if ("${{ inputs.execution_gate_mode }}" -ne "regression") {
+            throw "backend_feature_manifest requires execution_gate_mode=regression"
+          }
+
       - name: Run strict C1-C4 execution qualification on Windows
         if: runner.os == 'Windows'
         shell: powershell
@@ -132,7 +140,7 @@ jobs:
       - name: Run backend feature qualification on Windows
         if: runner.os == 'Windows' && inputs.backend_feature_manifest != ''
         shell: powershell
-        run: '& $env:DTS_PYTHON tools/run_parameter_policy_backend_feature_gpu_matrix.py --expected-commit "${{ github.sha }}" --manifest "${{ inputs.backend_feature_manifest }}" --output "$env:DTS_EVIDENCE_DIR/parameter-policy-backend-feature-gpu-matrix.json"'
+        run: '& $env:DTS_PYTHON tools/run_parameter_policy_backend_feature_gpu_matrix.py --expected-commit "${{ github.sha }}" --manifest "${{ inputs.backend_feature_manifest }}" --shared-regression-evidence "$env:DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json" --output "$env:DTS_EVIDENCE_DIR/parameter-policy-backend-feature-gpu-matrix.json"'
 
       - name: Upgrade pip on non-Windows runners
         if: runner.os != 'Windows'
@@ -141,6 +149,14 @@ jobs:
       - name: Install production qualification dependencies on non-Windows runners
         if: runner.os != 'Windows'
         run: python -m pip install torch==2.7.0 torchvision==0.22.0 -r requirements.txt
+
+      - name: Require regression mode for backend feature qualification on non-Windows runners
+        if: runner.os != 'Windows' && inputs.backend_feature_manifest != ''
+        run: |
+          if [ "${{ inputs.execution_gate_mode }}" != "regression" ]; then
+            echo "backend_feature_manifest requires execution_gate_mode=regression" >&2
+            exit 1
+          fi
 
       - name: Run strict C1-C4 execution qualification on non-Windows runners
         if: runner.os != 'Windows'
@@ -156,7 +172,7 @@ jobs:
 
       - name: Run backend feature qualification on non-Windows runners
         if: runner.os != 'Windows' && inputs.backend_feature_manifest != ''
-        run: python tools/run_parameter_policy_backend_feature_gpu_matrix.py --expected-commit "${{ github.sha }}" --manifest "${{ inputs.backend_feature_manifest }}" --output "$DTS_EVIDENCE_DIR/parameter-policy-backend-feature-gpu-matrix.json"
+        run: python tools/run_parameter_policy_backend_feature_gpu_matrix.py --expected-commit "${{ github.sha }}" --manifest "${{ inputs.backend_feature_manifest }}" --shared-regression-evidence "$DTS_EVIDENCE_DIR/parameter-policy-execution-gpu-matrix.json" --output "$DTS_EVIDENCE_DIR/parameter-policy-backend-feature-gpu-matrix.json"
 
       - name: Upload matrix evidence
         if: always()
