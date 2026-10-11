@@ -469,9 +469,7 @@ def _run_case(
             row["component_update_evidence"] = compare_sdxl_lora_weight_updates(
                 case["fresh_checkpoint_dir"],
                 case["resume_checkpoint_dir"],
-                require_conv_fallback=(
-                    case["case_id"] == SDXL_LORA_FULL_BF16_CASE_IDS[1]
-                ),
+                require_conv_fallback=True,
             )
         row["status"] = "pass"
     except Exception as exc:
