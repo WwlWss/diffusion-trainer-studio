@@ -56,6 +56,42 @@ _SD_LORA_CASE_OPTIMIZER_TYPES = {
     SD_LORA_FULL_BF16_CASE_IDS[1]: frozenset({"Muon", "AdamW"}),
 }
 
+SDXL_LORA_FULL_BF16_EVIDENCE_ID = execution.FULL_BF16_SDXL_LORA_EVIDENCE_ID
+SDXL_LORA_FULL_BF16_CASE_IDS = (
+    "backend:sdxl-lora:full-bf16:adamw:v1",
+    "backend:sdxl-lora:full-bf16:muon-adamw-fallback:v1",
+)
+_SDXL_LORA_CASE_OPTIMIZER_TYPES = {
+    SDXL_LORA_FULL_BF16_CASE_IDS[0]: frozenset({"AdamW"}),
+    SDXL_LORA_FULL_BF16_CASE_IDS[1]: frozenset({"Muon", "AdamW"}),
+}
+
+# Only the two reviewed stock-LoRA backends share this qualification contract.
+# Every new model family must still define its own explicit coverage and evidence.
+D1_STOCK_LORA_SPECS = {
+    "sd-lora": {
+        "case_ids": SD_LORA_FULL_BF16_CASE_IDS,
+        "evidence_id": SD_LORA_FULL_BF16_EVIDENCE_ID,
+        "model_family": "sd1",
+        "text_components": ("text_encoder.adapter",),
+        "optimizer_types": _SD_LORA_CASE_OPTIMIZER_TYPES,
+    },
+    "sdxl-lora": {
+        "case_ids": SDXL_LORA_FULL_BF16_CASE_IDS,
+        "evidence_id": SDXL_LORA_FULL_BF16_EVIDENCE_ID,
+        "model_family": "sdxl-base",
+        "text_components": ("text_encoder_1.adapter", "text_encoder_2.adapter"),
+        "optimizer_types": _SDXL_LORA_CASE_OPTIMIZER_TYPES,
+    },
+}
+
+
+def _stock_lora_spec_for_case(case_id: str) -> tuple[str, dict[str, Any]] | None:
+    for train_type, spec in D1_STOCK_LORA_SPECS.items():
+        if case_id in spec["case_ids"]:
+            return train_type, spec
+    return None
+
 
 class BackendFeatureGpuMatrixError(RuntimeError):
     pass
@@ -388,7 +424,7 @@ def _d1_input_signature(payload: dict[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
-def _build_sd_lora_d1_input_contract(
+def _build_stock_lora_d1_input_contract(
     *,
     case_id: str,
     fresh_command: list[str],
@@ -396,8 +432,10 @@ def _build_sd_lora_d1_input_contract(
     repo_root: Path,
     policy_contract: dict[str, Any] | None,
 ) -> dict[str, Any] | None:
-    if case_id not in SD_LORA_FULL_BF16_CASE_IDS:
+    target = _stock_lora_spec_for_case(case_id)
+    if target is None:
         return None
+    train_type, spec = target
     if not isinstance(policy_contract, dict):
         raise BackendFeatureGpuMatrixError(
             f"Backend feature case {case_id!r} requires a D1 policy contract."
@@ -457,7 +495,7 @@ def _build_sd_lora_d1_input_contract(
         )
 
     payload = {
-        "model_family": "sd1",
+        "model_family": spec["model_family"],
         "v2": False,
         "effective_argv": fresh_effective,
         "output_contract": {
@@ -579,23 +617,21 @@ def _trainer_config_lifecycle_fields(
     return guarded.intersection(flattened)
 
 
-def _load_sd_lora_d1_policy_contract(
+def _load_stock_lora_d1_policy_contract(
     *,
     case_id: str,
     fresh_command: list[str],
     resume_command: list[str],
     repo_root: Path,
 ) -> dict[str, Any] | None:
-    if case_id not in SD_LORA_FULL_BF16_CASE_IDS:
+    target = _stock_lora_spec_for_case(case_id)
+    if target is None:
         return None
+    train_type, spec = target
 
     policy_paths: list[Path] = []
     policy_command_paths: list[Path] = []
-    expected_accumulation = (
-        "1"
-        if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
-        else "2"
-    )
+    expected_accumulation = "1" if case_id == spec["case_ids"][0] else "2"
     for phase, command in (("fresh", fresh_command), ("resume", resume_command)):
         hidden = _trainer_config_flattened(
             command,
@@ -617,6 +653,15 @@ def _load_sd_lora_d1_policy_contract(
                 "output_dir",
                 "output_name",
             }.intersection(hidden)
+            | (
+                {
+                    "cache_text_encoder_outputs",
+                    "cache_text_encoder_outputs_to_disk",
+                    "gradient_checkpointing",
+                    "save_model_as",
+                }.intersection(hidden)
+                if train_type == "sdxl-lora" else set()
+            )
         )
         if hidden_authority:
             raise BackendFeatureGpuMatrixError(
@@ -668,12 +713,30 @@ def _load_sd_lora_d1_policy_contract(
         for forbidden_target_flag in (
             "--network_train_unet_only",
             "--network_train_text_encoder_only",
+            "--cache_text_encoder_outputs",
+            "--cache_text_encoder_outputs_to_disk",
         ):
-            if forbidden_target_flag in command:
+            if forbidden_target_flag in command or any(
+                item.startswith(forbidden_target_flag + "=") for item in command
+            ):
                 raise BackendFeatureGpuMatrixError(
                     f"Backend feature case {case_id!r} {phase} command may not use "
-                    f"{forbidden_target_flag}; D1 must cover both U-Net and Text Encoder adapters."
+                    f"{forbidden_target_flag}; D1 requires live U-Net and Text Encoder adapters."
                 )
+        if train_type == "sdxl-lora" and (
+            "--gradient_checkpointing" in command
+            or any(item.startswith("--gradient_checkpointing=") for item in command)
+        ):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} must not enable "
+                "gradient_checkpointing until SDXL base-embedding ownership is qualified."
+            )
+        save_formats = _option_values(command, "--save_model_as")
+        if save_formats not in ([], ["safetensors"]):
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} {phase} must save real "
+                "safetensors adapter weights for qualification evidence."
+            )
 
         values = _option_values(command, "--parameter_policy_config")
         if len(values) != 1:
@@ -711,7 +774,7 @@ def _load_sd_lora_d1_policy_contract(
             f"sidecar {policy_path}: {exc}"
         ) from exc
 
-    expected_components = set(get_model_component_profile("sd-lora").components)
+    expected_components = set(get_model_component_profile(train_type).components)
     actual_components = set(policy["components"])
     if actual_components != expected_components:
         raise BackendFeatureGpuMatrixError(
@@ -733,7 +796,7 @@ def _load_sd_lora_d1_policy_contract(
         "unet.attention.adapter",
         "unet.feed_forward.adapter",
         "unet.conv.adapter",
-        "text_encoder.adapter",
+        *spec["text_components"],
     }
     missing_coverage = sorted(required_coverage.difference(trainable))
     if missing_coverage:
@@ -751,7 +814,42 @@ def _load_sd_lora_d1_policy_contract(
             )
         return str(profile.get("type") or "")
 
-    if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]:
+    def _explicit_conv_dim() -> int:
+        network_args = _nargs_option_values(fresh_command, "--network_args")
+        resume_network_args = _nargs_option_values(resume_command, "--network_args")
+        if network_args != resume_network_args:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} fresh/resume network_args must match."
+            )
+        parsed_network_args: dict[str, str] = {}
+        for item in network_args:
+            if "=" not in item:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args must use key=value."
+                )
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key or key in parsed_network_args:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args contain an "
+                    "empty or duplicate key."
+                )
+            parsed_network_args[key] = value.strip()
+        try:
+            conv_dim = int(parsed_network_args.get("conv_dim", ""))
+        except ValueError as exc:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} SDXL/D1 stock LoRA case requires "
+                "integer conv_dim>0 in explicit --network_args."
+            ) from exc
+        if conv_dim <= 0:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} SDXL/D1 stock LoRA case requires "
+                "conv_dim>0 so real Conv LoRA fallback parameters are created."
+            )
+        return conv_dim
+
+    if case_id == spec["case_ids"][0]:
         for component_id, route in trainable.items():
             if _profile_type(route.get("optimizer_profile")) != "AdamW":
                 raise BackendFeatureGpuMatrixError(
@@ -763,6 +861,7 @@ def _load_sd_lora_d1_policy_contract(
                     f"Backend feature case {case_id!r} AdamW case must not use "
                     "fallback routing."
                 )
+        conv_dim = _explicit_conv_dim() if train_type == "sdxl-lora" else None
         contract_kind = "adamw"
         fallback_component = None
     else:
@@ -792,7 +891,7 @@ def _load_sd_lora_d1_policy_contract(
             for component_id in (
                 "unet.attention.adapter",
                 "unet.feed_forward.adapter",
-                "text_encoder.adapter",
+                *spec["text_components"],
             )
             if component_id in trainable
             and _profile_type(trainable[component_id].get("optimizer_profile"))
@@ -801,44 +900,13 @@ def _load_sd_lora_d1_policy_contract(
         if set(linear_muon) != {
             "unet.attention.adapter",
             "unet.feed_forward.adapter",
-            "text_encoder.adapter",
+            *spec["text_components"],
         }:
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} must train U-Net hidden linear "
-                "and Text Encoder adapters through Muon."
+                "and every required Text Encoder adapter through Muon."
             )
-        network_args = _nargs_option_values(fresh_command, "--network_args")
-        resume_network_args = _nargs_option_values(resume_command, "--network_args")
-        if network_args != resume_network_args:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} fresh/resume network_args must match."
-            )
-        parsed_network_args: dict[str, str] = {}
-        for item in network_args:
-            if "=" not in item:
-                raise BackendFeatureGpuMatrixError(
-                    f"Backend feature case {case_id!r} network_args must use key=value."
-                )
-            key, value = item.split("=", 1)
-            key = key.strip()
-            if not key or key in parsed_network_args:
-                raise BackendFeatureGpuMatrixError(
-                    f"Backend feature case {case_id!r} network_args contain an "
-                    "empty or duplicate key."
-                )
-            parsed_network_args[key] = value.strip()
-        try:
-            conv_dim = int(parsed_network_args.get("conv_dim", ""))
-        except ValueError as exc:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} Muon/fallback case requires "
-                "integer conv_dim>0 in explicit --network_args."
-            ) from exc
-        if conv_dim <= 0:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} Muon/fallback case requires "
-                "conv_dim>0 so real Conv LoRA fallback parameters are created."
-            )
+        conv_dim = _explicit_conv_dim()
         contract_kind = "muon_adamw_fallback"
         fallback_component = "unet.conv.adapter"
 
@@ -848,19 +916,19 @@ def _load_sd_lora_d1_policy_contract(
         "command_path": str(policy_command_paths[0]),
         "raw_sha256": hashlib.sha256(policy_path.read_bytes()).hexdigest(),
         "policy_hash": hashlib.sha256(canonical_text.encode("utf-8")).hexdigest(),
-        "model_family": "sd1",
+        "model_family": spec["model_family"],
         "v2": False,
         "kind": contract_kind,
         "gradient_accumulation_steps": int(expected_accumulation),
         "mixed_precision": "bf16",
         "full_bf16": True,
         "network_module": "networks.lora",
-        "covers_text_encoder_adapter": "text_encoder.adapter" in trainable,
-        "conv_dim": (
-            conv_dim
-            if case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
-            else None
+        "covers_text_encoder_adapter": "text_encoder.adapter" in trainable
+        if train_type == "sd-lora" else None,
+        "covered_text_components": sorted(
+            set(spec["text_components"]).intersection(trainable)
         ),
+        "conv_dim": conv_dim,
         "profile_types": sorted(
             {
                 str(profile.get("type") or "")
@@ -1020,6 +1088,12 @@ def load_backend_feature_manifest(
                 f"Backend feature case {case_id!r} train_type={train_type!r} is "
                 "outside the D0/D1 backend qualification scope."
             )
+        stock_target = _stock_lora_spec_for_case(case_id)
+        if stock_target is not None and train_type != stock_target[0]:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} belongs to "
+                f"{stock_target[0]!r}, not {train_type!r}."
+            )
         feature = str(case.get("feature") or "").strip().lower()
         if feature != BACKEND_FEATURE_NAME:
             raise BackendFeatureGpuMatrixError(
@@ -1114,13 +1188,13 @@ def load_backend_feature_manifest(
             fresh_checkpoint=fresh_checkpoint,
             repo_root=repo_root,
         )
-        policy_contract = _load_sd_lora_d1_policy_contract(
+        policy_contract = _load_stock_lora_d1_policy_contract(
             case_id=case_id,
             fresh_command=commands["fresh_command"],
             resume_command=commands["resume_command"],
             repo_root=repo_root,
         )
-        input_contract = _build_sd_lora_d1_input_contract(
+        input_contract = _build_stock_lora_d1_input_contract(
             case_id=case_id,
             fresh_command=commands["fresh_command"],
             resume_command=commands["resume_command"],
@@ -1594,6 +1668,115 @@ def validate_shared_full_bf16_regression_evidence(
     }
 
 
+def _step_adapter_weights_file(checkpoint_dir: str | Path) -> Path:
+    """Resolve the stock LoRA step safetensors next to the Accelerator state."""
+    checkpoint = Path(checkpoint_dir)
+    if not checkpoint.name.endswith("-state"):
+        raise BackendFeatureGpuMatrixError(
+            "SDXL qualification state directory must end with '-state' "
+            "so its exact step adapter weights can be resolved."
+        )
+    weights = checkpoint.with_name(
+        checkpoint.name[: -len("-state")] + ".safetensors"
+    )
+    if not weights.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"SDXL qualification step adapter weights do not exist: {weights}."
+        )
+    return weights
+
+
+def compare_sdxl_lora_weight_updates(
+    fresh_checkpoint_dir: str | Path,
+    resume_checkpoint_dir: str | Path,
+    *,
+    require_conv_fallback: bool,
+) -> dict[str, Any]:
+    """Audit real step-1 to step-2 adapter changes for U-Net, TE1 and TE2.
+
+    Lazy imports keep the CPU-only qualification contract/tests torch-free.
+    The real-CUDA runner invokes this only after verifying both checkpoint
+    state manifests and live optimizer/scheduler step advancement.
+    """
+    try:
+        import torch
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise BackendFeatureGpuMatrixError(
+            "SDXL production weight evidence requires torch and safetensors."
+        ) from exc
+
+    fresh_file = _step_adapter_weights_file(fresh_checkpoint_dir)
+    resume_file = _step_adapter_weights_file(resume_checkpoint_dir)
+    counts = {"unet": 0, "te1": 0, "te2": 0, "conv3x3": 0}
+    totals = {"unet": 0, "te1": 0, "te2": 0, "conv3x3": 0}
+    with safe_open(str(fresh_file), framework="pt", device="cpu") as first:
+        with safe_open(str(resume_file), framework="pt", device="cpu") as second:
+            first_keys = set(first.keys())
+            second_keys = set(second.keys())
+            if first_keys != second_keys:
+                raise BackendFeatureGpuMatrixError(
+                    "SDXL fresh/resume adapter weight key set mismatch: "
+                    f"fresh={len(first_keys)}, resumed={len(second_keys)}."
+                )
+            for key in sorted(first_keys):
+                if not key.endswith(".weight"):
+                    continue
+                if key.startswith("lora_te1_"):
+                    group = "te1"
+                elif key.startswith("lora_te2_"):
+                    group = "te2"
+                elif key.startswith("lora_unet_"):
+                    group = "unet"
+                else:
+                    raise BackendFeatureGpuMatrixError(
+                        f"Unexpected SDXL stock-LoRA trainable tensor key: {key!r}."
+                    )
+                before = first.get_tensor(key)
+                after = second.get_tensor(key)
+                if (
+                    before.shape != after.shape
+                    or before.dtype != after.dtype
+                    or not torch.isfinite(before).all().item()
+                    or not torch.isfinite(after).all().item()
+                ):
+                    raise BackendFeatureGpuMatrixError(
+                        f"SDXL adapter weight {key!r} shape/dtype/finite check failed."
+                    )
+                changed = not torch.equal(before, after)
+                totals[group] += 1
+                if changed:
+                    counts[group] += 1
+                if (
+                    group == "unet"
+                    and before.ndim == 4
+                    and any(side > 1 for side in before.shape[-2:])
+                ):
+                    totals["conv3x3"] += 1
+                    if changed:
+                        counts["conv3x3"] += 1
+
+    required = ("unet", "te1", "te2") + (
+        ("conv3x3",) if require_conv_fallback else ()
+    )
+    missing = [name for name in required if counts[name] <= 0]
+    if missing:
+        raise BackendFeatureGpuMatrixError(
+            "SDXL step-1 -> step-2 has no adapter parameter advancement "
+            f"for required component(s): {missing!r}; totals={totals!r}, "
+            f"changed={counts!r}."
+        )
+    return {
+        "model_family": "sdxl-base",
+        "weight_keys_match": True,
+        "fresh_weights_sha256": _sha256_file(fresh_file),
+        "resume_weights_sha256": _sha256_file(resume_file),
+        "total_tensor_counts": totals,
+        "changed_tensor_counts": counts,
+        "required_groups": list(required),
+    }
+
+
 def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
     if not isinstance(payload, dict):
         return None
@@ -1618,37 +1801,40 @@ def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
     return frozenset(profile_types)
 
 
-def summarize_sd_lora_full_bf16_promotion(
+def _summarize_stock_lora_full_bf16_promotion(
     case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
     shared_regression_contract: dict[str, Any] | None,
+    *,
+    train_type: str,
 ) -> dict[str, Any]:
+    """Qualify one exact stock-LoRA backend, retaining independent evidence IDs."""
+    spec = D1_STOCK_LORA_SPECS[train_type]
+    case_ids = spec["case_ids"]
     rows = {
         row.get("case_id"): row
         for row in case_rows
-        if row.get("case_id") in SD_LORA_FULL_BF16_CASE_IDS
+        if row.get("case_id") in case_ids
     }
-    missing_cases = sorted(set(SD_LORA_FULL_BF16_CASE_IDS).difference(rows))
+    missing_cases = sorted(set(case_ids).difference(rows))
     failed_cases = sorted(
-        case_id
-        for case_id, row in rows.items()
-        if row.get("status") != "pass"
+        case_id for case_id, row in rows.items() if row.get("status") != "pass"
     )
 
     case_contract_errors: list[str] = []
-    for case_id, expected_optimizers in _SD_LORA_CASE_OPTIMIZER_TYPES.items():
+    for case_id, expected_optimizers in spec["optimizer_types"].items():
         row = rows.get(case_id)
         if row is None:
             continue
-        if row.get("train_type") != "sd-lora" or row.get("feature") != "full_bf16":
+        if row.get("train_type") != train_type or row.get("feature") != "full_bf16":
             case_contract_errors.append(
-                f"{case_id}: expected sd-lora/full_bf16 case identity."
+                f"{case_id}: expected {train_type}/full_bf16 case identity."
             )
             continue
         input_contract = row.get("input_contract")
         if (
             not isinstance(input_contract, dict)
-            or input_contract.get("model_family") != "sd1"
+            or input_contract.get("model_family") != spec["model_family"]
             or input_contract.get("v2") is not False
             or not isinstance(input_contract.get("signature"), str)
             or not input_contract.get("signature")
@@ -1665,21 +1851,14 @@ def summarize_sd_lora_full_bf16_promotion(
             or row.get("pre_resume_input_contract_valid") is not True
         ):
             case_contract_errors.append(
-                f"{case_id}: D1 SD1 lifecycle input identity is incomplete or "
-                "was not revalidated before fresh/resume."
+                f"{case_id}: D1 {train_type} lifecycle input identity is "
+                "incomplete or was not revalidated before fresh/resume."
             )
 
         policy_contract = row.get("policy_contract")
-        expected_policy_kind = (
-            "adamw"
-            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
-            else "muon_adamw_fallback"
-        )
-        expected_accumulation = (
-            1
-            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
-            else 2
-        )
+        adamw_case = case_id == case_ids[0]
+        expected_policy_kind = "adamw" if adamw_case else "muon_adamw_fallback"
+        expected_accumulation = 1 if adamw_case else 2
         if (
             not isinstance(policy_contract, dict)
             or policy_contract.get("kind") != expected_policy_kind
@@ -1688,11 +1867,16 @@ def summarize_sd_lora_full_bf16_promotion(
             or policy_contract.get("mixed_precision") != "bf16"
             or policy_contract.get("full_bf16") is not True
             or policy_contract.get("network_module") != "networks.lora"
-            or policy_contract.get("model_family") != "sd1"
+            or policy_contract.get("model_family") != spec["model_family"]
             or policy_contract.get("v2") is not False
-            or policy_contract.get("covers_text_encoder_adapter") is not True
+            or sorted(policy_contract.get("covered_text_components") or [])
+            != sorted(spec["text_components"])
             or (
-                case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+                train_type == "sd-lora"
+                and policy_contract.get("covers_text_encoder_adapter") is not True
+            )
+            or (
+                not adamw_case
                 and (
                     not isinstance(policy_contract.get("conv_dim"), int)
                     or policy_contract.get("conv_dim") <= 0
@@ -1702,9 +1886,9 @@ def summarize_sd_lora_full_bf16_promotion(
             case_contract_errors.append(
                 f"{case_id}: expected policy/execution contract kind "
                 f"{expected_policy_kind!r}, accumulation={expected_accumulation}, "
-                "mixed_precision='bf16', full_bf16=true."
+                "full_bf16=true and every required Text Encoder adapter."
             )
-        elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1] and (
+        elif not adamw_case and (
             policy_contract.get("fallback_component") != "unet.conv.adapter"
         ):
             case_contract_errors.append(
@@ -1741,12 +1925,34 @@ def summarize_sd_lora_full_bf16_promotion(
                 f"resume={sorted(resumed_types) if resumed_types is not None else None!r}."
             )
 
+        if train_type == "sdxl-lora":
+            # The second physical optimizer step must change adapters connected
+            # to U-Net and *each* Text Encoder; Conv fallback must be exercised.
+            update = row.get("component_update_evidence")
+            counts = update.get("changed_tensor_counts") if isinstance(update, dict) else None
+            required = ("unet", "te1", "te2", "conv3x3")
+            if (
+                not isinstance(counts, dict)
+                or update.get("model_family") != "sdxl-base"
+                or update.get("weight_keys_match") is not True
+                or any(
+                    isinstance(counts.get(component), bool)
+                    or not isinstance(counts.get(component), int)
+                    or counts[component] <= 0
+                    for component in required
+                )
+            ):
+                case_contract_errors.append(
+                    f"{case_id}: real SDXL U-Net/TE1/TE2/Conv LoRA weight "
+                    "advancement evidence is missing or incomplete."
+                )
+
     backends = qualification_snapshot.get("backends", {})
     optimizers = qualification_snapshot.get("optimizers", {})
-    backend_row = backends.get("sd-lora", {})
+    backend_row = backends.get(train_type, {})
     backend_row_match = (
         backend_row.get("status") == "qualified"
-        and backend_row.get("evidence_case_id") == SD_LORA_FULL_BF16_EVIDENCE_ID
+        and backend_row.get("evidence_case_id") == spec["evidence_id"]
     )
     shared_optimizer_authority_match = all(
         optimizers.get(name, {}).get("status") == "qualified"
@@ -1754,10 +1960,15 @@ def summarize_sd_lora_full_bf16_promotion(
         == SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID
         for name in ("AdamW", "Muon")
     )
+    allowed_backend_evidence = {
+        name: definition["evidence_id"]
+        for name, definition in D1_STOCK_LORA_SPECS.items()
+    }
     unexpected_backend_promotions = sorted(
         name
         for name, row in backends.items()
-        if name != "sd-lora" and row.get("status") == "qualified"
+        if row.get("status") == "qualified"
+        and row.get("evidence_case_id") != allowed_backend_evidence.get(name)
     )
     unexpected_optimizer_promotions = sorted(
         name
@@ -1784,11 +1995,11 @@ def summarize_sd_lora_full_bf16_promotion(
     )
     status = "pass" if complete and source_scope_valid else "fail"
     return {
-        "id": SD_LORA_FULL_BF16_EVIDENCE_ID,
+        "id": spec["evidence_id"],
         "scope": "backend_promotion",
         "feature": "full_bf16",
-        "train_type": "sd-lora",
-        "required_cases": list(SD_LORA_FULL_BF16_CASE_IDS),
+        "train_type": train_type,
+        "required_cases": list(case_ids),
         "missing_cases": missing_cases,
         "failed_cases": failed_cases,
         "case_contract_errors": case_contract_errors,
@@ -1814,6 +2025,28 @@ def summarize_sd_lora_full_bf16_promotion(
     }
 
 
+def summarize_sd_lora_full_bf16_promotion(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+    shared_regression_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return _summarize_stock_lora_full_bf16_promotion(
+        case_rows, qualification_snapshot, shared_regression_contract,
+        train_type="sd-lora",
+    )
+
+
+def summarize_sdxl_lora_full_bf16_promotion(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+    shared_regression_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return _summarize_stock_lora_full_bf16_promotion(
+        case_rows, qualification_snapshot, shared_regression_contract,
+        train_type="sdxl-lora",
+    )
+
+
 __all__ = [
     "BACKEND_FEATURE_EVIDENCE_SCHEMA",
     "BACKEND_FEATURE_EVIDENCE_VERSION",
@@ -1825,13 +2058,18 @@ __all__ = [
     "D0_D1_BACKEND_FEATURE_TRAIN_TYPES",
     "SD_LORA_FULL_BF16_CASE_IDS",
     "SD_LORA_FULL_BF16_EVIDENCE_ID",
+    "SDXL_LORA_FULL_BF16_CASE_IDS",
+    "SDXL_LORA_FULL_BF16_EVIDENCE_ID",
+    "D1_STOCK_LORA_SPECS",
     "SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID",
     "BackendFeatureGpuMatrixError",
     "backend_feature_qualification_snapshot",
     "compare_backend_checkpoint_contracts",
     "compare_checkpoint_progress",
+    "compare_sdxl_lora_weight_updates",
     "load_backend_feature_manifest",
     "summarize_sd_lora_full_bf16_promotion",
+    "summarize_sdxl_lora_full_bf16_promotion",
     "validate_case_input_contract",
     "validate_checkpoint_progress",
     "validate_full_bf16_checkpoint_manifest",

@@ -840,19 +840,19 @@ class NetworkTrainer:
             if key in metadata:
                 minimum_metadata[key] = metadata[key]
 
-        # D1 SD1 stock LoRA full-BF16 restores optimizer/scheduler via Accelerate,
+        # D1 SD1/SDXL stock LoRA full-BF16 restores optimizer/scheduler via Accelerate,
         # but the legacy loop owns the logical step and dataloader position.
-        # Keep this opt-in path isolated from Standard, SDXL and other backends.
+        # Keep this opt-in path isolated from Standard, SD2 and other backends.
         d1_resume_cursor = None
         if (
             parameter_policy_session is not None
-            and parameter_policy_train_type == "sd-lora"
+            and parameter_policy_train_type in {"sd-lora", "sdxl-lora"}
             and args.full_bf16
             and not args.v2
             and args.network_module == "networks.lora"
             and bool(args.resume)
         ):
-            d1_resume_cursor = parameter_policy_bridge.plan_sd_lora_full_bf16_resume(
+            d1_resume_cursor = parameter_policy_bridge.plan_stock_lora_full_bf16_resume(
                 saved_step=steps_from_state,
                 saved_epoch=epoch_from_state,
                 max_train_steps=args.max_train_steps,
@@ -864,7 +864,7 @@ class NetworkTrainer:
                 skip_until_initial_step=args.skip_until_initial_step,
             )
             logger.info(
-                "D1 SD1 LoRA resume: completed optimizer steps=%d, "
+                "D1 stock LoRA resume: completed optimizer steps=%d, "
                 "next epoch=%d, skip batches=%d, remaining optimizer steps=%d",
                 d1_resume_cursor.completed_steps,
                 d1_resume_cursor.epoch_to_start + 1,

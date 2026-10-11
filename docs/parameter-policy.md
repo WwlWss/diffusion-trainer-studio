@@ -244,3 +244,43 @@ If Component Preview is blocked:
 For new workflows, a useful pattern is to configure a working Standard run
 first, Preview it, then switch to Component and let the exact bootstrap seed the
 policy before making component-specific changes.
+
+## Phase D1: SDXL Base stock-LoRA full-BF16 qualification (candidate)
+
+This work is an **independent backend promotion** from SD1.x LoRA. Until its
+same-exact-head physical CUDA evidence passes and the PR is merged, this is a
+review candidate, **not an approved production release**.
+
+- Canonical trainer: `scripts/stable/sdxl_train_network.py` with `networks.lora`,
+  single-GPU SDXL **Base** checkpoint, `--mixed_precision bf16 --full_bf16`.
+- Component set: `unet.attention.adapter`, `unet.feed_forward.adapter`,
+  `unet.conv.adapter`, `unet.other.adapter`, `text_encoder_1.adapter`
+  (CLIP-L), and `text_encoder_2.adapter` (OpenCLIP-bigG). The reference
+  policies train the first three U-Net components plus both Text Encoders;
+  `unet.other.adapter` is explicitly frozen. Both cases set `conv_dim>0`
+  to generate **real 3x3 convolutional LoRA** parameters.
+- Two reference cases: AdamW accumulation 1; Muon (eligible 2D hidden
+  adapters) + explicit AdamW fallback (noneligible convolutional adapters)
+  accumulation 2.
+- New evidence ID: `phase-d1:backend:sdxl-base-lora:full-bf16:v1`.
+  SD1 retains `phase-d1:backend:sd-lora-sd1:full-bf16:v2` unchanged.
+- The strict backend runner demands a clean exact-head checkout and matching
+  8/8 shared C1–C4 regression on that same SHA and qualification environment.
+  Fresh step-1 state must resume to step 2 (only one additional optimizer and
+  scheduler advance), preserving checkpoint parent lineage, policy and
+  execution identities. It also compares the **real saved LoRA safetensors**
+  across steps, requiring changes in U-Net, TE1, TE2 and 3x3 Conv weights in
+  **both** SDXL cases.
+- SDXL full-BF16 with Text Encoder gradient checkpointing is **not** included:
+  the inherited stock trainer currently sets base Text Encoder embedding
+  `requires_grad=True` when gradient checkpointing is enabled, which is not
+  tracked by the adapter-only Parameter Policy ownership root. This variant
+  stays fail-closed until it receives a separate identity and backward audit.
+- TE output caching must remain off when training both Text Encoders. Latent
+  caching is allowed under its existing dataset constraints. Qualifying at
+  512x512 does **not** qualify a 1024x1024 performance/memory target,
+  SDXL Refiner, SDXL full finetuning, block-level LoRA LR, or offload.
+
+The SDXL reference path reuses the SD1 stock LoRA resume cursor and existing
+CompositeOptimizer/CompositeScheduler checkpoint schema. It does not add a
+second trainer loop, optimizer implementation or hidden full-BF16 bypass.

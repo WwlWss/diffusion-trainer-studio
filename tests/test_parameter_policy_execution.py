@@ -380,7 +380,7 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             },
             {
                 "sd-lora": "qualified",
-                "sdxl-lora": "pending",
+                "sdxl-lora": "qualified",
                 "sd-dreambooth": "unsupported",
                 "sdxl-finetune": "pending",
                 "sd3-lora": "pending",
@@ -439,13 +439,22 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
             "phase-d1:backend:sd-lora-sd1:full-bf16:v2",
         )
 
-    def test_d1_does_not_qualify_any_other_backend(self):
+    def test_d1_qualified_stock_lora_backends_use_distinct_evidence(self):
         qualified = {
             name
             for name, row in execution.FULL_BF16_BACKEND_QUALIFICATIONS.items()
             if row.status == "qualified"
         }
-        self.assertEqual(qualified, {"sd-lora"})
+        self.assertEqual(qualified, {"sd-lora", "sdxl-lora"})
+        sdxl = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sdxl-lora"]
+        self.assertEqual(
+            sdxl.evidence_case_id,
+            "phase-d1:backend:sdxl-base-lora:full-bf16:v1",
+        )
+        self.assertNotEqual(
+            sdxl.evidence_case_id,
+            execution.FULL_BF16_SD_LORA_EVIDENCE_ID,
+        )
 
     def test_sd_dreambooth_starts_explicitly_unsupported(self):
         row = execution.FULL_BF16_BACKEND_QUALIFICATIONS["sd-dreambooth"]
@@ -586,6 +595,30 @@ class ParameterPolicyExecutionQualificationTests(unittest.TestCase):
         self.assertEqual(len(blocked), 1)
         self.assertIn("SD1.x only", blocked[0])
         self.assertIn("SD2.x", blocked[0])
+
+    def test_sdxl_full_bf16_qualifies_without_gradient_checkpointing(self):
+        options = {"full_bf16": True, "mixed_precision": "bf16"}
+        self.assertEqual(
+            execution.parameter_policy_execution_blockers(
+                _policy(), train_type="sdxl-lora", effective_config=options
+            ),
+            [],
+        )
+        blocked = execution.parameter_policy_execution_blockers(
+            _policy(),
+            train_type="sdxl-lora",
+            effective_config={**options, "gradient_checkpointing": True},
+        )
+        self.assertEqual(len(blocked), 1)
+        self.assertIn("embedding", blocked[0].lower())
+        self.assertEqual(
+            execution.parameter_policy_execution_blockers(
+                _policy(),
+                train_type="sdxl-lora",
+                effective_config={"full_bf16": False, "gradient_checkpointing": True},
+            ),
+            [],
+        )
 
     def test_pending_and_unsupported_backends_fail_closed(self):
         pending = execution.parameter_policy_execution_blockers(

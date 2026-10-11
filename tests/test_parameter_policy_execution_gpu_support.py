@@ -271,11 +271,12 @@ class SharedFullBf16PromotionTests(unittest.TestCase):
 
     def _d0_snapshot(self):
         snapshot = self._snapshot()
-        snapshot["backends"]["sd-lora"] = {
-            "status": "pending",
-            "reason": "D0 source scope keeps every backend closed.",
-            "evidence_case_id": None,
-        }
+        for backend in ("sd-lora", "sdxl-lora"):
+            snapshot["backends"][backend] = {
+                "status": "pending",
+                "reason": "D0 source scope keeps every backend closed.",
+                "evidence_case_id": None,
+            }
         return snapshot
 
     def _passing_rows(self):
@@ -359,7 +360,10 @@ class SharedFullBf16RegressionTests(SharedFullBf16PromotionTests):
             self._snapshot(),
         )
         self.assertEqual(summary["status"], "fail")
-        self.assertEqual(summary["unexpected_backend_promotions"], ["sd-lora"])
+        self.assertEqual(
+            summary["unexpected_backend_promotions"],
+            ["sd-lora", "sdxl-lora"],
+        )
 
     def test_regression_allows_current_d1_backend_qualification(self):
         summary = summarize_shared_full_bf16_regression(
