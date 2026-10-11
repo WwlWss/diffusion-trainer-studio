@@ -1656,6 +1656,115 @@ def validate_shared_full_bf16_regression_evidence(
     }
 
 
+def _step_adapter_weights_file(checkpoint_dir: str | Path) -> Path:
+    """Resolve the stock LoRA step safetensors next to the Accelerator state."""
+    checkpoint = Path(checkpoint_dir)
+    if not checkpoint.name.endswith("-state"):
+        raise BackendFeatureGpuMatrixError(
+            "SDXL qualification state directory must end with '-state' "
+            "so its exact step adapter weights can be resolved."
+        )
+    weights = checkpoint.with_name(
+        checkpoint.name[: -len("-state")] + ".safetensors"
+    )
+    if not weights.is_file():
+        raise BackendFeatureGpuMatrixError(
+            f"SDXL qualification step adapter weights do not exist: {weights}."
+        )
+    return weights
+
+
+def compare_sdxl_lora_weight_updates(
+    fresh_checkpoint_dir: str | Path,
+    resume_checkpoint_dir: str | Path,
+    *,
+    require_conv_fallback: bool,
+) -> dict[str, Any]:
+    """Audit real step-1 to step-2 adapter changes for U-Net, TE1 and TE2.
+
+    Lazy imports keep the CPU-only qualification contract/tests torch-free.
+    The real-CUDA runner invokes this only after verifying both checkpoint
+    state manifests and live optimizer/scheduler step advancement.
+    """
+    try:
+        import torch
+        from safetensors import safe_open
+    except ImportError as exc:
+        raise BackendFeatureGpuMatrixError(
+            "SDXL production weight evidence requires torch and safetensors."
+        ) from exc
+
+    fresh_file = _step_adapter_weights_file(fresh_checkpoint_dir)
+    resume_file = _step_adapter_weights_file(resume_checkpoint_dir)
+    counts = {"unet": 0, "te1": 0, "te2": 0, "conv3x3": 0}
+    totals = {"unet": 0, "te1": 0, "te2": 0, "conv3x3": 0}
+    with safe_open(str(fresh_file), framework="pt", device="cpu") as first:
+        with safe_open(str(resume_file), framework="pt", device="cpu") as second:
+            first_keys = set(first.keys())
+            second_keys = set(second.keys())
+            if first_keys != second_keys:
+                raise BackendFeatureGpuMatrixError(
+                    "SDXL fresh/resume adapter weight key set mismatch: "
+                    f"fresh={len(first_keys)}, resumed={len(second_keys)}."
+                )
+            for key in sorted(first_keys):
+                if not key.endswith(".weight"):
+                    continue
+                if key.startswith("lora_te1_"):
+                    group = "te1"
+                elif key.startswith("lora_te2_"):
+                    group = "te2"
+                elif key.startswith("lora_unet_"):
+                    group = "unet"
+                else:
+                    raise BackendFeatureGpuMatrixError(
+                        f"Unexpected SDXL stock-LoRA trainable tensor key: {key!r}."
+                    )
+                before = first.get_tensor(key)
+                after = second.get_tensor(key)
+                if (
+                    before.shape != after.shape
+                    or before.dtype != after.dtype
+                    or not torch.isfinite(before).all().item()
+                    or not torch.isfinite(after).all().item()
+                ):
+                    raise BackendFeatureGpuMatrixError(
+                        f"SDXL adapter weight {key!r} shape/dtype/finite check failed."
+                    )
+                changed = not torch.equal(before, after)
+                totals[group] += 1
+                if changed:
+                    counts[group] += 1
+                if (
+                    group == "unet"
+                    and before.ndim == 4
+                    and any(side > 1 for side in before.shape[-2:])
+                ):
+                    totals["conv3x3"] += 1
+                    if changed:
+                        counts["conv3x3"] += 1
+
+    required = ("unet", "te1", "te2") + (
+        ("conv3x3",) if require_conv_fallback else ()
+    )
+    missing = [name for name in required if counts[name] <= 0]
+    if missing:
+        raise BackendFeatureGpuMatrixError(
+            "SDXL step-1 -> step-2 has no adapter parameter advancement "
+            f"for required component(s): {missing!r}; totals={totals!r}, "
+            f"changed={counts!r}."
+        )
+    return {
+        "model_family": "sdxl-base",
+        "weight_keys_match": True,
+        "fresh_weights_sha256": _sha256_file(fresh_file),
+        "resume_weights_sha256": _sha256_file(resume_file),
+        "total_tensor_counts": totals,
+        "changed_tensor_counts": counts,
+        "required_groups": list(required),
+    }
+
+
 def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
     if not isinstance(payload, dict):
         return None
@@ -1945,6 +2054,7 @@ __all__ = [
     "backend_feature_qualification_snapshot",
     "compare_backend_checkpoint_contracts",
     "compare_checkpoint_progress",
+    "compare_sdxl_lora_weight_updates",
     "load_backend_feature_manifest",
     "summarize_sd_lora_full_bf16_promotion",
     "summarize_sdxl_lora_full_bf16_promotion",
