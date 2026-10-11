@@ -214,6 +214,7 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
 
 
 def _sdxl_lora_case(root: Path, case_id: str) -> dict:
+    root.mkdir(parents=True, exist_ok=True)
     source_case = (
         SD_LORA_FULL_BF16_CASE_IDS[0]
         if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[0]
