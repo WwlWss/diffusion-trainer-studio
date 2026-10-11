@@ -137,12 +137,15 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     BACKEND_FEATURE_EVIDENCE_SCHEMA,
     BACKEND_FEATURE_EVIDENCE_VERSION,
     SD_LORA_FULL_BF16_CASE_IDS,
+    SDXL_LORA_FULL_BF16_CASE_IDS,
     BackendFeatureGpuMatrixError,
     backend_feature_qualification_snapshot,
     compare_backend_checkpoint_contracts,
     compare_checkpoint_progress,
+    compare_sdxl_lora_weight_updates,
     load_backend_feature_manifest,
     summarize_sd_lora_full_bf16_promotion,
+    summarize_sdxl_lora_full_bf16_promotion,
     validate_case_input_contract,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
@@ -462,6 +465,14 @@ def _run_case(
         row["resume_checkpoint_progress"] = resumed_progress
         compare_backend_checkpoint_contracts(fresh_manifest, resumed_manifest)
         compare_checkpoint_progress(fresh_progress, resumed_progress)
+        if case["case_id"] in SDXL_LORA_FULL_BF16_CASE_IDS:
+            row["component_update_evidence"] = compare_sdxl_lora_weight_updates(
+                case["fresh_checkpoint_dir"],
+                case["resume_checkpoint_dir"],
+                require_conv_fallback=(
+                    case["case_id"] == SDXL_LORA_FULL_BF16_CASE_IDS[1]
+                ),
+            )
         row["status"] = "pass"
     except Exception as exc:
         row["error"] = f"{type(exc).__name__}: {exc}"
@@ -565,14 +576,26 @@ def main() -> int:
     evidence["final_provenance_commit"] = _assert_clean_head(
         args.expected_commit
     )
+    promotions: dict[str, dict[str, Any]] = {}
     if set(selected).intersection(SD_LORA_FULL_BF16_CASE_IDS):
-        backend_promotion = summarize_sd_lora_full_bf16_promotion(
+        promotions["sd-lora"] = summarize_sd_lora_full_bf16_promotion(
             evidence["cases"],
             qualification_snapshot,
             shared_regression_contract,
         )
-        evidence["backend_promotion"] = backend_promotion
-        if backend_promotion["status"] != "pass":
+    if set(selected).intersection(SDXL_LORA_FULL_BF16_CASE_IDS):
+        promotions["sdxl-lora"] = summarize_sdxl_lora_full_bf16_promotion(
+            evidence["cases"],
+            qualification_snapshot,
+            shared_regression_contract,
+        )
+    if promotions:
+        # Preserve the D1 SD1 single-backend JSON ABI; multiple backends can
+        # still be audited independently without accepting partial promotion.
+        evidence["backend_promotions"] = promotions
+        if len(promotions) == 1:
+            evidence["backend_promotion"] = next(iter(promotions.values()))
+        if any(row["status"] != "pass" for row in promotions.values()):
             failed = True
 
     _write_json(output_path, evidence)
