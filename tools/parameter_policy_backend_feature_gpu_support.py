@@ -1680,37 +1680,40 @@ def _checkpoint_optimizer_types(payload: Any) -> frozenset[str] | None:
     return frozenset(profile_types)
 
 
-def summarize_sd_lora_full_bf16_promotion(
+def _summarize_stock_lora_full_bf16_promotion(
     case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
     qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
     shared_regression_contract: dict[str, Any] | None,
+    *,
+    train_type: str,
 ) -> dict[str, Any]:
+    """Qualify one exact stock-LoRA backend, retaining independent evidence IDs."""
+    spec = D1_STOCK_LORA_SPECS[train_type]
+    case_ids = spec["case_ids"]
     rows = {
         row.get("case_id"): row
         for row in case_rows
-        if row.get("case_id") in SD_LORA_FULL_BF16_CASE_IDS
+        if row.get("case_id") in case_ids
     }
-    missing_cases = sorted(set(SD_LORA_FULL_BF16_CASE_IDS).difference(rows))
+    missing_cases = sorted(set(case_ids).difference(rows))
     failed_cases = sorted(
-        case_id
-        for case_id, row in rows.items()
-        if row.get("status") != "pass"
+        case_id for case_id, row in rows.items() if row.get("status") != "pass"
     )
 
     case_contract_errors: list[str] = []
-    for case_id, expected_optimizers in _SD_LORA_CASE_OPTIMIZER_TYPES.items():
+    for case_id, expected_optimizers in spec["optimizer_types"].items():
         row = rows.get(case_id)
         if row is None:
             continue
-        if row.get("train_type") != "sd-lora" or row.get("feature") != "full_bf16":
+        if row.get("train_type") != train_type or row.get("feature") != "full_bf16":
             case_contract_errors.append(
-                f"{case_id}: expected sd-lora/full_bf16 case identity."
+                f"{case_id}: expected {train_type}/full_bf16 case identity."
             )
             continue
         input_contract = row.get("input_contract")
         if (
             not isinstance(input_contract, dict)
-            or input_contract.get("model_family") != "sd1"
+            or input_contract.get("model_family") != spec["model_family"]
             or input_contract.get("v2") is not False
             or not isinstance(input_contract.get("signature"), str)
             or not input_contract.get("signature")
@@ -1727,21 +1730,14 @@ def summarize_sd_lora_full_bf16_promotion(
             or row.get("pre_resume_input_contract_valid") is not True
         ):
             case_contract_errors.append(
-                f"{case_id}: D1 SD1 lifecycle input identity is incomplete or "
-                "was not revalidated before fresh/resume."
+                f"{case_id}: D1 {train_type} lifecycle input identity is "
+                "incomplete or was not revalidated before fresh/resume."
             )
 
         policy_contract = row.get("policy_contract")
-        expected_policy_kind = (
-            "adamw"
-            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
-            else "muon_adamw_fallback"
-        )
-        expected_accumulation = (
-            1
-            if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
-            else 2
-        )
+        adamw_case = case_id == case_ids[0]
+        expected_policy_kind = "adamw" if adamw_case else "muon_adamw_fallback"
+        expected_accumulation = 1 if adamw_case else 2
         if (
             not isinstance(policy_contract, dict)
             or policy_contract.get("kind") != expected_policy_kind
@@ -1750,11 +1746,16 @@ def summarize_sd_lora_full_bf16_promotion(
             or policy_contract.get("mixed_precision") != "bf16"
             or policy_contract.get("full_bf16") is not True
             or policy_contract.get("network_module") != "networks.lora"
-            or policy_contract.get("model_family") != "sd1"
+            or policy_contract.get("model_family") != spec["model_family"]
             or policy_contract.get("v2") is not False
-            or policy_contract.get("covers_text_encoder_adapter") is not True
+            or sorted(policy_contract.get("covered_text_components") or [])
+            != sorted(spec["text_components"])
             or (
-                case_id == SD_LORA_FULL_BF16_CASE_IDS[1]
+                train_type == "sd-lora"
+                and policy_contract.get("covers_text_encoder_adapter") is not True
+            )
+            or (
+                not adamw_case
                 and (
                     not isinstance(policy_contract.get("conv_dim"), int)
                     or policy_contract.get("conv_dim") <= 0
@@ -1764,9 +1765,9 @@ def summarize_sd_lora_full_bf16_promotion(
             case_contract_errors.append(
                 f"{case_id}: expected policy/execution contract kind "
                 f"{expected_policy_kind!r}, accumulation={expected_accumulation}, "
-                "mixed_precision='bf16', full_bf16=true."
+                "full_bf16=true and every required Text Encoder adapter."
             )
-        elif case_id == SD_LORA_FULL_BF16_CASE_IDS[1] and (
+        elif not adamw_case and (
             policy_contract.get("fallback_component") != "unet.conv.adapter"
         ):
             case_contract_errors.append(
@@ -1803,12 +1804,34 @@ def summarize_sd_lora_full_bf16_promotion(
                 f"resume={sorted(resumed_types) if resumed_types is not None else None!r}."
             )
 
+        if train_type == "sdxl-lora":
+            # The second physical optimizer step must change adapters connected
+            # to U-Net and *each* Text Encoder; Conv fallback must be exercised.
+            update = row.get("component_update_evidence")
+            counts = update.get("changed_tensor_counts") if isinstance(update, dict) else None
+            required = ("unet", "te1", "te2") + (() if adamw_case else ("conv3x3",))
+            if (
+                not isinstance(counts, dict)
+                or update.get("model_family") != "sdxl-base"
+                or update.get("weight_keys_match") is not True
+                or any(
+                    isinstance(counts.get(component), bool)
+                    or not isinstance(counts.get(component), int)
+                    or counts[component] <= 0
+                    for component in required
+                )
+            ):
+                case_contract_errors.append(
+                    f"{case_id}: real SDXL U-Net/TE1/TE2/Conv LoRA weight "
+                    "advancement evidence is missing or incomplete."
+                )
+
     backends = qualification_snapshot.get("backends", {})
     optimizers = qualification_snapshot.get("optimizers", {})
-    backend_row = backends.get("sd-lora", {})
+    backend_row = backends.get(train_type, {})
     backend_row_match = (
         backend_row.get("status") == "qualified"
-        and backend_row.get("evidence_case_id") == SD_LORA_FULL_BF16_EVIDENCE_ID
+        and backend_row.get("evidence_case_id") == spec["evidence_id"]
     )
     shared_optimizer_authority_match = all(
         optimizers.get(name, {}).get("status") == "qualified"
@@ -1816,10 +1839,15 @@ def summarize_sd_lora_full_bf16_promotion(
         == SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID
         for name in ("AdamW", "Muon")
     )
+    allowed_backend_evidence = {
+        name: definition["evidence_id"]
+        for name, definition in D1_STOCK_LORA_SPECS.items()
+    }
     unexpected_backend_promotions = sorted(
         name
         for name, row in backends.items()
-        if name != "sd-lora" and row.get("status") == "qualified"
+        if row.get("status") == "qualified"
+        and row.get("evidence_case_id") != allowed_backend_evidence.get(name)
     )
     unexpected_optimizer_promotions = sorted(
         name
@@ -1846,11 +1874,11 @@ def summarize_sd_lora_full_bf16_promotion(
     )
     status = "pass" if complete and source_scope_valid else "fail"
     return {
-        "id": SD_LORA_FULL_BF16_EVIDENCE_ID,
+        "id": spec["evidence_id"],
         "scope": "backend_promotion",
         "feature": "full_bf16",
-        "train_type": "sd-lora",
-        "required_cases": list(SD_LORA_FULL_BF16_CASE_IDS),
+        "train_type": train_type,
+        "required_cases": list(case_ids),
         "missing_cases": missing_cases,
         "failed_cases": failed_cases,
         "case_contract_errors": case_contract_errors,
@@ -1876,6 +1904,28 @@ def summarize_sd_lora_full_bf16_promotion(
     }
 
 
+def summarize_sd_lora_full_bf16_promotion(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+    shared_regression_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return _summarize_stock_lora_full_bf16_promotion(
+        case_rows, qualification_snapshot, shared_regression_contract,
+        train_type="sd-lora",
+    )
+
+
+def summarize_sdxl_lora_full_bf16_promotion(
+    case_rows: list[dict[str, Any]] | tuple[dict[str, Any], ...],
+    qualification_snapshot: dict[str, dict[str, dict[str, Any]]],
+    shared_regression_contract: dict[str, Any] | None,
+) -> dict[str, Any]:
+    return _summarize_stock_lora_full_bf16_promotion(
+        case_rows, qualification_snapshot, shared_regression_contract,
+        train_type="sdxl-lora",
+    )
+
+
 __all__ = [
     "BACKEND_FEATURE_EVIDENCE_SCHEMA",
     "BACKEND_FEATURE_EVIDENCE_VERSION",
@@ -1897,6 +1947,7 @@ __all__ = [
     "compare_checkpoint_progress",
     "load_backend_feature_manifest",
     "summarize_sd_lora_full_bf16_promotion",
+    "summarize_sdxl_lora_full_bf16_promotion",
     "validate_case_input_contract",
     "validate_checkpoint_progress",
     "validate_full_bf16_checkpoint_manifest",
