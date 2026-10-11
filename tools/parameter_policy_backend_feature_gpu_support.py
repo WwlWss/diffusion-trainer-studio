@@ -814,6 +814,41 @@ def _load_stock_lora_d1_policy_contract(
             )
         return str(profile.get("type") or "")
 
+    def _explicit_conv_dim() -> int:
+        network_args = _nargs_option_values(fresh_command, "--network_args")
+        resume_network_args = _nargs_option_values(resume_command, "--network_args")
+        if network_args != resume_network_args:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} fresh/resume network_args must match."
+            )
+        parsed_network_args: dict[str, str] = {}
+        for item in network_args:
+            if "=" not in item:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args must use key=value."
+                )
+            key, value = item.split("=", 1)
+            key = key.strip()
+            if not key or key in parsed_network_args:
+                raise BackendFeatureGpuMatrixError(
+                    f"Backend feature case {case_id!r} network_args contain an "
+                    "empty or duplicate key."
+                )
+            parsed_network_args[key] = value.strip()
+        try:
+            conv_dim = int(parsed_network_args.get("conv_dim", ""))
+        except ValueError as exc:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} SDXL/D1 stock LoRA case requires "
+                "integer conv_dim>0 in explicit --network_args."
+            ) from exc
+        if conv_dim <= 0:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} SDXL/D1 stock LoRA case requires "
+                "conv_dim>0 so real Conv LoRA fallback parameters are created."
+            )
+        return conv_dim
+
     if case_id == spec["case_ids"][0]:
         for component_id, route in trainable.items():
             if _profile_type(route.get("optimizer_profile")) != "AdamW":
@@ -826,6 +861,7 @@ def _load_stock_lora_d1_policy_contract(
                     f"Backend feature case {case_id!r} AdamW case must not use "
                     "fallback routing."
                 )
+        conv_dim = _explicit_conv_dim() if train_type == "sdxl-lora" else None
         contract_kind = "adamw"
         fallback_component = None
     else:
@@ -870,38 +906,7 @@ def _load_stock_lora_d1_policy_contract(
                 f"Backend feature case {case_id!r} must train U-Net hidden linear "
                 "and every required Text Encoder adapter through Muon."
             )
-        network_args = _nargs_option_values(fresh_command, "--network_args")
-        resume_network_args = _nargs_option_values(resume_command, "--network_args")
-        if network_args != resume_network_args:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} fresh/resume network_args must match."
-            )
-        parsed_network_args: dict[str, str] = {}
-        for item in network_args:
-            if "=" not in item:
-                raise BackendFeatureGpuMatrixError(
-                    f"Backend feature case {case_id!r} network_args must use key=value."
-                )
-            key, value = item.split("=", 1)
-            key = key.strip()
-            if not key or key in parsed_network_args:
-                raise BackendFeatureGpuMatrixError(
-                    f"Backend feature case {case_id!r} network_args contain an "
-                    "empty or duplicate key."
-                )
-            parsed_network_args[key] = value.strip()
-        try:
-            conv_dim = int(parsed_network_args.get("conv_dim", ""))
-        except ValueError as exc:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} Muon/fallback case requires "
-                "integer conv_dim>0 in explicit --network_args."
-            ) from exc
-        if conv_dim <= 0:
-            raise BackendFeatureGpuMatrixError(
-                f"Backend feature case {case_id!r} Muon/fallback case requires "
-                "conv_dim>0 so real Conv LoRA fallback parameters are created."
-            )
+        conv_dim = _explicit_conv_dim()
         contract_kind = "muon_adamw_fallback"
         fallback_component = "unet.conv.adapter"
 
@@ -923,11 +928,7 @@ def _load_stock_lora_d1_policy_contract(
         "covered_text_components": sorted(
             set(spec["text_components"]).intersection(trainable)
         ),
-        "conv_dim": (
-            conv_dim
-            if case_id == spec["case_ids"][1]
-            else None
-        ),
+        "conv_dim": conv_dim,
         "profile_types": sorted(
             {
                 str(profile.get("type") or "")
