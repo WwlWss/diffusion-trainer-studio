@@ -15,6 +15,8 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     CHECKPOINT_PROGRESS_SCHEMA,
     SD_LORA_FULL_BF16_CASE_IDS,
     SD_LORA_FULL_BF16_EVIDENCE_ID,
+    SDXL_LORA_FULL_BF16_CASE_IDS,
+    SDXL_LORA_FULL_BF16_EVIDENCE_ID,
     SHARED_FULL_BF16_OPTIMIZER_EVIDENCE_ID,
     BackendFeatureGpuMatrixError,
     backend_feature_qualification_snapshot,
@@ -22,6 +24,7 @@ from tools.parameter_policy_backend_feature_gpu_support import (
     compare_checkpoint_progress,
     load_backend_feature_manifest,
     summarize_sd_lora_full_bf16_promotion,
+    summarize_sdxl_lora_full_bf16_promotion,
     validate_case_input_contract,
     validate_checkpoint_progress,
     validate_full_bf16_checkpoint_manifest,
@@ -210,6 +213,63 @@ def _sd_lora_case(root: Path, case_id: str) -> dict:
     }
 
 
+def _sdxl_lora_case(root: Path, case_id: str) -> dict:
+    source_case = (
+        SD_LORA_FULL_BF16_CASE_IDS[0]
+        if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[0]
+        else SD_LORA_FULL_BF16_CASE_IDS[1]
+    )
+    case = _sd_lora_case(root, source_case)
+    case["case_id"] = case_id
+    case["train_type"] = "sdxl-lora"
+    base_model = root / "sdxl-base.safetensors"
+    base_model.write_bytes(b"sdxl-base-model-fixture")
+    for key in ("fresh_command", "resume_command"):
+        command = case[key]
+        command[0] = "scripts/stable/sdxl_train_network.py"
+        model_idx = command.index("--pretrained_model_name_or_path") + 1
+        command[model_idx] = str(base_model)
+    policy_path = Path(
+        case["fresh_command"][
+            case["fresh_command"].index("--parameter_policy_config") + 1
+        ]
+    )
+    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    old = policy["components"].pop("text_encoder.adapter")
+    policy["components"]["text_encoder_1.adapter"] = dict(old)
+    policy["components"]["text_encoder_2.adapter"] = dict(old)
+    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+    return case
+
+
+def _sdxl_d1_case_row(case_id: str) -> dict:
+    source_case = (
+        SD_LORA_FULL_BF16_CASE_IDS[0]
+        if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[0]
+        else SD_LORA_FULL_BF16_CASE_IDS[1]
+    )
+    row = _d1_case_row(source_case, train_type="sdxl-lora")
+    row["case_id"] = case_id
+    row["policy_contract"]["model_family"] = "sdxl-base"
+    row["policy_contract"]["covers_text_encoder_adapter"] = None
+    row["policy_contract"]["covered_text_components"] = [
+        "text_encoder_1.adapter",
+        "text_encoder_2.adapter",
+    ]
+    row["input_contract"]["model_family"] = "sdxl-base"
+    row["component_update_evidence"] = {
+        "model_family": "sdxl-base",
+        "weight_keys_match": True,
+        "changed_tensor_counts": {
+            "unet": 10,
+            "te1": 4,
+            "te2": 8,
+            "conv3x3": 2 if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[1] else 0,
+        },
+    }
+    return row
+
+
 def _signature(value: object) -> str:
     canonical = json.dumps(
         value,
@@ -310,6 +370,7 @@ def _d1_case_row(
             "full_bf16": True,
             "network_module": "networks.lora",
             "covers_text_encoder_adapter": True,
+            "covered_text_components": ["text_encoder.adapter"],
             "conv_dim": (
                 None
                 if case_id == SD_LORA_FULL_BF16_CASE_IDS[0]
@@ -1621,6 +1682,147 @@ class SdLoraFullBf16PromotionTests(unittest.TestCase):
         self.assertEqual(summary["status"], "fail")
         self.assertEqual(summary["unexpected_backend_promotions"], ["sdxl-lora"])
         self.assertEqual(summary["unexpected_optimizer_promotions"], ["Lion"])
+
+
+class SdXlLoraFullBf16QualificationTests(unittest.TestCase):
+    def test_two_sdxl_cases_accept_only_canonical_real_input_contract(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp = Path(temp_dir)
+            cases = [
+                _sdxl_lora_case(temp / "adamw", SDXL_LORA_FULL_BF16_CASE_IDS[0]),
+                _sdxl_lora_case(temp / "muon", SDXL_LORA_FULL_BF16_CASE_IDS[1]),
+            ]
+            loaded = load_backend_feature_manifest(
+                SdXlLoraFullBf16QualificationTests._manifest(temp, cases),
+                repo_root=ROOT,
+            )
+        self.assertEqual([row["case_id"] for row in loaded], list(SDXL_LORA_FULL_BF16_CASE_IDS))
+        for row in loaded:
+            with self.subTest(case=row["case_id"]):
+                self.assertEqual(row["train_type"], "sdxl-lora")
+                self.assertEqual(row["input_contract"]["model_family"], "sdxl-base")
+                self.assertEqual(
+                    row["policy_contract"]["covered_text_components"],
+                    ["text_encoder_1.adapter", "text_encoder_2.adapter"],
+                )
+                self.assertIsNotNone(row["policy_contract"]["policy_hash"])
+
+    @staticmethod
+    def _manifest(temp: Path, cases: list[dict]) -> Path:
+        path = temp / "sdxl-manifest.json"
+        path.write_text(
+            json.dumps({
+                "schema": BACKEND_FEATURE_MANIFEST_SCHEMA,
+                "version": 1,
+                "cases": cases,
+            }),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_missing_text_encoder_or_wrong_model_family_fails_closed(self):
+        for mutation in ("remove_te2", "wrong_trainer", "wrong_base_model", "unet_only"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as td:
+                temp = Path(td)
+                case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[0])
+                if mutation == "remove_te2":
+                    policy_path = Path(
+                        case["fresh_command"][
+                            case["fresh_command"].index("--parameter_policy_config") + 1
+                        ]
+                    )
+                    policy = json.loads(policy_path.read_text(encoding="utf-8"))
+                    policy["components"]["text_encoder_2.adapter"]["train"] = False
+                    policy_path.write_text(json.dumps(policy), encoding="utf-8")
+                elif mutation == "wrong_trainer":
+                    case["fresh_command"][0] = "scripts/stable/train_network.py"
+                elif mutation == "wrong_base_model":
+                    index = case["resume_command"].index("--pretrained_model_name_or_path") + 1
+                    other_model = temp / "different.safetensors"
+                    other_model.write_bytes(b"different-model")
+                    case["resume_command"][index] = str(other_model)
+                else:
+                    case["fresh_command"].append("--network_train_unet_only")
+                    case["resume_command"].append("--network_train_unet_only")
+                with self.assertRaises(BackendFeatureGpuMatrixError):
+                    load_backend_feature_manifest(
+                        self._manifest(temp, [case]), repo_root=ROOT
+                    )
+
+    def test_uncertified_training_variants_fail_closed(self):
+        for flag in ("--cache_text_encoder_outputs", "--cache_text_encoder_outputs_to_disk",
+                     "--gradient_checkpointing", "--v2"):
+            with self.subTest(flag=flag), tempfile.TemporaryDirectory() as td:
+                temp = Path(td)
+                case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[0])
+                case["fresh_command"].append(flag)
+                case["resume_command"].append(flag)
+                with self.assertRaises(BackendFeatureGpuMatrixError):
+                    load_backend_feature_manifest(
+                        self._manifest(temp, [case]), repo_root=ROOT
+                    )
+
+    def test_conv_fallback_is_required_in_muon_case(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[1])
+            for phase in ("fresh_command", "resume_command"):
+                cmd = case[phase]
+                idx = cmd.index("--network_args")
+                del cmd[idx:idx + 2]
+            with self.assertRaisesRegex(BackendFeatureGpuMatrixError, "conv_dim"):
+                load_backend_feature_manifest(
+                    self._manifest(temp, [case]), repo_root=ROOT
+                )
+
+    def test_independent_sdxl_promotion_requires_both_full_cases(self):
+        rows = [_sdxl_d1_case_row(case_id) for case_id in SDXL_LORA_FULL_BF16_CASE_IDS]
+        snapshot = copy.deepcopy(backend_feature_qualification_snapshot())
+        regression = _shared_regression_contract()
+        summary = summarize_sdxl_lora_full_bf16_promotion(
+            rows, snapshot, regression
+        )
+        self.assertEqual(summary["id"], SDXL_LORA_FULL_BF16_EVIDENCE_ID)
+        self.assertEqual(summary["status"], "pass")
+        self.assertTrue(summary["promotion_eligible"])
+        self.assertEqual(summary["unexpected_backend_promotions"], [])
+        self.assertEqual(
+            summarize_sdxl_lora_full_bf16_promotion(
+                rows[:1], snapshot, regression
+            )["status"],
+            "fail",
+        )
+
+        missing_updates = copy.deepcopy(rows)
+        missing_updates[0]["component_update_evidence"]["changed_tensor_counts"]["te2"] = 0
+        self.assertEqual(
+            summarize_sdxl_lora_full_bf16_promotion(
+                missing_updates, snapshot, regression
+            )["status"],
+            "fail",
+        )
+        missing_conv = copy.deepcopy(rows)
+        missing_conv[1]["component_update_evidence"]["changed_tensor_counts"]["conv3x3"] = 0
+        self.assertEqual(
+            summarize_sdxl_lora_full_bf16_promotion(
+                missing_conv, snapshot, regression
+            )["status"],
+            "fail",
+        )
+
+    def test_existing_sd1_promotion_remains_valid_with_exact_sdxl_authority(self):
+        rows = [_d1_case_row(case_id) for case_id in SD_LORA_FULL_BF16_CASE_IDS]
+        snapshot = copy.deepcopy(backend_feature_qualification_snapshot())
+        summary = summarize_sd_lora_full_bf16_promotion(
+            rows, snapshot, _shared_regression_contract()
+        )
+        self.assertEqual(summary["status"], "pass")
+        snapshot["backends"]["sdxl-lora"]["evidence_case_id"] = "wrong-id"
+        summary = summarize_sd_lora_full_bf16_promotion(
+            rows, snapshot, _shared_regression_contract()
+        )
+        self.assertEqual(summary["status"], "fail")
+        self.assertEqual(summary["unexpected_backend_promotions"], ["sdxl-lora"])
 
 
 class BackendFeatureRunnerSourceTests(unittest.TestCase):
