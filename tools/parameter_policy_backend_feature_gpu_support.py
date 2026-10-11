@@ -1930,7 +1930,7 @@ def _summarize_stock_lora_full_bf16_promotion(
             # to U-Net and *each* Text Encoder; Conv fallback must be exercised.
             update = row.get("component_update_evidence")
             counts = update.get("changed_tensor_counts") if isinstance(update, dict) else None
-            required = ("unet", "te1", "te2") + (() if adamw_case else ("conv3x3",))
+            required = ("unet", "te1", "te2", "conv3x3")
             if (
                 not isinstance(counts, dict)
                 or update.get("model_family") != "sdxl-base"
