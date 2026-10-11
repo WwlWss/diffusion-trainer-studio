@@ -1766,6 +1766,44 @@ class SdXlLoraFullBf16QualificationTests(unittest.TestCase):
                         self._manifest(temp, [case]), repo_root=ROOT
                     )
 
+    def test_adamw_also_requires_real_conv_adapter_target(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[0])
+            for phase in ("fresh_command", "resume_command"):
+                cmd = case[phase]
+                i = cmd.index("--network_args")
+                del cmd[i:i + 3]
+            with self.assertRaisesRegex(BackendFeatureGpuMatrixError, "conv_dim"):
+                load_backend_feature_manifest(
+                    self._manifest(temp, [case]), repo_root=ROOT
+                )
+
+    def test_sdxl_case_cannot_use_sd1_canonical_trainer(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[0])
+            case["train_type"] = "sd-lora"
+            with self.assertRaisesRegex(BackendFeatureGpuMatrixError, "belongs to"):
+                load_backend_feature_manifest(
+                    self._manifest(temp, [case]), repo_root=ROOT
+                )
+
+    def test_hidden_gradient_checkpointing_cannot_bypass_qualifier(self):
+        with tempfile.TemporaryDirectory() as td:
+            temp = Path(td)
+            case = _sdxl_lora_case(temp, SDXL_LORA_FULL_BF16_CASE_IDS[0])
+            cfg = temp / "hidden-settings.toml"
+            cfg.write_text("[train]\ngradient_checkpointing = true\n", encoding="utf-8")
+            for phase in ("fresh_command", "resume_command"):
+                case[phase].extend(["--config_file", str(cfg)])
+            with self.assertRaisesRegex(
+                BackendFeatureGpuMatrixError, "trainer config may not hide"
+            ):
+                load_backend_feature_manifest(
+                    self._manifest(temp, [case]), repo_root=ROOT
+                )
+
     def test_conv_fallback_is_required_in_muon_case(self):
         with tempfile.TemporaryDirectory() as td:
             temp = Path(td)
