@@ -1,8 +1,8 @@
-"""Pure, fail-closed resume cursor for qualified SD1 stock-LoRA full-BF16.
+"""Pure, fail-closed resume cursor for qualified SD1/SDXL stock-LoRA full-BF16.
 
 Accelerate restores model, optimizer, scheduler, and RNG state, but the legacy
 network trainer separately owns the global optimizer step and epoch-local data
-position.  Keep those two counters separate when resuming D1 SD1 LoRA.
+position.  Keep those two counters separate when resuming qualified stock LoRA.
 No torch, CUDA, or trainer imports are allowed in this module.
 """
 
@@ -30,13 +30,13 @@ class SdLoraResumeCursor:
 def _positive_integer(value: object, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise SdLoraResumeCursorError(
-            f"D1 SD1 LoRA resume requires {field} to be a positive integer; "
+            f"D1 stock LoRA resume requires {field} to be a positive integer; "
             f"got {value!r}."
         )
     return value
 
 
-def plan_sd_lora_full_bf16_resume(
+def plan_stock_lora_full_bf16_resume(
     *,
     saved_step: object,
     saved_epoch: object,
@@ -65,7 +65,7 @@ def plan_sd_lora_full_bf16_resume(
         active.append("skip_until_initial_step")
     if active:
         raise SdLoraResumeCursorError(
-            "D1 SD1 LoRA full-BF16 resume cannot combine checkpoint progress "
+            "D1 stock LoRA full-BF16 resume cannot combine checkpoint progress "
             f"with explicit lifecycle override(s): {sorted(active)!r}."
         )
 
@@ -78,7 +78,7 @@ def plan_sd_lora_full_bf16_resume(
     )
     if step >= target:
         raise SdLoraResumeCursorError(
-            "D1 SD1 LoRA resume checkpoint has no remaining optimizer steps: "
+            "D1 stock LoRA resume checkpoint has no remaining optimizer steps: "
             f"completed={step}, max_train_steps={target}."
         )
 
@@ -86,7 +86,7 @@ def plan_sd_lora_full_bf16_resume(
     expected_checkpoint_epoch = (step - 1) // steps_per_epoch + 1
     if checkpoint_epoch != expected_checkpoint_epoch:
         raise SdLoraResumeCursorError(
-            "D1 SD1 LoRA checkpoint epoch/optimizer-step mismatch: "
+            "D1 stock LoRA checkpoint epoch/optimizer-step mismatch: "
             f"current_epoch={checkpoint_epoch}, current_step={step}, "
             f"expected_epoch={expected_checkpoint_epoch}, "
             f"steps_per_epoch={steps_per_epoch}."
@@ -104,8 +104,14 @@ def plan_sd_lora_full_bf16_resume(
     )
 
 
+def plan_sd_lora_full_bf16_resume(**kwargs: object) -> SdLoraResumeCursor:
+    """Compatibility entrypoint for the previously qualified SD1 lifecycle."""
+    return plan_stock_lora_full_bf16_resume(**kwargs)
+
+
 __all__ = [
     "SdLoraResumeCursor",
     "SdLoraResumeCursorError",
     "plan_sd_lora_full_bf16_resume",
+    "plan_stock_lora_full_bf16_resume",
 ]
