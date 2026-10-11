@@ -228,6 +228,8 @@ def _sdxl_lora_case(root: Path, case_id: str) -> dict:
     for key in ("fresh_command", "resume_command"):
         command = case[key]
         command[0] = "scripts/stable/sdxl_train_network.py"
+        if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[0]:
+            command.extend(["--network_args", "conv_dim=4", "conv_alpha=4"])
         model_idx = command.index("--pretrained_model_name_or_path") + 1
         command[model_idx] = str(base_model)
     policy_path = Path(
@@ -257,6 +259,7 @@ def _sdxl_d1_case_row(case_id: str) -> dict:
         "text_encoder_1.adapter",
         "text_encoder_2.adapter",
     ]
+    row["policy_contract"]["conv_dim"] = 4
     row["input_contract"]["model_family"] = "sdxl-base"
     row["component_update_evidence"] = {
         "model_family": "sdxl-base",
@@ -265,7 +268,7 @@ def _sdxl_d1_case_row(case_id: str) -> dict:
             "unet": 10,
             "te1": 4,
             "te2": 8,
-            "conv3x3": 2 if case_id == SDXL_LORA_FULL_BF16_CASE_IDS[1] else 0,
+            "conv3x3": 2,
         },
     }
     return row
