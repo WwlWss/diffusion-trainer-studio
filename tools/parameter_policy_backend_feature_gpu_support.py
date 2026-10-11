@@ -652,11 +652,16 @@ def _load_stock_lora_d1_policy_contract(
                 "pretrained_model_name_or_path",
                 "output_dir",
                 "output_name",
-                "cache_text_encoder_outputs",
-                "cache_text_encoder_outputs_to_disk",
-                "gradient_checkpointing",
-                "save_model_as",
             }.intersection(hidden)
+            | (
+                {
+                    "cache_text_encoder_outputs",
+                    "cache_text_encoder_outputs_to_disk",
+                    "gradient_checkpointing",
+                    "save_model_as",
+                }.intersection(hidden)
+                if train_type == "sdxl-lora" else set()
+            )
         )
         if hidden_authority:
             raise BackendFeatureGpuMatrixError(
@@ -1081,6 +1086,12 @@ def load_backend_feature_manifest(
             raise BackendFeatureGpuMatrixError(
                 f"Backend feature case {case_id!r} train_type={train_type!r} is "
                 "outside the D0/D1 backend qualification scope."
+            )
+        stock_target = _stock_lora_spec_for_case(case_id)
+        if stock_target is not None and train_type != stock_target[0]:
+            raise BackendFeatureGpuMatrixError(
+                f"Backend feature case {case_id!r} belongs to "
+                f"{stock_target[0]!r}, not {train_type!r}."
             )
         feature = str(case.get("feature") or "").strip().lower()
         if feature != BACKEND_FEATURE_NAME:
