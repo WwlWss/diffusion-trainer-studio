@@ -326,6 +326,9 @@ jobs:
       - name: Parameter Policy host contract
         run: python -m unittest discover -s tests -p 'test_parameter_policy*.py' -v
 
+      - name: SD3 architecture and component audit contracts
+        run: python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
+
       - name: Parameter Policy model scan primitives
         run: python -m unittest tests.test_model_component_profiles tests.test_parameter_routing -v
 
