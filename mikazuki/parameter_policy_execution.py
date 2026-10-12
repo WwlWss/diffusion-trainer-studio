@@ -161,6 +161,9 @@ FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID = (
 FULL_BF16_SD_LORA_EVIDENCE_ID = (
     "phase-d1:backend:sd-lora-sd1:full-bf16:v2"
 )
+FULL_BF16_SDXL_LORA_EVIDENCE_ID = (
+    "phase-d1:backend:sdxl-base-lora:full-bf16:v1"
+)
 
 
 FULL_BF16_BACKEND_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
@@ -170,8 +173,10 @@ FULL_BF16_BACKEND_QUALIFICATIONS: dict[str, ExecutionFeatureQualification] = {
         FULL_BF16_SD_LORA_EVIDENCE_ID,
     ),
     "sdxl-lora": ExecutionFeatureQualification(
-        "pending",
-        "SDXL LoRA full BF16 has not completed Component exact-head CUDA qualification.",
+        "qualified",
+        "SDXL Base stock LoRA true-BF16 Component execution requires its own D1 exact-head CUDA gate; "
+        "gradient checkpointing with trainable Text Encoder adapters remains unqualified.",
+        FULL_BF16_SDXL_LORA_EVIDENCE_ID,
     ),
     "sd-dreambooth": ExecutionFeatureQualification(
         "unsupported",
@@ -521,6 +526,21 @@ def parameter_policy_execution_blockers(
                 "SD2.x (--v2) remains pending exact-head CUDA qualification."
             ]
 
+    if normalized_train_type == "sdxl-lora":
+        try:
+            sdxl_grad_ckpt = _strict_bool(
+                effective_config.get("gradient_checkpointing"),
+                field="gradient_checkpointing",
+            )
+        except ValueError as exc:
+            return [str(exc)]
+        if sdxl_grad_ckpt:
+            return [
+                "SDXL LoRA Component full-BF16 gradient checkpointing is not "
+                "qualified: the inherited trainer may enable base Text Encoder "
+                "embeddings outside Parameter Policy ownership."
+            ]
+
     backend_qualification = FULL_BF16_BACKEND_QUALIFICATIONS.get(
         normalized_train_type
     )
@@ -585,6 +605,7 @@ __all__ = [
     "FULL_BF16_BACKEND_QUALIFICATIONS",
     "FULL_BF16_OPTIMIZER_QUALIFICATIONS",
     "FULL_BF16_SD_LORA_EVIDENCE_ID",
+    "FULL_BF16_SDXL_LORA_EVIDENCE_ID",
     "FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID",
     "active_parameter_policy_execution_features",
     "build_parameter_policy_execution_contract",

@@ -9,6 +9,7 @@ import unittest
 from mikazuki.parameter_policy_resume import (
     SdLoraResumeCursorError,
     plan_sd_lora_full_bf16_resume,
+    plan_stock_lora_full_bf16_resume,
 )
 
 
@@ -30,6 +31,21 @@ def _cursor(**overrides):
 
 
 class SdLoraFullBf16ResumeCursorTests(unittest.TestCase):
+    def test_stock_lora_alias_preserves_sd1_resume(self):
+        for accumulation in (1, 2):
+            with self.subTest(accumulation=accumulation):
+                options = {
+                    "saved_step": 1,
+                    "saved_epoch": 1,
+                    "max_train_steps": 2,
+                    "dataloader_batches": 8,
+                    "gradient_accumulation_steps": accumulation,
+                }
+                self.assertEqual(
+                    plan_stock_lora_full_bf16_resume(**options),
+                    plan_sd_lora_full_bf16_resume(**options),
+                )
+
     def test_adamw_one_step_to_two_skips_one_batch(self):
         cursor = _cursor()
         self.assertEqual(cursor.completed_steps, 1)
@@ -192,10 +208,10 @@ class SdLoraFullBf16ProductionWiringTests(unittest.TestCase):
             for node in ast.walk(train_fn)
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
         }
-        self.assertIn("plan_sd_lora_full_bf16_resume", calls)
+        self.assertIn("plan_stock_lora_full_bf16_resume", calls)
         self.assertIn("skipped_batches_for_epoch", calls)
 
-        self.assertIn('parameter_policy_train_type == "sd-lora"', source)
+        self.assertIn('parameter_policy_train_type in {"sd-lora", "sdxl-lora"}', source)
         self.assertIn('args.network_module == "networks.lora"', source)
         self.assertIn("and args.full_bf16", source)
         self.assertIn("and not args.v2", source)
@@ -222,6 +238,7 @@ class SdLoraFullBf16ProductionWiringTests(unittest.TestCase):
             if isinstance(node, ast.FunctionDef)
         }
         self.assertIn("plan_sd_lora_full_bf16_resume", function_names)
+        self.assertIn("plan_stock_lora_full_bf16_resume", function_names)
         self.assertNotIn(
             "from mikazuki.parameter_policy_resume import",
             source,

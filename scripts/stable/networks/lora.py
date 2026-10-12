@@ -1070,7 +1070,9 @@ class LoRANetwork(torch.nn.Module):
         logger.info(f"create LoRA for Text Encoder: {len(self.text_encoder_loras)} modules.")
 
         # extend U-Net target modules if conv2d 3x3 is enabled, or load from weights
-        target_modules = LoRANetwork.UNET_TARGET_REPLACE_MODULE
+        # Do not mutate the class-level target list: an earlier Conv LoRA
+        # construction must not alter a subsequent ordinary LoRA build.
+        target_modules = list(LoRANetwork.UNET_TARGET_REPLACE_MODULE)
         if modules_dim is not None or self.conv_lora_dim is not None or conv_block_dims is not None:
             target_modules += LoRANetwork.UNET_TARGET_REPLACE_MODULE_CONV2D_3X3
 

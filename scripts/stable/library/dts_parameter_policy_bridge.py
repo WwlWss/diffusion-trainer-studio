@@ -50,10 +50,19 @@ def plan_sd_lora_full_bf16_resume(**kwargs):
     ).plan_sd_lora_full_bf16_resume(**kwargs)
 
 
+def plan_stock_lora_full_bf16_resume(**kwargs):
+    # Preserve lazy DTS import semantics for SD1, SDXL and Standard mode.
+    load_parameter_policy_trainer()
+    return importlib.import_module(
+        "mikazuki.parameter_policy_resume"
+    ).plan_stock_lora_full_bf16_resume(**kwargs)
+
+
 __all__ = [
     "create_parameter_policy_session",
     "load_parameter_policy_file",
     "load_parameter_policy_trainer",
     "make_legacy_scheduler_factory",
     "plan_sd_lora_full_bf16_resume",
+    "plan_stock_lora_full_bf16_resume",
 ]
