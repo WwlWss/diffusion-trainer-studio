@@ -25,6 +25,10 @@ _KNOWN_TOPOLOGIES: dict[tuple[int, int, int, str | None, tuple[int, ...]], str] 
     (38, 2432, 192, "rms", ()): "sd35-large-topology",
 }
 _MMDIT_PREFIX = "model.diffusion_model."
+_BARE_MMDIT_PREFIXES = (
+    "joint_blocks.", "x_embedder.", "y_embedder.", "context_embedder.",
+    "t_embedder.", "final_layer.",
+)
 _BLOCK_INDEX = re.compile(r"^joint_blocks\.(\d+)\.")
 _EXTRA_QKV = re.compile(r"^joint_blocks\.(\d+)\.x_block\.attn2\.qkv\.weight$")
 
@@ -124,6 +128,28 @@ def normalize_sd3_shape_index(shapes: Mapping[str, Sequence[int]]) -> dict[str, 
     if not result:
         raise SD3ArchitectureError("No SD3 MMDiT tensors found")
     return result
+
+
+def _is_bare_mmdit_key(key: str) -> bool:
+    """Match known bare MMDiT roots, never similarly named external modules."""
+    return key == "pos_embed" or key.startswith(_BARE_MMDIT_PREFIXES)
+
+
+def _reject_mixed_mmdit_roots(shapes: Mapping[str, Sequence[int]]) -> None:
+    """Reject bare MMDiT remnants beside a prefixed MMDiT in strict mode.
+
+    The current DTS loader selects only model.diffusion_model.* keys; unrelated
+    CLIP/T5/VAE namespaces remain legitimate and are never inspected here.
+    Topology-only callers intentionally retain the historical normalization.
+    """
+    if _MMDIT_PREFIX + "x_embedder.proj.weight" not in shapes:
+        return
+    mixed = sorted(key for key in shapes if _is_bare_mmdit_key(key))
+    if mixed:
+        raise SD3ArchitectureError(
+            "Mixed prefixed and bare MMDiT tensors: "
+            f"examples={mixed[:5]!r}, count={len(mixed)}"
+        )
 
 
 def _expect(shapes: Mapping[str, tuple[int, ...]], key: str, shape: tuple[int, ...]) -> None:
@@ -313,6 +339,7 @@ def validate_sd3_mmdit_checkpoint(
     Does not load tensor values, authenticate files, or authorize BF16 training.
     """
     architecture = inspect_sd3_architecture(shapes)
+    _reject_mixed_mmdit_roots(shapes)
     actual = normalize_sd3_shape_index(shapes)
     expected = expected_sd3_mmdit_shapes(architecture)
     missing = sorted(set(expected) - set(actual))

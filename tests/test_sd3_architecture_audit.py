@@ -297,6 +297,41 @@ class CompleteStructureTests(unittest.TestCase):
         self.assertFalse(result.report()["release_identity_verified"])
 
 
+    def test_strict_mixed_prefixed_and_bare_mmdit_roots_fail_closed(self):
+        source = synthetic_complete_sd3_shapes("sd35-medium", prefixed=True)
+        for bare_key in (
+            "joint_blocks.0.x_block.attn.qkv.weight",
+            "joint_blocks.0.x_block.not_a_real_linear.weight",
+            "final_layer.linear.weight",
+            "context_embedder.bias",
+            "x_embedder.proj.bias",
+            "y_embedder.mlp.2.weight",
+            "t_embedder.mlp.0.weight",
+            "pos_embed",
+        ):
+            with self.subTest(bare_key=bare_key):
+                mixed = dict(source)
+                mixed[bare_key] = [1]  # even malformed unused remnants are rejected
+                self.assertEqual(inspect_sd3_architecture(mixed).variant, "sd35-medium")
+                with self.assertRaisesRegex(SD3ArchitectureError, "Mixed prefixed and bare"):
+                    validate_sd3_mmdit_checkpoint(mixed, require_loader_compatible_root=True)
+
+    def test_strict_external_namespaces_and_bare_input_stay_compatible(self):
+        prefixed = synthetic_complete_sd3_shapes("sd35-medium", prefixed=True)
+        prefixed.update({
+            "text_encoders.clip_g.joint_blocks.fake.weight": [1],
+            "text_encoders.t5xxl.pos_embed": [1],
+            "first_stage_model.final_layer.weight": [1],
+            "pos_embed_extra": [1],
+        })
+        self.assertTrue(validate_sd3_mmdit_checkpoint(prefixed).structurally_complete)
+        self.assertFalse(
+            validate_sd3_mmdit_checkpoint(
+                synthetic_complete_sd3_shapes("sd35-medium")
+            ).loader_prefix_compatible
+        )
+
+
 class ComponentAuditTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -573,6 +608,26 @@ class CLIAuditTests(unittest.TestCase):
             with patch.object(cli, "read_safetensors_shapes", return_value=synthetic_complete_sd3_shapes("sd35-medium", prefixed=True)):
                 self.assertEqual(cli.main(["--checkpoint", "fake.safetensors", "--output", str(path)]), 0)
                 self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["structure_validation_status"], "pass")
+
+    def test_checkpoint_mixed_mmdit_roots_cli_strict_and_topology_override(self):
+        from tools import audit_sd3_architecture as cli
+        with tempfile.TemporaryDirectory() as td:
+            result = Path(td) / "result.json"
+            mixed = synthetic_complete_sd3_shapes("sd35-medium", prefixed=True)
+            mixed["joint_blocks.0.x_block.attn.qkv.weight"] = [1]
+            with patch.object(cli, "read_safetensors_shapes", return_value=mixed):
+                with self.assertRaises(SystemExit) as failure:
+                    cli.main(["--checkpoint", "fake.safetensors", "--output", str(result)])
+                self.assertEqual(failure.exception.code, 2)
+                self.assertFalse(result.exists())
+                self.assertEqual(cli.main([
+                    "--checkpoint", "fake.safetensors", "--topology-only",
+                    "--output", str(result),
+                ]), 0)
+            report = json.loads(result.read_text(encoding="utf-8"))
+            self.assertEqual(report["structure_validation_status"], "not_checked")
+            self.assertIsNone(report["mmdit_structure_complete"])
+            self.assertFalse(report["qualifies_full_bf16"])
 
     def test_cli_rejects_unknown_architecture_without_writing_output(self):
         with tempfile.TemporaryDirectory() as td:

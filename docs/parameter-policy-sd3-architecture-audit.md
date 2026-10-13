@@ -85,6 +85,14 @@ through `safe_open(...).get_slice(...).get_shape()`, not tensor values or model
 weights into memory. It now **requires a complete DTS MMDiT subtree with the
 `model.diffusion_model.` root by default**, rejecting missing/unexpected/wrong
 shapes. The explicit `--topology-only` flag skips completeness checks.
+Strict completeness also rejects any bare MMDiT-root keys (`joint_blocks.*`,
+`x_embedder.*`, `y_embedder.*`, `context_embedder.*`, `t_embedder.*`,
+`final_layer.*`, or exact `pos_embed`) mixed into the same file as the
+`model.diffusion_model.*` subtree. Such keys would otherwise be silently ignored
+by the loader's prefix filtering. Normal `text_encoders.*` and
+`first_stage_model.*` contents are still ignored, not rejected. Explicit
+`--topology-only` retains the older diagnostic behavior and **does not** claim
+complete structure validation.
 
 For synthetic tests, `--shape-index` accepts a JSON dictionary of tensor names
 and shapes (or `{ "shapes": ... }`), defaulting to topology-only for backwards
@@ -140,7 +148,8 @@ python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
 ```
 
 The tests cover three topologies, independent complete shape fixtures,
-missing/wrong/unexpected MMDiT tensor mutations, loader prefixes, pre-only
+missing/wrong/unexpected MMDiT tensor mutations, loader prefixes,
+strict mixed-namespace rejection without false positives for CLIP/T5/VAE, pre-only
 semantics, all eleven groups, bounded CLIP/T5 targets, module inventory,
 duplicate tensor IDs, physical ParameterDescriptor identity, CLI mode semantics,
 and a fake header reader that refuses full tensor value reads.
