@@ -1,7 +1,7 @@
 """Read-only, torch-free structure contract for DTS SD3/SD3.5 MMDiT checkpoints.
 
-This is an audit, not a model loader or execution-qualification authority.
-Tensor shapes cannot distinguish SD3.5 Large from Large Turbo.
+This is an *audit*, not a model loader or an execution-qualification authority.
+In particular, tensor shapes cannot distinguish SD3.5 Large from Large Turbo.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ class SD3ArchitectureError(ValueError):
     """The checkpoint does not satisfy a recognized DTS SD3 topology."""
 
 
+# "sd35-large-topology" intentionally says nothing about distillation/release.
 _KNOWN_TOPOLOGIES: dict[tuple[int, int, int, str | None, tuple[int, ...]], str] = {
     (24, 1536, 192, None, ()): "sd3-medium",
     (24, 1536, 384, "rms", tuple(range(13))): "sd35-medium",
@@ -87,8 +88,8 @@ class SD3Architecture:
 def normalize_sd3_shape_index(shapes: Mapping[str, Sequence[int]]) -> dict[str, tuple[int, ...]]:
     """Normalize a full checkpoint or an already-stripped MMDiT shape index.
 
-    Only the exact model.diffusion_model. prefix is stripped, matching the
-    repository's real sd3_utils.load_mmdit(). Other modules are ignored.
+    Only the exact 'model.diffusion_model.' prefix is stripped, matching the
+    repository's real sd3_utils.load_mmdit(). Text encoders and VAE are ignored.
     """
     if not isinstance(shapes, Mapping):
         raise SD3ArchitectureError("Tensor shape index must be a mapping")
@@ -133,7 +134,7 @@ def _expect(shapes: Mapping[str, tuple[int, ...]], key: str, shape: tuple[int, .
 
 
 def inspect_sd3_architecture(shapes: Mapping[str, Sequence[int]]) -> SD3Architecture:
-    """Recognize only known SD3/SD3.5 MMDiT structures, fail closed otherwise.
+    """Recognize *only* known SD3/SD3.5 MMDiT structures, fail closed otherwise.
 
     Assumes names and shapes, not pretrained contents. This cannot authenticate
     weights, file origin, or a Large-vs-Turbo release identity.
@@ -145,7 +146,7 @@ def inspect_sd3_architecture(shapes: Mapping[str, Sequence[int]]) -> SD3Architec
     hidden_size, _, patch_size, _ = x_embedder
     if patch_size != 2 or hidden_size % 64:
         raise SD3ArchitectureError("Unrecognized SD3 patch size / hidden width")
-    depth = hidden_size // 64
+    depth = hidden_size // 64  # matches scripts/dev/library/sd3_models.py
     pos = idx.get("pos_embed", ())
     if len(pos) != 3 or pos[0] != 1 or pos[2] != hidden_size:
         raise SD3ArchitectureError("Invalid SD3 positional embedding shape")
@@ -184,7 +185,7 @@ def inspect_sd3_architecture(shapes: Mapping[str, Sequence[int]]) -> SD3Architec
                                else 9 if stream == "x_block" and i in extra else 6),
                 hidden_size,
             ))
-            if stream == "context_block" and i == depth-1:
+            if stream == "context_block" and i == depth - 1:
                 if root + ".attn.proj.weight" in idx or any(
                     key.startswith(root + ".mlp.") for key in idx
                 ):
@@ -219,4 +220,120 @@ def inspect_sd3_architecture(shapes: Mapping[str, Sequence[int]]) -> SD3Architec
         qk_norm=qk_norm,
         extra_attention_layers=extra,
         shape_index_sha256=_canonical_hash(structural_index),
+    )
+
+
+@dataclass(frozen=True)
+class SD3MMDiTShapeValidation:
+    """Shape-only completeness of the MMDiT subtree; never a weight-integrity proof."""
+
+    architecture: SD3Architecture
+    checked_tensors: int
+    loader_prefix_compatible: bool
+    structurally_complete: bool = True
+
+    def report(self) -> dict[str, Any]:
+        return {
+            "mmdit_structure_complete": self.structurally_complete,
+            "dts_loader_prefix_compatible": self.loader_prefix_compatible,
+            "checked_tensor_shapes": self.checked_tensors,
+            "release_identity_verified": False,
+            "qualifies_full_bf16": False,
+        }
+
+
+def expected_sd3_mmdit_shapes(architecture: SD3Architecture) -> dict[str, tuple[int, ...]]:
+    """Exact state_dict key/shape manifest for DTS's three pinned MMDiT variants.
+
+    This is intentionally tied to create_sd3_mmdit() with mlp_ratio=4,
+    swiglu=False, qkv_bias=True, in_channels=16, and scale_mod_only=False.
+    An unknown architecture/variant may not inherit this manifest.
+    """
+    if not isinstance(architecture, SD3Architecture):
+        raise SD3ArchitectureError("Expected a recognized SD3Architecture")
+    known = _KNOWN_TOPOLOGIES.get((
+        architecture.depth, architecture.hidden_size, architecture.pos_embed_grid,
+        architecture.qk_norm, architecture.extra_attention_layers,
+    ))
+    if known != architecture.variant or architecture.patch_size != 2 or architecture.head_dim != 64:
+        raise SD3ArchitectureError("Unrecognized MMDiT shape-manifest variant")
+
+    h = architecture.hidden_size
+    p = architecture.patch_size
+    shapes: dict[str, tuple[int, ...]] = {
+        "x_embedder.proj.weight": (h, 16, p, p),
+        "x_embedder.proj.bias": (h,),
+        "pos_embed": (1, architecture.pos_embed_grid ** 2, h),
+        "context_embedder.weight": (h, 4096),
+        "context_embedder.bias": (h,),
+        "final_layer.linear.weight": (p * p * 16, h),
+        "final_layer.linear.bias": (p * p * 16,),
+        "final_layer.adaLN_modulation.1.weight": (2 * h, h),
+        "final_layer.adaLN_modulation.1.bias": (2 * h,),
+    }
+
+    def linear(prefix: str, output: int, input_: int) -> None:
+        shapes[prefix + ".weight"] = (output, input_)
+        shapes[prefix + ".bias"] = (output,)
+
+    linear("t_embedder.mlp.0", h, 256)
+    linear("t_embedder.mlp.2", h, h)
+    linear("y_embedder.mlp.0", h, 2048)
+    linear("y_embedder.mlp.2", h, h)
+
+    for block in range(architecture.depth):
+        for stream in ("x_block", "context_block"):
+            prefix = f"joint_blocks.{block}.{stream}"
+            pre_only = stream == "context_block" and block == architecture.depth - 1
+            mod_count = 2 if pre_only else 9 if stream == "x_block" and block in architecture.extra_attention_layers else 6
+            linear(prefix + ".attn.qkv", 3 * h, h)
+            linear(prefix + ".adaLN_modulation.1", mod_count * h, h)
+            if not pre_only:
+                linear(prefix + ".attn.proj", h, h)
+                linear(prefix + ".mlp.fc1", 4 * h, h)
+                linear(prefix + ".mlp.fc2", h, 4 * h)
+            if architecture.qk_norm == "rms":
+                shapes[prefix + ".attn.ln_q.weight"] = (64,)
+                shapes[prefix + ".attn.ln_k.weight"] = (64,)
+        if block in architecture.extra_attention_layers:
+            prefix = f"joint_blocks.{block}.x_block.attn2"
+            linear(prefix + ".qkv", 3 * h, h)
+            linear(prefix + ".proj", h, h)
+            shapes[prefix + ".ln_q.weight"] = (64,)
+            shapes[prefix + ".ln_k.weight"] = (64,)
+    return shapes
+
+
+def validate_sd3_mmdit_checkpoint(
+    shapes: Mapping[str, Sequence[int]], *, require_loader_compatible_root: bool = False,
+) -> SD3MMDiTShapeValidation:
+    """Require all and only DTS MMDiT state_dict tensors with matching shapes.
+
+    Text-encoder/VAE checkpoint namespaces are intentionally out of scope.
+    Does not load tensor values, authenticate files, or authorize BF16 training.
+    """
+    architecture = inspect_sd3_architecture(shapes)
+    actual = normalize_sd3_shape_index(shapes)
+    expected = expected_sd3_mmdit_shapes(architecture)
+    missing = sorted(set(expected) - set(actual))
+    unexpected = sorted(set(actual) - set(expected))
+    mismatched = sorted(
+        (key, expected[key], actual[key])
+        for key in expected.keys() & actual.keys()
+        if expected[key] != actual[key]
+    )
+    loader_root = _MMDIT_PREFIX + "x_embedder.proj.weight" in shapes
+    if require_loader_compatible_root and not loader_root:
+        raise SD3ArchitectureError("Checkpoint is not under the DTS loader's model.diffusion_model. root")
+    if missing or unexpected or mismatched:
+        raise SD3ArchitectureError(
+            "SD3 MMDiT checkpoint structure incomplete or incompatible: "
+            f"missing={missing[:8]!r} (count={len(missing)}), "
+            f"unexpected={unexpected[:8]!r} (count={len(unexpected)}), "
+            f"wrong_shapes={mismatched[:5]!r} (count={len(mismatched)})"
+        )
+    return SD3MMDiTShapeValidation(
+        architecture=architecture,
+        checked_tensors=len(expected),
+        loader_prefix_compatible=loader_root,
     )

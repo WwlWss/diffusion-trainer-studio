@@ -11,12 +11,13 @@ import json
 from pathlib import Path
 import sys
 
-# Enable direct script execution from the repository root.
+# Enable `python tools/audit_sd3_architecture.py ...` from the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from mikazuki.sd3_architecture_contract import (  # noqa: E402
     SD3ArchitectureError,
     inspect_sd3_architecture,
+    validate_sd3_mmdit_checkpoint,
 )
 from mikazuki.sd3_component_audit import (  # noqa: E402
     SD3ComponentAuditError,
@@ -43,12 +44,17 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--checkpoint", type=Path, help="SD3/SD3.5 safetensors checkpoint")
     source.add_argument(
         "--shape-index", type=Path,
-        help="JSON tensor-name -> shape mapping (diagnostic only, not proof of real weights)",
+        help="JSON tensor-name -> tensor-shape mapping (fixtures/diagnostics, not proof of real weights)",
     )
     parser.add_argument(
         "--adapter-targets", type=Path,
         help="Optional JSON list of original LoRA target metadata and parameter shapes",
     )
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--require-complete", action="store_true",
+                      help="Require a complete DTS MMDiT state_dict (also for --shape-index)")
+    mode.add_argument("--topology-only", action="store_true",
+                      help="Explicitly skip completeness checks (even for --checkpoint)")
     parser.add_argument("--output", type=Path, help="Optional JSON report output path")
     args = parser.parse_args(argv)
     try:
@@ -57,14 +63,29 @@ def main(argv: list[str] | None = None) -> int:
         else:
             data = json.loads(args.shape_index.read_text(encoding="utf-8"))
             shapes = data.get("shapes", data) if isinstance(data, dict) else data
-        arch = inspect_sd3_architecture(shapes)
+        complete = args.require_complete or (args.checkpoint is not None and not args.topology_only)
+        validated = (validate_sd3_mmdit_checkpoint(
+            shapes, require_loader_compatible_root=args.checkpoint is not None,
+        ) if complete else None)
+        arch = validated.architecture if validated is not None else inspect_sd3_architecture(shapes)
         result = {
             "schema": "dts.sd3-architecture-audit",
             "version": 1,
             "read_only": True,
             "qualifies_full_bf16": False,
             "architecture": arch.report(),
+            "topology_recognized": True,
+            "structure_validation_status": "pass" if validated else "not_checked",
+            "mmdit_structure_complete": True if validated else None,
+            "dts_loader_prefix_compatible": (
+                validated.loader_prefix_compatible if validated
+                else "model.diffusion_model.x_embedder.proj.weight" in shapes
+            ),
+            "input_source": "checkpoint_header" if args.checkpoint is not None else "external_shape_json",
+            "release_identity_verified": False,
         }
+        if validated is not None:
+            result["checked_tensor_shapes"] = validated.checked_tensors
         if args.adapter_targets is not None:
             adapter_targets = json.loads(args.adapter_targets.read_text(encoding="utf-8"))
             if not isinstance(adapter_targets, list):
