@@ -82,6 +82,7 @@ class SD3AdapterTensor:
     target_path: str
     target_type: str
     parameter_shape: tuple[int, ...]
+    tensor_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -96,16 +97,18 @@ def _clean_tensor(value: Any) -> SD3AdapterTensor:
         item = value
     elif isinstance(value, Mapping):
         required = {"target_root", "target_path", "target_type", "parameter_shape"}
-        if set(value) != required:
+        allowed = required | {"tensor_name"}
+        if not required.issubset(value) or set(value) - allowed:
             raise SD3ComponentAuditError(
                 f"LoRA audit record keys mismatch: missing={sorted(required-set(value))}, "
-                f"extra={sorted(set(value)-required)}"
+                f"extra={sorted(set(value)-allowed)}"
             )
         item = SD3AdapterTensor(
             target_root=value["target_root"],
             target_path=value["target_path"],
             target_type=value["target_type"],
             parameter_shape=value["parameter_shape"],
+            tensor_name=value.get("tensor_name"),
         )
     else:
         raise SD3ComponentAuditError(f"Unexpected LoRA record: {type(value).__name__}")
@@ -119,11 +122,18 @@ def _clean_tensor(value: Any) -> SD3AdapterTensor:
         raise SD3ComponentAuditError("LoRA parameter_shape must be a nonempty list/tuple")
     if any(isinstance(d, bool) or not isinstance(d, int) or d <= 0 for d in item.parameter_shape):
         raise SD3ComponentAuditError("LoRA parameter_shape has an invalid dimension")
+    if item.tensor_name is not None and (
+        not isinstance(item.tensor_name, str)
+        or not item.tensor_name.strip()
+        or item.tensor_name != item.tensor_name.strip()
+    ):
+        raise SD3ComponentAuditError("LoRA tensor_name must be a non-empty canonical string")
     return SD3AdapterTensor(
         target_root=item.target_root.strip().casefold(),
         target_path=item.target_path.strip("."),
         target_type=item.target_type.strip(),
         parameter_shape=tuple(item.parameter_shape),
+        tensor_name=item.tensor_name,
     )
 
 
@@ -248,8 +258,18 @@ def audit_sd3_adapter_tensors(
         for i in range(architecture.depth)
     }
     total = 0
+    seen_names: set[str] = set()
+    named = 0
+    unnamed = 0
     for raw in tensors:
         item = _clean_tensor(raw)
+        if item.tensor_name is None:
+            unnamed += 1
+        else:
+            if item.tensor_name in seen_names:
+                raise SD3ComponentAuditError(f"Duplicate LoRA tensor_name: {item.tensor_name!r}")
+            seen_names.add(item.tensor_name)
+            named += 1
         group = classify_sd3_adapter_target(
             architecture, item.target_root, item.target_path, item.target_type,
             module_inventory=module_inventory,
@@ -278,6 +298,11 @@ def audit_sd3_adapter_tensors(
         "changes_parameter_policy": False,
         "target_validation_status": "inventory_verified" if module_inventory is not None else "syntax_validated",
         "module_inventory_verified": module_inventory is not None,
+        "parameter_identity_status": (
+            "external_declared_unique" if named and not unnamed
+            else "unverified_external"
+        ),
+        "physical_uniqueness_verified": False,
         "total_adapter_tensors": total,
         "components": components,
         "blocks": [layers[i] for i in range(architecture.depth)],
@@ -297,13 +322,17 @@ def audit_sd3_parameter_descriptors(
     """
     records = []
     seen_ids: set[int] = set()
-    for descriptor in descriptors:
+    checked_descriptors = list(descriptors)
+    for descriptor in checked_descriptors:
         parameter_id = getattr(descriptor, "parameter_id", None)
         if isinstance(parameter_id, bool) or not isinstance(parameter_id, int):
             raise SD3ComponentAuditError("Descriptor missing integer parameter_id")
         if parameter_id in seen_ids:
             raise SD3ComponentAuditError("Duplicate physical ParameterDescriptor ID")
         seen_ids.add(parameter_id)
+        parameter = getattr(descriptor, "parameter", None)
+        if parameter is not None and id(parameter) != parameter_id:
+            raise SD3ComponentAuditError("Descriptor physical parameter_id mismatch")
         aliases = getattr(descriptor, "aliases", None)
         if not aliases:
             raise SD3ComponentAuditError("LoRA ParameterDescriptor has no original-target aliases")
@@ -316,8 +345,16 @@ def audit_sd3_parameter_descriptors(
         if len(targets) != 1:
             raise SD3ComponentAuditError("LoRA ParameterDescriptor aliases disagree on original target")
         root, path, kind = next(iter(targets))
-        records.append(SD3AdapterTensor(root, path, kind, tuple(descriptor.shape)))
-    return audit_sd3_adapter_tensors(architecture, records, module_inventory=module_inventory)
+        records.append(SD3AdapterTensor(
+            root, path, kind, tuple(descriptor.shape),
+            tensor_name=f"descriptor-id:{parameter_id}",
+        ))
+    report = audit_sd3_adapter_tensors(architecture, records, module_inventory=module_inventory)
+    report["parameter_identity_status"] = "descriptor_id_checked"
+    report["physical_uniqueness_verified"] = bool(checked_descriptors) and all(
+        getattr(descriptor, "parameter", None) is not None for descriptor in checked_descriptors
+    )
+    return report
 
 
 __all__ = [

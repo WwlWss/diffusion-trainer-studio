@@ -29,9 +29,13 @@ Context MLP or `context_block.attn.proj`. SD3.5 Medium `x_block.attn2` adds a
 second image-stream Attention in the first **13** blocks; it must not be confused
 with Joint Attention or Context Attention.
 
-The audit checks contiguous block indices, selected QKV/projection/MLP/modulation
-shapes, QK-norm presence, position embedding shape, and the extra attention
-subtree. An unrecognized/malformed variant fails closed. The shape index hash is
+Topology identification checks contiguous block indices, selected QKV/projection/MLP/
+modulation shapes, QK-norm presence, position embeddings, and extra Attention.
+The separate **strict full-MMDiT shape validator** checks *all* required DTS
+`create_sd3_mmdit()` state_dict tensors, including Bias, second MLP projection,
+embedding inputs, and final layer. It rejects missing, unexpected, or mismatched
+MMDiT keys. Text encoder/VAE subtrees are outside this MMDiT-only contract.
+An unrecognized/malformed variant fails closed. The shape index hash is
 **not** a weights-file digest and does **not** authenticate a checkpoint. Even a
 valid topology does not establish model provenance or a full-BF16 permission.
 **Large and Large Turbo can share the same topology**; their exact release and
@@ -49,13 +53,19 @@ training objectives must be qualified separately.
 | `mmdit.x_modulation.adapter` | `joint_blocks.*.x_block.adaLN_modulation.1` |
 | `mmdit.context_modulation.adapter` | `joint_blocks.*.context_block.adaLN_modulation.1` |
 | `mmdit.input_output.adapter` | explicit supported `x_embedder`, `context_embedder`, `t_embedder`, `y_embedder`, `final_layer` LoRA targets |
-| `clip_l.adapter` | CLIP-L Linear LoRA |
-| `clip_g.adapter` | CLIP-G Linear LoRA |
-| `t5xxl.adapter` | T5XXL Linear LoRA |
+| `clip_l.adapter` | CLIP-L Linear LoRA: 12 text encoder layers (0-11) |
+| `clip_g.adapter` | CLIP-G Linear LoRA: 32 text encoder layers (0-31) |
+| `t5xxl.adapter` | T5XXL Linear LoRA: 24 text encoder blocks (0-23) |
 
 These are not new Policy IDs. They are based on original target metadata, **not**
 on flattened `lora_unet_...` naming. Unsupported roots, target types, block
 indices, attention submodules, or final-block Context MLPs are rejected.
+Only instantiated DTS SD3 MLP `fc1/fc2` targets are accepted, not speculative
+SwiGLU `w1/w2/w3` targets. CLIP-L/G and T5XXL targets are checked against known
+module path grammars and layer ranges. An optional pure-metadata
+`module_inventory={root: {module_path: module_type}}` (from `named_modules()`)
+performs a stricter live target presence/type check; without it the result is
+`syntax_validated`, not `inventory_verified`.
 A diagnostic group with zero tensors is normal when a network target is not
 created (`emb_dims` unset; frozen/disabled encoder; `train_t5xxl=False`). The
 report separates logical component groups from exact per-block tensor counts.
@@ -72,17 +82,32 @@ python tools/audit_sd3_architecture.py \
 
 The `--checkpoint` path reads only the safetensors tensor **headers/shapes**
 through `safe_open(...).get_slice(...).get_shape()`, not tensor values or model
-weights into memory. For synthetic tests, the `--shape-index` flag accepts a
-JSON dictionary of tensor names to shapes (or `{ "shapes": ... }`). Synthetic
-shape input is not proof of a production model.
+weights into memory. It now **requires a complete DTS MMDiT subtree with the
+`model.diffusion_model.` root by default**, rejecting missing/unexpected/wrong
+shapes. The explicit `--topology-only` flag skips completeness checks.
+
+For synthetic tests, `--shape-index` accepts a JSON dictionary of tensor names
+and shapes (or `{ "shapes": ... }`), defaulting to topology-only for backwards
+compatibility. Add `--require-complete` to demand the exact full MMDiT shape
+inventory. A bare MMDiT index may pass full structure validation, but is **not**
+accepted as a directly loader-compatible `--checkpoint` root.
+
+The JSON report distinguishes `topology_recognized`, `structure_validation_status`
+(`pass` or `not_checked`), `mmdit_structure_complete` (true or null),
+`dts_loader_prefix_compatible`, and `input_source`. It always reports
+`release_identity_verified=false` and `qualifies_full_bf16=false`.
+Neither checkpoint shape completeness nor synthetic shape input proves the
+file's bytes, release provenance, successful PyTorch loading, or GPU qualification.
 
 For optional adapter-target statistics, pass `--adapter-targets targets.json`.
 Each list item represents **one LoRA tensor**, for instance `lora_down.weight`
-or `lora_up.weight`, and has exactly these fields:
+or `lora_up.weight`. The original four fields remain supported; optional
+`tensor_name` identifies an external tensor and rejects repeated names:
 
 ```json
 [
   {
+    "tensor_name": "lora_unet_joint_blocks_12_x_block_attn2_qkv.lora_down.weight",
     "target_root": "mmdit",
     "target_path": "joint_blocks.12.x_block.attn2.qkv",
     "target_type": "torch.nn.Linear",
@@ -100,7 +125,12 @@ report = audit_sd3_parameter_descriptors(architecture, scanned_descriptors)
 ```
 
 This API performs no training/mutation and rejects inconsistent aliases or
-repeated physical parameter IDs. Neither the CLI nor this API is integrated into
+repeated physical parameter IDs. When the actual parameter object is supplied,
+`id(parameter)` is cross-checked. JSON without all `tensor_name` values is
+reported as `parameter_identity_status=unverified_external`; unique declared
+names give `external_declared_unique`, **not** physical identity verification.
+Do **not** deduplicate `lora_down` and `lora_up` by original target and shape.
+Neither the CLI nor this API is integrated into
 an existing trainer, Preview, or Start action in PR A.
 
 ## Test and release boundaries
@@ -109,10 +139,12 @@ an existing trainer, Preview, or Start action in PR A.
 python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
 ```
 
-The tests cover the three topologies, pathological shape/size/extra-layer cases,
-pre-only semantics, all eleven diagnostic groups, actual per-layer counts,
-malformed/missing metadata, negative CLI cases, and a header-only safetensors
-reader fake that fails if full tensor contents are requested.
+The tests cover three topologies, independent complete shape fixtures,
+missing/wrong/unexpected MMDiT tensor mutations, loader prefixes, pre-only
+semantics, all eleven groups, bounded CLIP/T5 targets, module inventory,
+duplicate tensor IDs, physical ParameterDescriptor identity, CLI mode semantics,
+and a fake header reader that refuses full tensor value reads.
+Real SD3.5 Medium checkpoint validation remains an independent acceptance task.
 
 **Not in scope for PR A:** runtime `ModelComponentProfile` migration, UI/Sidecar
 v2, training or optimizer routing changes, SD3 Dev NetworkTrainer Resume fixes,
