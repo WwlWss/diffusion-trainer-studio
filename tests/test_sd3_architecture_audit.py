@@ -614,5 +614,28 @@ class CLIAuditTests(unittest.TestCase):
         self.assertEqual(result["model.diffusion_model.x_embedder.proj.weight"], (1536, 16, 2, 2))
 
 
+class WorkflowCoverageTests(unittest.TestCase):
+    def test_sd3_audit_changes_trigger_the_existing_validation_workflow(self):
+        """SD3 audit source-only PRs must not silently skip the CI host suite."""
+        workflow = (
+            ROOT / ".github" / "workflows" / "anima-qwen3-review.yml"
+        ).read_text(encoding="utf-8")
+        header = "on:\n  pull_request:\n    paths:\n"
+        self.assertIn(header, workflow)
+        paths_block = workflow.split(header, 1)[1].split("\njobs:", 1)[0]
+        for filename in (
+            "mikazuki/sd3_architecture_contract.py",
+            "mikazuki/sd3_component_audit.py",
+            "tools/audit_sd3_architecture.py",
+            "tests/test_sd3_architecture_audit.py",
+        ):
+            with self.subTest(filename=filename):
+                self.assertIn(f'      - "{filename}"', paths_block.splitlines())
+        self.assertIn(
+            "python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v",
+            workflow,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

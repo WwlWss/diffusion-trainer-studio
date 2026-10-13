@@ -3,6 +3,10 @@ name: Anima Qwen3 review
 on:
   pull_request:
     paths:
+      - "mikazuki/sd3_architecture_contract.py"
+      - "mikazuki/sd3_component_audit.py"
+      - "tools/audit_sd3_architecture.py"
+      - "tests/test_sd3_architecture_audit.py"
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_runtime.py"
       - "mikazuki/multi_caption_config.py"
