@@ -1,8 +1,8 @@
 """Read-only, torch-free, fine-grained SD3/SD3.5 LoRA target audit.
 
-The existing seven-component sd3-lora Parameter Policy is intentionally NOT
-changed by this module. The eleven groups below are diagnostic, not a new
-policy schema, optimizer owner, or permission to enable full-BF16.
+The existing seven-component `sd3-lora` Parameter Policy is intentionally NOT
+changed by this module. Eleven groups below are *diagnostic*, not a new policy
+schema, routing table, optimizer owner, or permission to enable full-BF16.
 """
 
 from __future__ import annotations
@@ -10,9 +10,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import re
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
-from mikazuki.sd3_architecture_contract import SD3Architecture
+from mikazuki.sd3_architecture_contract import SD3Architecture, SD3ArchitectureError
 
 
 class SD3ComponentAuditError(ValueError):
@@ -42,6 +42,21 @@ _NONBLOCK_PATH = re.compile(
     r"t_embedder\.mlp\.[02]|y_embedder\.mlp\.[02]|"
     r"final_layer\.(?:linear|adaLN_modulation\.1))$"
 )
+_CLIP_TARGET = re.compile(
+    r"^text_model\.encoder\.layers\.(\d+)\."
+    r"(?:self_attn\.(?:q_proj|k_proj|v_proj|out_proj)|mlp\.(?:fc1|fc2))$"
+)
+_T5_TARGET = re.compile(
+    r"^encoder\.block\.(\d+)\.layer\."
+    r"(?:0\.SelfAttention\.(?:q|k|v|o)|1\.DenseReluDense\.(?:wi_0|wi_1|wo))$"
+)
+_TEXT_LIMITS = {"clip_l": 12, "clip_g": 32, "t5xxl": 24}
+_TEXT_CANONICAL_ROOTS = {
+    "clip_l": "clip_l", "text_encoder_1": "clip_l",
+    "clip_g": "clip_g", "text_encoder_2": "clip_g",
+    "t5xxl": "t5xxl", "text_encoder_3": "t5xxl",
+}
+
 _COMPONENT_BY_PATH = {
     ("x_block", "attn"): "mmdit.x_attention.adapter",
     ("context_block", "attn"): "mmdit.context_attention.adapter",
@@ -112,13 +127,40 @@ def _clean_tensor(value: Any) -> SD3AdapterTensor:
     )
 
 
+def verify_target_membership(
+    target_root: str,
+    target_path: str,
+    target_type: str,
+    *,
+    module_inventory: Mapping[str, Mapping[str, str]],
+) -> None:
+    """Verify presence/type against *caller-provided* named_modules metadata.
+
+    Inventory keys are canonical roots: mmdit, clip_l, clip_g, t5xxl.
+    No model import or deserialization is performed in the audit layer.
+    """
+    if not isinstance(module_inventory, Mapping):
+        raise SD3ComponentAuditError("module_inventory must be a root->module_path->type mapping")
+    canonical_root = _TEXT_CANONICAL_ROOTS.get(target_root, "mmdit" if target_root in {"mmdit", "transformer"} else None)
+    modules = module_inventory.get(canonical_root) if canonical_root is not None else None
+    if not isinstance(modules, Mapping):
+        raise SD3ComponentAuditError(f"No module inventory for target root {canonical_root!r}")
+    actual_type = modules.get(target_path)
+    if not isinstance(actual_type, str) or actual_type.rsplit(".", 1)[-1] != target_type.rsplit(".", 1)[-1]:
+        raise SD3ComponentAuditError(
+            f"LoRA target is absent or wrong class in live module inventory: {canonical_root}.{target_path}"
+        )
+
+
 def classify_sd3_adapter_target(
     architecture: SD3Architecture,
     target_root: str,
     target_path: str,
     target_type: str,
+    *,
+    module_inventory: Mapping[str, Mapping[str, str]] | None = None,
 ) -> SD3TargetGroup:
-    """Classify original LoRA target metadata, never flattened adapter names."""
+    """Classify ORIGINAL LoRA target metadata, never flattened adapter names."""
     if not isinstance(architecture, SD3Architecture):
         raise SD3ComponentAuditError("A validated SD3Architecture is required")
     if not all(isinstance(x, str) and x.strip() for x in (target_root, target_path, target_type)):
@@ -132,6 +174,12 @@ def classify_sd3_adapter_target(
     if root in _TEXT_ROOTS:
         if target_class != "Linear":
             raise SD3ComponentAuditError("SD3 CLIP/T5 LoRA must target a Linear module")
+        canonical_root = _TEXT_CANONICAL_ROOTS[root]
+        match = (_T5_TARGET if canonical_root == "t5xxl" else _CLIP_TARGET).fullmatch(path)
+        if match is None or int(match.group(1)) >= _TEXT_LIMITS[canonical_root]:
+            raise SD3ComponentAuditError(f"Unknown or out-of-range {canonical_root} LoRA target: {path!r}")
+        if module_inventory is not None:
+            verify_target_membership(root, path, target_type, module_inventory=module_inventory)
         return SD3TargetGroup(_TEXT_ROOTS[root], None, None)
 
     if root not in {"mmdit", "transformer"}:
@@ -141,9 +189,9 @@ def classify_sd3_adapter_target(
     if match is None:
         if _NONBLOCK_PATH.fullmatch(path):
             if (path == "x_embedder.proj") != (target_class == "Conv2d"):
-                raise SD3ComponentAuditError(
-                    "SD3 x_embedder is Conv2d; other nonblock LoRA targets are Linear"
-                )
+                raise SD3ComponentAuditError("SD3 x_embedder is Conv2d; other nonblock LoRA targets are Linear")
+            if module_inventory is not None:
+                verify_target_membership(root, path, target_type, module_inventory=module_inventory)
             return SD3TargetGroup("mmdit.input_output.adapter", None, None)
         raise SD3ComponentAuditError(f"Unrecognized MMDiT LoRA original target: {path!r}")
 
@@ -152,67 +200,59 @@ def classify_sd3_adapter_target(
     family = match.group(3)
     child = match.group(4)
     if block_index < 0 or block_index >= architecture.depth:
-        raise SD3ComponentAuditError(
-            f"MMDiT target block {block_index} outside depth {architecture.depth}"
-        )
+        raise SD3ComponentAuditError(f"MMDiT target block {block_index} outside depth {architecture.depth}")
     if target_class != "Linear":
         raise SD3ComponentAuditError("MMDiT joint-block adapter target must be Linear")
     if family in {"attn", "attn2"} and child not in {"qkv", "proj"}:
         raise SD3ComponentAuditError(f"Unexpected SD3 attention LoRA projection: {child!r}")
-    if family == "mlp" and child not in {"fc1", "fc2", "w1", "w2", "w3"}:
+    if family == "mlp" and child not in {"fc1", "fc2"}:
         raise SD3ComponentAuditError(f"Unexpected SD3 MLP LoRA projection: {child!r}")
     if family == "adaLN_modulation" and child != "1":
         raise SD3ComponentAuditError(f"Unexpected SD3 modulation LoRA target: {child!r}")
-    if family == "attn2" and (
-        stream != "x_block" or block_index not in architecture.extra_attention_layers
-    ):
+    if family == "attn2" and (stream != "x_block" or block_index not in architecture.extra_attention_layers):
         raise SD3ComponentAuditError(f"Extra attention not present at {stream} block {block_index}")
-    if block_index == architecture.depth-1 and stream == "context_block":
+    if block_index == architecture.depth - 1 and stream == "context_block":
         if family == "mlp" or (family == "attn" and child == "proj"):
             raise SD3ComponentAuditError("Last MMDiT Context block is pre-only")
     component = _COMPONENT_BY_PATH.get((stream, family))
     if component is None:
         raise SD3ComponentAuditError(f"Unrecognized MMDiT target path: {path!r}")
+    if module_inventory is not None:
+        verify_target_membership(root, path, target_type, module_inventory=module_inventory)
     return SD3TargetGroup(component, block_index, architecture.block_kind(block_index))
 
 
 def audit_sd3_adapter_tensors(
     architecture: SD3Architecture,
     tensors: Iterable[SD3AdapterTensor | Mapping[str, Any]],
+    *,
+    module_inventory: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Count adapter ownership by eleven diagnostic groups and actual block.
+    """Count adapter tensor ownership by 11 diagnostic groups and actual block.
 
     Each row is one physical LoRA tensor, e.g. lora_down.weight or
-    lora_up.weight. Different rows may share the same original LoRA target.
-    No freezing, training or routing occurs.
+    lora_up.weight. Different rows MAY share the same original LoRA target.
+    This function never freezes/trains parameters or alters routing.
     """
     components: dict[str, dict[str, Any]] = {
-        name: {
-            "tensor_count": 0,
-            "parameter_elements": 0,
-            "target_module_count": 0,
-            "target_examples": [],
-        }
+        name: {"tensor_count": 0, "parameter_elements": 0, "target_module_count": 0,
+               "target_examples": []}
         for name in SD3_DIAGNOSTIC_COMPONENTS
     }
     module_targets: dict[str, set[tuple[str, str]]] = {
         name: set() for name in SD3_DIAGNOSTIC_COMPONENTS
     }
     layers: dict[int, dict[str, Any]] = {
-        i: {
-            "block_index": i,
-            "block_kind": architecture.block_kind(i),
-            "tensor_count": 0,
-            "parameter_elements": 0,
-            "components": {},
-        }
+        i: {"block_index": i, "block_kind": architecture.block_kind(i),
+            "tensor_count": 0, "parameter_elements": 0, "components": {}}
         for i in range(architecture.depth)
     }
     total = 0
     for raw in tensors:
         item = _clean_tensor(raw)
         group = classify_sd3_adapter_target(
-            architecture, item.target_root, item.target_path, item.target_type
+            architecture, item.target_root, item.target_path, item.target_type,
+            module_inventory=module_inventory,
         )
         numel = math.prod(item.parameter_shape)
         component = components[group.component_id]
@@ -229,15 +269,15 @@ def audit_sd3_adapter_tensors(
     for name in SD3_DIAGNOSTIC_COMPONENTS:
         targets = sorted(module_targets[name])
         components[name]["target_module_count"] = len(targets)
-        components[name]["target_examples"] = [
-            f"{root}.{path}" for root, path in targets[:5]
-        ]
+        components[name]["target_examples"] = [f"{root}.{path}" for root, path in targets[:5]]
     return {
         "schema": "dts.sd3-component-audit",
         "version": 1,
         "model_architecture": architecture.identity(),
         "read_only": True,
         "changes_parameter_policy": False,
+        "target_validation_status": "inventory_verified" if module_inventory is not None else "syntax_validated",
+        "module_inventory_verified": module_inventory is not None,
         "total_adapter_tensors": total,
         "components": components,
         "blocks": [layers[i] for i in range(architecture.depth)],
@@ -247,11 +287,13 @@ def audit_sd3_adapter_tensors(
 def audit_sd3_parameter_descriptors(
     architecture: SD3Architecture,
     descriptors: Iterable[Any],
+    *,
+    module_inventory: Mapping[str, Mapping[str, str]] | None = None,
 ) -> dict[str, Any]:
-    """Audit Step-3 descriptors without importing Torch.
+    """Audit Step-3 descriptors by adapter target without importing Torch.
 
     Descriptor aliases must agree on original targets. Step-3 should normally
-    deduplicate physical parameters; repeat IDs are rejected.
+    deduplicate physical parameters; repeat IDs are rejected rather than counted.
     """
     records = []
     seen_ids: set[int] = set()
@@ -264,28 +306,23 @@ def audit_sd3_parameter_descriptors(
         seen_ids.add(parameter_id)
         aliases = getattr(descriptor, "aliases", None)
         if not aliases:
-            raise SD3ComponentAuditError(
-                "LoRA ParameterDescriptor has no original-target aliases"
-            )
+            raise SD3ComponentAuditError("LoRA ParameterDescriptor has no original-target aliases")
         targets = set()
         for alias in aliases:
             target = getattr(alias, "adapter_target", None)
             if target is None:
-                raise SD3ComponentAuditError(
-                    "LoRA ParameterDescriptor lacks AdapterTargetMetadata"
-                )
+                raise SD3ComponentAuditError("LoRA ParameterDescriptor lacks AdapterTargetMetadata")
             targets.add((target.root, target.module_path, target.module_type))
         if len(targets) != 1:
-            raise SD3ComponentAuditError(
-                "LoRA ParameterDescriptor aliases disagree on original target"
-            )
+            raise SD3ComponentAuditError("LoRA ParameterDescriptor aliases disagree on original target")
         root, path, kind = next(iter(targets))
         records.append(SD3AdapterTensor(root, path, kind, tuple(descriptor.shape)))
-    return audit_sd3_adapter_tensors(architecture, records)
+    return audit_sd3_adapter_tensors(architecture, records, module_inventory=module_inventory)
 
 
 __all__ = [
     "SD3AdapterTensor", "SD3ComponentAuditError", "SD3TargetGroup",
     "SD3_DIAGNOSTIC_COMPONENTS", "classify_sd3_adapter_target",
     "audit_sd3_adapter_tensors", "audit_sd3_parameter_descriptors",
+    "verify_target_membership",
 ]
