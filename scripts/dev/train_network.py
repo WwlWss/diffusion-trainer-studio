@@ -57,8 +57,16 @@ class NetworkTrainer:
         self.vae_scale_factor = 0.18215
         self.is_sdxl = False
 
-    def register_additional_state_hooks(self, *, accelerator, args, unet):
+    def register_additional_state_hooks(
+        self, *, accelerator, args, unet, train_dataloader, current_epoch, current_step,
+    ):
         """Optional backend-specific checkpoint hooks; default is a strict no-op."""
+        return None
+
+    def plan_backend_resume_cursor(
+        self, *, args, saved_step, saved_epoch, dataloader_batches, num_processes,
+    ):
+        """Optional backend-only cursor; None preserves legacy NetworkTrainer."""
         return None
 
     # TODO 他のスクリプトと共通化する
@@ -1006,6 +1014,7 @@ class NetworkTrainer:
                 json.dump({"current_epoch": current_epoch.value, "current_step": current_step.value + 1}, f)
 
         steps_from_state = None
+        epoch_from_state = None
 
         def load_model_hook(models, input_dir):
             # remove models except network
@@ -1018,12 +1027,13 @@ class NetworkTrainer:
             # print(f"load model hook: {len(models)} models will be loaded")
 
             # load current epoch and step to
-            nonlocal steps_from_state
+            nonlocal steps_from_state, epoch_from_state
             train_state_file = os.path.join(input_dir, "train_state.json")
             if os.path.exists(train_state_file):
                 with open(train_state_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                 steps_from_state = data["current_step"]
+                epoch_from_state = data.get("current_epoch")
                 logger.info(f"load train state from {train_state_file}: {data}")
 
         accelerator.register_save_state_pre_hook(save_model_hook)
@@ -1032,6 +1042,8 @@ class NetworkTrainer:
         # identity. No other backend changes its save/resume behavior.
         self.register_additional_state_hooks(
             accelerator=accelerator, args=args, unet=unet,
+            train_dataloader=train_dataloader,
+            current_epoch=current_epoch, current_step=current_step,
         )
 
         # resumeする
@@ -1301,50 +1313,66 @@ class NetworkTrainer:
                 minimum_metadata[key] = metadata[key]
 
         # calculate steps to skip when resuming or starting from a specific step
-        initial_step = 0
-        if args.initial_epoch is not None or args.initial_step is not None:
-            # if initial_epoch or initial_step is specified, steps_from_state is ignored even when resuming
-            if steps_from_state is not None:
-                logger.warning(
-                    "steps from the state is ignored because initial_step is specified / initial_stepが指定されているため、stateからのステップ数は無視されます"
-                )
-            if args.initial_step is not None:
-                initial_step = args.initial_step
-            else:
-                # num steps per epoch is calculated by num_processes and gradient_accumulation_steps
-                initial_step = (args.initial_epoch - 1) * math.ceil(
-                    len(train_dataloader) / accelerator.num_processes / args.gradient_accumulation_steps
-                )
+        # Every backend except SD3 preserves the pre-existing legacy cursor.
+        # SD3 returns a verified optimizer-step cursor or fails closed.
+        backend_resume_cursor = self.plan_backend_resume_cursor(
+            args=args, saved_step=steps_from_state, saved_epoch=epoch_from_state,
+            dataloader_batches=len(train_dataloader),
+            num_processes=accelerator.num_processes,
+        )
+        if backend_resume_cursor is not None:
+            initial_step = 0
+            epoch_to_start = backend_resume_cursor.epoch_to_start
+            global_step = backend_resume_cursor.completed_steps
+            logger.info(
+                "SD3 resumed at completed optimizer step %s / epoch index %s",
+                global_step, epoch_to_start,
+            )
         else:
-            # if initial_epoch and initial_step are not specified, steps_from_state is used when resuming
-            if steps_from_state is not None:
-                initial_step = steps_from_state
-                steps_from_state = None
-
-        if initial_step > 0:
-            assert (
-                args.max_train_steps > initial_step
-            ), f"max_train_steps should be greater than initial step / max_train_stepsは初期ステップより大きい必要があります: {args.max_train_steps} vs {initial_step}"
-
-        epoch_to_start = 0
-        if initial_step > 0:
-            if args.skip_until_initial_step:
-                # if skip_until_initial_step is specified, load data and discard it to ensure the same data is used
-                if not args.resume:
-                    logger.info(
-                        f"initial_step is specified but not resuming. lr scheduler will be started from the beginning / initial_stepが指定されていますがresumeしていないため、lr schedulerは最初から始まります"
+            initial_step = 0
+            if args.initial_epoch is not None or args.initial_step is not None:
+                # if initial_epoch or initial_step is specified, steps_from_state is ignored even when resuming
+                if steps_from_state is not None:
+                    logger.warning(
+                        "steps from the state is ignored because initial_step is specified / initial_stepが指定されているため、stateからのステップ数は無視されます"
                     )
-                logger.info(f"skipping {initial_step} steps / {initial_step}ステップをスキップします")
-                initial_step *= args.gradient_accumulation_steps
-
-                # set epoch to start to make initial_step less than len(train_dataloader)
-                epoch_to_start = initial_step // math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+                if args.initial_step is not None:
+                    initial_step = args.initial_step
+                else:
+                    # num steps per epoch is calculated by num_processes and gradient_accumulation_steps
+                    initial_step = (args.initial_epoch - 1) * math.ceil(
+                        len(train_dataloader) / accelerator.num_processes / args.gradient_accumulation_steps
+                    )
             else:
-                # if not, only epoch no is skipped for informative purpose
-                epoch_to_start = initial_step // math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
-                initial_step = 0  # do not skip
+                # if initial_epoch and initial_step are not specified, steps_from_state is used when resuming
+                if steps_from_state is not None:
+                    initial_step = steps_from_state
+                    steps_from_state = None
 
-        global_step = 0
+            if initial_step > 0:
+                assert (
+                    args.max_train_steps > initial_step
+                ), f"max_train_steps should be greater than initial step / max_train_stepsは初期ステップより大きい必要があります: {args.max_train_steps} vs {initial_step}"
+
+            epoch_to_start = 0
+            if initial_step > 0:
+                if args.skip_until_initial_step:
+                    # if skip_until_initial_step is specified, load data and discard it to ensure the same data is used
+                    if not args.resume:
+                        logger.info(
+                            f"initial_step is specified but not resuming. lr scheduler will be started from the beginning / initial_stepが指定されていますがresumeしていないため、lr schedulerは最初から始まります"
+                        )
+                    logger.info(f"skipping {initial_step} steps / {initial_step}ステップをスキップします")
+                    initial_step *= args.gradient_accumulation_steps
+
+                    # set epoch to start to make initial_step less than len(train_dataloader)
+                    epoch_to_start = initial_step // math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+                else:
+                    # if not, only epoch no is skipped for informative purpose
+                    epoch_to_start = initial_step // math.ceil(len(train_dataloader) / args.gradient_accumulation_steps)
+                    initial_step = 0  # do not skip
+
+            global_step = 0
 
         noise_scheduler = self.get_noise_scheduler(args, accelerator.device)
 
@@ -1425,7 +1453,7 @@ class NetworkTrainer:
         clean_memory_on_device(accelerator.device)
 
         progress_bar = tqdm(
-            range(args.max_train_steps - initial_step), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
+            range(backend_resume_cursor.remaining_steps if backend_resume_cursor is not None else args.max_train_steps - initial_step), smoothing=0, disable=not accelerator.is_local_main_process, desc="steps"
         )
 
         validation_steps = (
