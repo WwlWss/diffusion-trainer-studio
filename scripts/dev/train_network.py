@@ -57,6 +57,10 @@ class NetworkTrainer:
         self.vae_scale_factor = 0.18215
         self.is_sdxl = False
 
+    def register_additional_state_hooks(self, *, accelerator, args, unet):
+        """Optional backend-specific checkpoint hooks; default is a strict no-op."""
+        return None
+
     # TODO 他のスクリプトと共通化する
     def generate_step_logs(
         self,
@@ -1024,6 +1028,11 @@ class NetworkTrainer:
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
+        # SD3 alone currently uses this seam for extra-attention algorithm
+        # identity. No other backend changes its save/resume behavior.
+        self.register_additional_state_hooks(
+            accelerator=accelerator, args=args, unet=unet,
+        )
 
         # resumeする
         train_util.resume_from_local_or_hf_if_specified(accelerator, args)

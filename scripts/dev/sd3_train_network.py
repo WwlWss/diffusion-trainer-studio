@@ -26,6 +26,14 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         super().__init__()
         self.sample_prompts_te_outputs = None
 
+    def register_additional_state_hooks(self, *, accelerator, args, unet):
+        del args
+        from library.sd3_forward_contract import register_sd3_forward_semantics_hooks
+
+        return register_sd3_forward_semantics_hooks(
+            accelerator, accelerator.unwrap_model(unet),
+        )
+
     def assert_extra_args(
         self,
         args,

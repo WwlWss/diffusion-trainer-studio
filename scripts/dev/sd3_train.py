@@ -606,6 +606,12 @@ def train(args):
         # -> But we think it's ok to patch accelerator even if deepspeed is enabled.
         train_util.patch_accelerator_for_fp16_training(accelerator)
 
+    # Guard SD3.5 Medium extra-attention forward identity before optimizer
+    # state restoration. This is distinct from LoRA-specific resume cursor.
+    from library.sd3_forward_contract import register_sd3_forward_semantics_hooks
+    register_sd3_forward_semantics_hooks(
+        accelerator, accelerator.unwrap_model(mmdit),
+    )
     # resumeする
     train_util.resume_from_local_or_hf_if_specified(accelerator, args)
 
