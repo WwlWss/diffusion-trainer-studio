@@ -3,6 +3,10 @@ name: Anima Qwen3 review
 on:
   pull_request:
     paths:
+      - "mikazuki/sd3_architecture_contract.py"
+      - "mikazuki/sd3_component_audit.py"
+      - "tools/audit_sd3_architecture.py"
+      - "tests/test_sd3_architecture_audit.py"
       - "mikazuki/anima_qwen_config.py"
       - "mikazuki/anima_runtime.py"
       - "mikazuki/multi_caption_config.py"
@@ -325,6 +329,9 @@ jobs:
 
       - name: Parameter Policy host contract
         run: python -m unittest discover -s tests -p 'test_parameter_policy*.py' -v
+
+      - name: SD3 architecture and component audit contracts
+        run: python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
 
       - name: Parameter Policy model scan primitives
         run: python -m unittest tests.test_model_component_profiles tests.test_parameter_routing -v
