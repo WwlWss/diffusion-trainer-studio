@@ -132,6 +132,45 @@ class SD3ResumeTests(unittest.TestCase):
             with self.assertRaisesRegex(self.m.SD3ResumeCursorError, "conflicts"):
                 accelerator.load_hooks[0]([], td)
 
+    def test_mid_epoch_load_hook_rejects_before_optimizer_restoration(self):
+        accelerator = Accelerator()
+        args = SimpleNamespace(gradient_accumulation_steps=1)
+        self.m.register_sd3_resume_progress_hooks(
+            accelerator, args=args, train_dataloader=[0, 1, 2, 3],
+            current_epoch=SimpleNamespace(value=1),
+            current_step=SimpleNamespace(value=0),
+        )
+        optimizer_state_restored = []
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "train_state.json").write_text(
+                json.dumps({"current_step": 1, "current_epoch": 1}),
+                encoding="utf-8",
+            )
+            accelerator.save_hooks[0]([], [], td)
+            with self.assertRaisesRegex(self.m.SD3ResumeCursorError, "mid-epoch"):
+                for hook in accelerator.load_hooks:
+                    hook([], td)
+                optimizer_state_restored.append(True)
+        self.assertEqual(optimizer_state_restored, [])
+
+    def test_multiprocess_checkpoint_pre_hook_rejected(self):
+        accelerator = Accelerator()
+        accelerator.num_processes = 2
+        args = SimpleNamespace(gradient_accumulation_steps=1)
+        self.m.register_sd3_resume_progress_hooks(
+            accelerator, args=args, train_dataloader=[0],
+            current_epoch=SimpleNamespace(value=1),
+            current_step=SimpleNamespace(value=0),
+        )
+        with tempfile.TemporaryDirectory() as td:
+            (Path(td) / "train_state.json").write_text(
+                json.dumps({"current_step": 1, "current_epoch": 1}),
+                encoding="utf-8",
+            )
+            accelerator.save_hooks[0]([], [], td)
+            with self.assertRaisesRegex(self.m.SD3ResumeCursorError, "one process"):
+                accelerator.load_hooks[0]([], td)
+
     def test_scoped_production_wiring_preserves_other_dev_trainers(self):
         base = (ROOT / "scripts" / "dev" / "train_network.py").read_text(encoding="utf-8")
         sd3 = (ROOT / "scripts" / "dev" / "sd3_train_network.py").read_text(encoding="utf-8")

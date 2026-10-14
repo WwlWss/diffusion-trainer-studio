@@ -149,6 +149,21 @@ def validate_sd3_resume_progress(
             "SD3 resume progress conflicts with saved train_state or "
             "current DataLoader/accumulation/process geometry."
         )
+    # Enforce the same fail-closed scope in Accelerate's pre-load hook, not
+    # only later when the trainer constructs its epoch cursor. Nothing from an
+    # unsupported mid-epoch/multi-process state may reach optimizer.load_state.
+    if num_processes != 1:
+        raise SD3ResumeCursorError(
+            "SD3 LoRA checkpoint load supports one process only"
+        )
+    batches = expected["dataloader_batches"]
+    accumulation = expected["gradient_accumulation_steps"]
+    steps_per_epoch = (batches + accumulation - 1) // accumulation
+    if expected["completed_optimizer_steps"] % steps_per_epoch:
+        raise SD3ResumeCursorError(
+            "SD3 mid-epoch resume is not qualified; rejecting state "
+            "before optimizer restoration."
+        )
     return saved
 
 

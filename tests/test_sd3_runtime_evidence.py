@@ -85,6 +85,12 @@ class SD3RuntimeEvidenceContractTests(unittest.TestCase):
             with self.assertRaisesRegex(self.tool.SD3RuntimeEvidenceError, "already exists"):
                 self.tool.validate_manifest(data)
 
+    def test_requires_absolute_paths_outside_repository(self):
+        with self.assertRaisesRegex(self.tool.SD3RuntimeEvidenceError, "absolute"):
+            self.tool._outside_repo("relative-output.json", name="Evidence JSON")
+        with self.assertRaisesRegex(self.tool.SD3RuntimeEvidenceError, "outside"):
+            self.tool._outside_repo(str(ROOT / "inside.json"), name="Evidence JSON")
+
     def test_forward_and_step_evidence_not_qualification(self):
         source = PATH.read_text(encoding="utf-8")
         self.assertIn('"qualifies_full_bf16": False', source)

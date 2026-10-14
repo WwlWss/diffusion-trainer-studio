@@ -49,8 +49,11 @@ def _check_head(expected: str) -> None:
 
 
 def _outside_repo(raw: str, *, name: str) -> Path:
-    path = Path(raw).expanduser().resolve(strict=False)
-    if not path.is_absolute() or path == ROOT or ROOT in path.parents:
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        raise SD3RuntimeEvidenceError(f"{name} must be an absolute path")
+    path = candidate.resolve(strict=False)
+    if path == ROOT or ROOT in path.parents:
         raise SD3RuntimeEvidenceError(f"{name} must be absolute and outside the source repository")
     return path
 
@@ -170,15 +173,24 @@ def _checkpoint_evidence(path: Path, *, step: int) -> dict[str, Any]:
         raise SD3RuntimeEvidenceError("Checkpoint progress and train_state disagree")
     if semantics.get("attention_contract") != "extra-attention-head-dim-v1":
         raise SD3RuntimeEvidenceError("Checkpoint does not prove corrected SD3.5 extra-attention")
-    if semantics.get("head_dim") != 64 or semantics.get("extra_attention_layers") != list(range(13)):
+    if (
+        semantics.get("depth") != 24
+        or semantics.get("hidden_size") != 1536
+        or semantics.get("num_heads") != 24
+        or semantics.get("head_dim") != 64
+        or semantics.get("extra_attention_layers") != list(range(13))
+    ):
         raise SD3RuntimeEvidenceError("SD3.5 Medium forward semantics differ from reference")
     optimizer_paths = sorted(path.glob("optimizer*.bin"))
     if not optimizer_paths:
         raise SD3RuntimeEvidenceError(f"Missing Accelerate optimizer state at {path}")
-    optimizer_hashes = {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest()
-        for p in optimizer_paths
-    }
+    optimizer_hashes = {}
+    for optimizer_file in optimizer_paths:
+        digest = hashlib.sha256()
+        with optimizer_file.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        optimizer_hashes[optimizer_file.name] = digest.hexdigest()
     policy = path / "dts_parameter_policy_manifest.json"
     policy_manifest = _read_json(policy) if policy.is_file() else None
     if policy_manifest is not None and policy_manifest.get("version") != 2:
