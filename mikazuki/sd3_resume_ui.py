@@ -99,7 +99,9 @@ def normalize_sd3_training_duration(config: dict, warnings: list[str]) -> None:
     has_epochs = raw_epochs not in (None, "")
     has_steps = raw_steps not in (None, "")
     resume = str(config.get("resume") or "").strip()
-    if resume:
+    if not resume:
+        config.pop("resume", None)
+    else:
         # The exact path inspected by Preview must also reach the trainer.
         config["resume"] = resume
         conflicting = [
