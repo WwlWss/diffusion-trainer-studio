@@ -178,6 +178,24 @@ class Sd3UiResumeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "单 GPU"):
             self.prepare({**base, "gradient_accumulation_steps": 2, "gpu_ids": ["0", "1"]})
 
+    def test_resume_normalizes_whitespace_and_rejects_legacy_cursor_controls(self):
+        resume = self.checkpoint()
+        base = {
+            "resume": f"  {resume}  ",
+            "sd3_training_target_mode": "steps",
+            "sd3_training_target_steps": 10,
+            "gradient_accumulation_steps": 2,
+        }
+        prepared = self.prepare(base)
+        self.assertEqual(prepared.config["resume"], resume)
+        for key, value in (
+            ("initial_step", 0),
+            ("initial_epoch", 1),
+            ("skip_until_initial_step", True),
+        ):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, key):
+                self.prepare({**base, "ui_custom_params": f"{key} = {str(value).lower()}"})
+
     def test_ui_custom_params_cannot_reintroduce_legacy_duration(self):
         with self.assertRaisesRegex(ValueError, "不能再通过旧字段"):
             self.prepare({
