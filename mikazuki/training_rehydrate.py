@@ -174,6 +174,19 @@ def rehydrate_trainer_config(
 
     args = _network_arg_items(config.pop("network_args", None))
     if page_train_type == "sd3-lora":
+        # Existing/legacy trainer TOML contains one or both raw duration flags.
+        # Rehydrate a single semantic UI target. Historical sd-scripts gives
+        # max_train_epochs priority when both flags were provided.
+        raw_epochs = config.pop("max_train_epochs", None)
+        raw_steps = config.pop("max_train_steps", None)
+        if raw_epochs not in (None, ""):
+            config["sd3_training_target_mode"] = "epochs"
+            config["sd3_training_target_epochs"] = raw_epochs
+        elif raw_steps not in (None, ""):
+            config["sd3_training_target_mode"] = "steps"
+            config["sd3_training_target_steps"] = raw_steps
+        # A converted Resume effective config contains absolute steps; importing
+        # it as Steps intentionally preserves the final optimizer-step target.
         train_t5_raw, args = _extract_exact_arg(args, "train_t5xxl")
         config["train_t5xxl"] = train_t5_raw == "True" if train_t5_raw is not None else False
         unet_only = _as_bool(config.pop("network_train_unet_only", False))
