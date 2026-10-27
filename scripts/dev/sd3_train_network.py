@@ -26,6 +26,38 @@ class Sd3NetworkTrainer(train_network.NetworkTrainer):
         super().__init__()
         self.sample_prompts_te_outputs = None
 
+    def register_additional_state_hooks(
+        self, *, accelerator, args, unet, train_dataloader, current_epoch, current_step,
+    ):
+        from library.sd3_forward_contract import register_sd3_forward_semantics_hooks
+        from library.sd3_resume_cursor import register_sd3_resume_progress_hooks
+
+        register_sd3_forward_semantics_hooks(
+            accelerator, accelerator.unwrap_model(unet),
+        )
+        register_sd3_resume_progress_hooks(
+            accelerator, args=args, train_dataloader=train_dataloader,
+            current_epoch=current_epoch, current_step=current_step,
+        )
+
+    def plan_backend_resume_cursor(
+        self, *, args, saved_step, saved_epoch, dataloader_batches, num_processes,
+    ):
+        if not args.resume:
+            return None
+        from library.sd3_resume_cursor import plan_sd3_lora_resume_cursor
+
+        return plan_sd3_lora_resume_cursor(
+            saved_step=saved_step, saved_epoch=saved_epoch,
+            max_train_steps=args.max_train_steps,
+            dataloader_batches=dataloader_batches,
+            gradient_accumulation_steps=args.gradient_accumulation_steps,
+            num_processes=num_processes,
+            initial_step=args.initial_step, initial_epoch=args.initial_epoch,
+            max_train_epochs=args.max_train_epochs,
+            skip_until_initial_step=args.skip_until_initial_step,
+        )
+
     def assert_extra_args(
         self,
         args,
