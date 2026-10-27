@@ -5,7 +5,7 @@ Schema.intersect([
         clip_l: Schema.string().role('filepicker', { type: "model-file" }).description("clip_l 模型文件路径"),
         clip_g: Schema.string().role('filepicker', { type: "model-file" }).description("clip_g 模型文件路径"),
         t5xxl: Schema.string().role('filepicker', { type: "model-file" }).description("t5xxl 模型文件路径"),
-        resume: Schema.string().role('filepicker', { type: "folder" }).description("从某个 `save_state` 保存的中断状态继续训练，填写文件路径"),
+        resume: Schema.string().role('filepicker', { type: "folder" }).description("选择 save_state Checkpoint 状态目录；仅支持单进程 Epoch 边界恢复，旧版状态请用 network_weights 开始新阶段"),
     }).description("训练用模型"),
 
     Schema.object({
@@ -26,8 +26,24 @@ Schema.intersect([
     // 保存设置
     SHARED_SCHEMAS.SAVE_SETTINGS,
 
+    // SD3-only duration target: backend compiles to trainer step/epoch flags.
+    Schema.intersect([
+        Schema.object({
+            sd3_training_target_mode: Schema.union(["epochs", "steps"]).default("epochs").description("训练目标单位：Epoch 或优化器总步数；Resume 时按绝对目标计算"),
+        }).description("训练目标"),
+        Schema.union([
+            Schema.object({
+                sd3_training_target_mode: Schema.const("epochs").required(),
+                sd3_training_target_epochs: Schema.number().min(1).step(1).default(20).description("目标总 Epoch（包括已完成轮数）；Resume 时依据 Checkpoint 换算"),
+            }),
+            Schema.object({
+                sd3_training_target_mode: Schema.const("steps").required(),
+                sd3_training_target_steps: Schema.number().min(1).step(1).default(1600).description("目标总优化步数（包含恢复前已经完成的步数）"),
+            }),
+        ]),
+    ]),
+
     Schema.object({
-        max_train_epochs: Schema.number().min(1).default(20).description("最大训练 epoch（轮数）"),
         train_batch_size: Schema.number().min(1).default(1).description("批量大小, 越高显存占用越高"),
         gradient_checkpointing: Schema.boolean().default(true).description("梯度检查点"),
         gradient_accumulation_steps: Schema.number().min(1).default(1).description("梯度累加步数"),
