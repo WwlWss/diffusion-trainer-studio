@@ -99,6 +99,20 @@ def normalize_sd3_training_duration(config: dict, warnings: list[str]) -> None:
     has_epochs = raw_epochs not in (None, "")
     has_steps = raw_steps not in (None, "")
     resume = str(config.get("resume") or "").strip()
+    if resume:
+        # The exact path inspected by Preview must also reach the trainer.
+        config["resume"] = resume
+        conflicting = [
+            name for name in ("initial_step", "initial_epoch")
+            if config.get(name) is not None
+        ]
+        if config.get("skip_until_initial_step"):
+            conflicting.append("skip_until_initial_step")
+        if conflicting:
+            raise ValueError(
+                "SD3 Resume: 不能同时设置旧式训练游标参数: "
+                + ", ".join(sorted(conflicting))
+            )
     if mode not in (None, "", "epochs", "steps"):
         raise ValueError("SD3: 训练目标只能选择 epochs 或 steps。")
 
