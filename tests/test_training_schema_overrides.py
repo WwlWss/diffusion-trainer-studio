@@ -71,6 +71,16 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertNotIn("network_train_text_encoder_only: Schema.boolean", fixed)
         self.assertIn("train_t5xxl", fixed)
 
+    def test_sd3_duration_schema_has_explicit_epoch_and_step_modes(self):
+        source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
+        fixed = override_raw_schema("sd3-lora", source)
+        self.assertIn('sd3_training_target_mode: Schema.union(["epochs", "steps"])', fixed)
+        self.assertIn("sd3_training_target_epochs: Schema.number().min(1).step(1).default(20)", fixed)
+        self.assertIn("sd3_training_target_steps: Schema.number().min(1).step(1).default(1600)", fixed)
+        self.assertNotIn("max_train_epochs: Schema.number().min(1).default(20)", fixed)
+        self.assertIn("仅支持单进程 Epoch 边界恢复", fixed)
+        assert_js_expression_compiles(self, fixed, "SD3 LoRA duration and resume")
+
     def test_flux_and_sd3_real_schema_defaults_keep_fp8_enabled(self):
         flux_source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         sd3_source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
