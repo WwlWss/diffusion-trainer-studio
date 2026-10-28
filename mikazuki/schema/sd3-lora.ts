@@ -31,14 +31,19 @@ Schema.intersect([
         Schema.object({
             sd3_training_target_mode: Schema.union(["epochs", "steps"]).default("epochs").description("训练目标单位：Epoch 或优化器总步数；Resume 时按绝对目标计算"),
         }).description("训练目标"),
+        // The pinned Schemastery union validator runs before sibling defaults
+        // have reached form state. A required "epochs" discriminator as the
+        // first branch rejects {} during initial page render. Follow the
+        // established Multi-Caption fallback pattern: explicit non-default
+        // branch first, default Epoch branch last with a defaulted const.
         Schema.union([
-            Schema.object({
-                sd3_training_target_mode: Schema.const("epochs").required(),
-                sd3_training_target_epochs: Schema.number().min(1).step(1).default(20).description("目标总 Epoch（包括已完成轮数）；Resume 时依据 Checkpoint 换算"),
-            }),
             Schema.object({
                 sd3_training_target_mode: Schema.const("steps").required(),
                 sd3_training_target_steps: Schema.number().min(1).step(1).default(1600).description("目标总优化步数（包含恢复前已经完成的步数）"),
+            }),
+            Schema.object({
+                sd3_training_target_mode: Schema.const("epochs").default("epochs"),
+                sd3_training_target_epochs: Schema.number().min(1).step(1).default(20).description("目标总 Epoch（包括已完成轮数）；Resume 时依据 Checkpoint 换算"),
             }),
         ]),
     ]),
