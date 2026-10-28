@@ -584,6 +584,46 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                 args=spec, train_type="sd3-lora", roots={},
             )
 
+    def test_direct_trainer_r1_r2_production_namespace_reaches_parameter_scan(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("direct-trainer integration runs in pinned CPU runtime smoke")
+        from mikazuki.parameter_policy_trainer import create_parameter_policy_session
+
+        qualified = execution.ExecutionFeatureQualification(
+            "qualified", "test-only qualified", "test:sd3c2a-future",
+        )
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            with self.subTest(case=label):
+                _name, canonical = serialize_parameter_policy(policy)
+                sidecar = self.root / (label + "-policy.json")
+                sidecar.write_text(canonical, encoding="utf-8")
+                # This is the representation the production Trainer passes to
+                # create_parameter_policy_session after prepare_dataset_args.
+                spec = config(self.model, accumulation=accumulation)
+                spec.update(
+                    parameter_policy_config=str(sidecar),
+                    resolution=(512, 512),
+                    network_dropout=None,
+                    enable_bucket=False,
+                )
+                sentinel = "R1_R2_SCOPE_ACCEPTED_REACHED_PARAMETER_SCAN"
+                with patch.dict(
+                    execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+                    {"sd3-lora": qualified},
+                ), patch(
+                    "mikazuki.parameter_policy_trainer.scan_parameter_roots",
+                    side_effect=RuntimeError(sentinel),
+                ) as scan, self.assertRaisesRegex(RuntimeError, sentinel):
+                    create_parameter_policy_session(
+                        args=argparse.Namespace(**spec),
+                        train_type="sd3-lora",
+                        roots={},
+                    )
+                scan.assert_called_once()
+
     def test_actual_safetensors_header_reader_on_small_cpu_fixture(self):
         if (
             importlib.util.find_spec("torch") is None
