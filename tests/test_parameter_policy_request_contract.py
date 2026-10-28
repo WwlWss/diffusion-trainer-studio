@@ -73,7 +73,7 @@ def _component_gui_config(train_type, train_components, **extra):
     return config
 
 
-def _real_prepare_request():
+def _real_prepare_request(**overrides):
     resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
     return _load_prepare_request_config(
         normalize_parameter_policy_editor_state=normalize_parameter_policy_editor_state,
@@ -83,6 +83,7 @@ def _real_prepare_request():
         parameter_policy_runtime_blockers=parameter_policy_runtime_blockers,
         parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
         PARAMETER_POLICY_RUNTIME_TRAIN_TYPES=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+        **overrides,
     )
 
 
