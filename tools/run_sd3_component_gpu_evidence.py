@@ -74,7 +74,7 @@ def _read_policy(path: Path) -> tuple[dict[str, Any], str]:
 
 def validate_manifest(payload: dict[str, Any]) -> dict[str, Any]:
     """Fail closed before loading Torch or executing a production trainer."""
-    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA or payload.get("version") != VERSION:
+    if not isinstance(payload, dict) or payload.get("schema") != SCHEMA or type(payload.get("version")) is not int or payload.get("version") != VERSION:
         raise SD3ComponentBaselineError("Unknown D1-SD3C1 baseline manifest")
     if any(key in payload for key in ("qualifies_full_bf16", "backend_qualification_eligible", "qualification_override")):
         raise SD3ComponentBaselineError("Manifest cannot declare or override production qualification")
@@ -188,6 +188,7 @@ def verify_component_checkpoint(
     if (
         not isinstance(optimizers, list)
         or len(optimizers) != 1
+        or not isinstance(optimizers[0], dict)
         or optimizers[0].get("profile_name") != name
         or optimizers[0].get("optimizer_type") != "AdamW"
         or not optimizers[0].get("topology_fingerprint")
@@ -195,12 +196,31 @@ def verify_component_checkpoint(
         raise SD3ComponentBaselineError("R0 CompositeOptimizer child topology is invalid")
     if any(k in policy_manifest for k in ("execution_identity", "execution_signature")):
         raise SD3ComponentBaselineError("Mixed-BF16 R0 must not be labeled full-BF16 execution")
-    if not isinstance(policy_manifest.get("scheduler_identity"), dict) or not policy_manifest.get("scheduler_signature"):
+    scheduler_identity = policy_manifest.get("scheduler_identity")
+    scheduler_signature = policy_manifest.get("scheduler_signature")
+    if not isinstance(scheduler_identity, dict) or not isinstance(scheduler_signature, str):
         raise SD3ComponentBaselineError("R0 checkpoint lacks CompositeLRScheduler identity")
+    canonical = json.dumps(scheduler_identity, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    if hashlib.sha256(canonical.encode("utf-8")).hexdigest() != scheduler_signature:
+        raise SD3ComponentBaselineError("R0 checkpoint scheduler identity signature is invalid")
+    schedulers = policy_manifest.get("schedulers")
+    if (
+        not isinstance(schedulers, list)
+        or len(schedulers) != 1
+        or not isinstance(schedulers[0], dict)
+        or schedulers[0].get("profile_name") != name
+        or not schedulers[0].get("topology_fingerprint")
+    ):
+        raise SD3ComponentBaselineError("R0 checkpoint CompositeLRScheduler child topology is invalid")
 
     progress = evidence["progress"]
     if (
-        progress.get("completed_optimizer_steps") != expected_step
+        not isinstance(progress, dict)
+        or progress.get("schema") != "dts.sd3.resume-progress"
+        or type(progress.get("version")) is not int
+        or progress.get("version") != 1
+        or progress.get("current_epoch") != expected_step
+        or progress.get("completed_optimizer_steps") != expected_step
         or progress.get("gradient_accumulation_steps") != 1
         or progress.get("num_processes") != 1
         or progress.get("dataloader_batches") != 1
@@ -258,6 +278,8 @@ def summarize_component_weight_updates(
         total[group] += 1
         if advanced:
             changed[group] += 1
+    if changed["other"]:
+        raise SD3ComponentBaselineError("R0 frozen MMDiT Other weights changed")
     if any(changed[group] <= 0 for group in required):
         raise SD3ComponentBaselineError(
             f"R0 trained MMDiT groups did not all advance: required={sorted(required)} "
@@ -277,11 +299,14 @@ def compare_component_adapter_weights(
     with safe_open(str(fresh_path), framework="pt", device="cpu") as first, (
         safe_open(str(resumed_path), framework="pt", device="cpu")
     ) as second:
-        changed_flags = {
-            name: not torch.equal(first.get_tensor(name), second.get_tensor(name))
-            for name in first.keys()
-            if name.endswith(".weight")
-        }
+        changed_flags = {}
+        for name in first.keys():
+            if not name.endswith(".weight"):
+                continue
+            before, after = first.get_tensor(name), second.get_tensor(name)
+            if before.dtype != after.dtype or before.shape != after.shape:
+                raise SD3ComponentBaselineError(f"R0 adapter dtype/shape drift: {name}")
+            changed_flags[name] = not torch.equal(before, after)
     return {
         **result,
         **summarize_component_weight_updates(changed_flags, policy=policy),
