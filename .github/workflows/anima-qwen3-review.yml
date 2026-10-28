@@ -502,4 +502,5 @@ jobs:
             tests.test_parameter_policy_execution_gpu_runtime \
             tests.test_sd3_attention_math \
             tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_actual_safetensors_header_reader_on_small_cpu_fixture \
+            tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_direct_trainer_preserves_independent_strict_asset_gate \
             -v
