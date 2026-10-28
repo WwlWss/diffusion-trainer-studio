@@ -71,6 +71,12 @@ def _is_true(value: object) -> bool:
     return True
 
 
+def _is_explicit_true(value: object) -> bool:
+    if value is True or value == 1:
+        return True
+    return isinstance(value, str) and value.strip().lower() in _TRUE_VALUES
+
+
 def _is_exact_number(value: object, expected: int) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return False
@@ -182,7 +188,7 @@ def _model_scope_blockers(config: Mapping[str, Any]) -> list[str]:
         validated = validate_sd3_mmdit_checkpoint(
             shapes, require_loader_compatible_root=True,
         )
-    except (Exception) as exc:
+    except Exception as exc:
         # All header/read/topology failures must remain fail closed. The actual
         # production trainer will subsequently load/validate weight contents.
         return [f"SD3 Full-BF16 checkpoint header/architecture audit failed: {type(exc).__name__}: {exc}"]
@@ -193,14 +199,22 @@ def _model_scope_blockers(config: Mapping[str, Any]) -> list[str]:
         if embedded_key in shapes:
             continue
         raw_source = config.get(name)
-        if not isinstance(raw_source, (str, Path)) or not Path(raw_source).is_file():
+        if (
+            not isinstance(raw_source, (str, Path))
+            or not Path(raw_source).is_absolute()
+            or not Path(raw_source).is_file()
+        ):
             return [
                 f"SD3 Full-BF16 needs an existing --{name} model file because "
                 f"the base checkpoint does not embed {name}."
             ]
     if not any(key.startswith("first_stage_model.") for key in shapes):
         raw_vae = config.get("vae")
-        if not isinstance(raw_vae, (str, Path)) or not Path(raw_vae).is_file():
+        if (
+            not isinstance(raw_vae, (str, Path))
+            or not Path(raw_vae).is_absolute()
+            or not Path(raw_vae).is_file()
+        ):
             return [
                 "SD3 Full-BF16 needs an existing --vae model file because "
                 "the base checkpoint does not embed VAE weights."
@@ -236,7 +250,7 @@ def sd3_full_bf16_scope_blockers(
         if effective_config.get(field) != expected:
             problems.append(f"SD3 Full-BF16 requires {field}={expected!r}.")
 
-    if not _is_true(effective_config.get("network_train_unet_only")):
+    if not _is_explicit_true(effective_config.get("network_train_unet_only")):
         problems.append("SD3 Full-BF16 requires network_train_unet_only=true.")
     for flag in _UNQUALIFIED_SWITCHES:
         if _is_true(effective_config.get(flag)):
@@ -245,7 +259,10 @@ def sd3_full_bf16_scope_blockers(
         if not _is_unset(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 does not qualify nonempty {flag}.")
     for flag in ("blocks_to_swap", "fused_optimizer_groups", "pos_embed_random_crop_rate", "network_dropout"):
-        if not _is_exact_number(effective_config.get(flag, 0) or 0, 0):
+        value = effective_config.get(flag)
+        if value is None or value is False:
+            value = 0
+        if not _is_exact_number(value, 0):
             problems.append(f"SD3 Full-BF16 requires {flag}=0.")
 
     for field, expected in (
@@ -259,7 +276,7 @@ def sd3_full_bf16_scope_blockers(
         if not _is_exact_number(effective_config.get(field), expected):
             problems.append(f"SD3 Full-BF16 {case} requires {field}={expected}.")
     for flag in ("cache_latents", "cache_text_encoder_outputs"):
-        if not _is_true(effective_config.get(flag)):
+        if not _is_explicit_true(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 {case} requires {flag}=true.")
 
     if problems:
