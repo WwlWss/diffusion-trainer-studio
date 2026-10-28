@@ -1644,6 +1644,7 @@ def create_parameter_policy_session(
         policy,
         train_type=train_type,
         effective_config=effective_config,
+        require_assets=True,  # Direct trainer must never inherit Preview's bypass.
     )
     if execution_blockers:
         raise ParameterPolicyTrainerRuntimeError(
