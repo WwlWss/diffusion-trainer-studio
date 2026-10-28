@@ -211,5 +211,44 @@ class SD3ComponentBaselineTests(unittest.TestCase):
         self.assertNotIn("FULL_BF16_BACKEND_QUALIFICATIONS[", source)
 
 
+class SD3ComponentInputGeneratorTests(unittest.TestCase):
+    def test_generates_external_policy_and_replayable_manifest(self):
+        from tools.prepare_sd3_component_baseline import generate
+
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            model = base / "sd35_medium.safetensors"
+            model.write_bytes(b"host fixture; no CUDA")
+            dataset = base / "dataset"
+            dataset.mkdir()
+            work = base / "r0-evidence"
+
+            artifacts = generate(
+                model=model, dataset=dataset, work_dir=work,
+                external_models={}, cache_latents=True,
+                cache_text_encoder_outputs=True,
+            )
+            manifest = json.loads(Path(artifacts["manifest"]).read_text(encoding="utf-8"))
+            validated = r0.validate_manifest(manifest)
+            self.assertEqual(validated["policy_hash"], r0._read_policy(Path(artifacts["policy"]))[1])
+            self.assertTrue(Path(artifacts["policy"]).is_file())
+            self.assertNotIn("--full_bf16", manifest["fresh_command"])
+            self.assertIn("--cache_latents", manifest["fresh_command"])
+            self.assertIn("--cache_text_encoder_outputs", manifest["fresh_command"])
+            self.assertTrue(validated["policy"]["components"]["mmdit.modulation_norm.adapter"]["train"])
+            with self.assertRaises(ValueError):
+                generate(
+                    model=model, dataset=dataset, work_dir=work,
+                    external_models={}, cache_latents=True,
+                    cache_text_encoder_outputs=True,
+                )
+
+    def test_generator_does_not_touch_production_qualification(self):
+        source = (Path(__file__).resolve().parents[1] / "tools/prepare_sd3_component_baseline.py").read_text(encoding="utf-8")
+        self.assertNotIn("FULL_BF16_BACKEND_QUALIFICATIONS", source)
+        self.assertNotIn("full_bf16", source)
+
+
+
 if __name__ == "__main__":
     unittest.main()
