@@ -1,8 +1,8 @@
 """Fail-closed SD3.5 Medium Component Full-BF16 *scope*, not qualification.
 
-This host-side module is safe for Preview/Start and direct trainer preflight.
-It loads only the safetensors header (no model values, Torch or CUDA) and
-reuses the SD3 MMDiT architecture contract. The production sd3-lora Full-BF16
+This host-side module separates model-free Preview/Export config checks from
+read-only Start/direct-trainer asset and safetensors-header checks, and reuses
+the SD3 MMDiT architecture contract without loading weight values or CUDA. The production sd3-lora Full-BF16
 qualification remains pending until D1-SD3C2-B exact-head CUDA evidence.
 """
 from __future__ import annotations
@@ -171,7 +171,10 @@ def _read_safetensors_shape_index(path: Path) -> dict[str, tuple[int, ...]]:
         }
 
 
-def _model_scope_blockers(config: Mapping[str, Any]) -> list[str]:
+def sd3_full_bf16_asset_blockers(config: Mapping[str, Any]) -> list[str]:
+    """Read-only physical model/header check; never call from Preview/Export."""
+    if not isinstance(config, Mapping):
+        return ["SD3 Full-BF16 asset checks require an effective-config mapping."]
     raw = config.get("pretrained_model_name_or_path")
     if not isinstance(raw, (str, Path)) or not str(raw).strip():
         return ["SD3 Full-BF16 requires an explicit local SD3.5 Medium safetensors model path."]
@@ -221,17 +224,11 @@ def _model_scope_blockers(config: Mapping[str, Any]) -> list[str]:
     return []
 
 
-def sd3_full_bf16_scope_blockers(
+def sd3_full_bf16_config_blockers(
     canonical_policy: Mapping[str, Any],
     effective_config: Mapping[str, Any],
 ) -> list[str]:
-    """Validate the future C2-B candidate scope; does not grant qualification.
-
-    The caller must first check sd3-lora's release qualification. This function
-    is invoked by the shared Preview/Start/direct-trainer execution blocker path
-    *only when* that record is qualified. In C2-A it is still pending, and no
-    production Full-BF16 command is admitted.
-    """
+    """Pure R1/R2 candidate scope validation (no filesystem or Torch imports)."""
     if not isinstance(canonical_policy, Mapping) or not isinstance(effective_config, Mapping):
         return ["SD3 Full-BF16 needs canonical policy and effective-config mappings."]
 
@@ -278,13 +275,35 @@ def sd3_full_bf16_scope_blockers(
         if not _is_explicit_true(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 {case} requires {flag}=true.")
 
+    return problems
+
+
+def sd3_full_bf16_scope_blockers(
+    canonical_policy: Mapping[str, Any],
+    effective_config: Mapping[str, Any],
+    *,
+    require_assets: bool = True,
+) -> list[str]:
+    """Combine pure scope and assets only for explicit Start/trainer preflight.
+
+    The backend must first have an evidence-backed release qualification.
+    This is a second, narrowly scoped gate; C2-A leaves sd3-lora pending.
+    Unknown callers default to fail-closed asset checks.
+    """
+    if type(require_assets) is not bool:
+        return ["SD3 Full-BF16 require_assets must be a boolean."]
+    problems = sd3_full_bf16_config_blockers(canonical_policy, effective_config)
     if problems:
         return problems
-    return _model_scope_blockers(effective_config)
+    if require_assets:
+        return sd3_full_bf16_asset_blockers(effective_config)
+    return []
 
 
 __all__ = [
     "SD3_FULL_BF16_TRAINED_COMPONENTS",
     "SD3_FULL_BF16_FROZEN_COMPONENTS",
+    "sd3_full_bf16_config_blockers",
+    "sd3_full_bf16_asset_blockers",
     "sd3_full_bf16_scope_blockers",
 ]
