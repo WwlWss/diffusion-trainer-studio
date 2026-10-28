@@ -498,6 +498,7 @@ def parameter_policy_execution_blockers(
     *,
     train_type: str,
     effective_config: Mapping[str, Any],
+    require_assets: bool = True,
 ) -> list[str]:
     """Return execution-feature blockers for one canonical Component policy.
 
@@ -558,7 +559,7 @@ def parameter_policy_execution_blockers(
         from mikazuki.sd3_full_bf16_scope import sd3_full_bf16_scope_blockers
 
         sd3_scope_blockers = sd3_full_bf16_scope_blockers(
-            canonical_policy, effective_config,
+            canonical_policy, effective_config, require_assets=require_assets,
         )
         if sd3_scope_blockers:
             return sd3_scope_blockers
