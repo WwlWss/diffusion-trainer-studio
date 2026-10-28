@@ -68,8 +68,26 @@ test process to exercise the future-qualified path.
   `mmdit.modulation_norm.adapter`. Freeze `mmdit.other.adapter`,
   `clip_l.adapter`, `clip_g.adapter`, `t5xxl.adapter`.
 - Only `networks.lora_sd3`, `network_train_unet_only=true`, rank=4,
-  alpha=4, batch=1, resolution=512, zero workers, constant scheduler,
-  safetensors output, cached latents/text-encoder outputs.
+  alpha=4, batch=1, **fixed 512x512** resolution, zero workers, constant
+  scheduler, safetensors output, cached latents/text-encoder outputs.
+- **Ordinary DreamBooth must set `enable_bucket=false`** for the initial
+  reference qualification. Even without an external Dataset Config,
+  `enable_bucket=true` would let the standard Dataset Blueprint generate
+  variable aspect-ratio/geometry buckets. Ignored `min_bucket_reso`,
+  `max_bucket_reso` and `bucket_no_upscale` values need not be overwritten
+  when buckets are off. Other SD3 precision modes retain their bucket support.
+- Fixed resolution is a *semantic check*, not a rewrite: the GUI sends
+  `"512,512"`, CLI may send `"512"`, and the production
+  `train_util.prepare_dataset_args` changes both into a
+  `(512, 512)` integer tuple before the direct trainer Session check.
+  All three forms describe the same reference geometry. Non-square,
+  wrong-sized and unsupported input shapes remain blocked. The scope leaves
+  each incoming representation untouched.
+- In stock argparse, `network_dropout=None` means the feature is off,
+  equivalently to `0` for **that specific field**. The scope compares a
+  local off-state value without mutating arguments and continues to block
+  positive dropout and malformed values; unrelated fields such as
+  `training_shift` do not gain a general None-to-zero rule.
 - Unqualified alternate dataset sources are rejected: `dataset_config`,
   `dataset_class`, `in_json`, `reg_data_dir`,
   `multi_caption_config`, `conditioning_data_dir`, and masked loss.
@@ -136,7 +154,12 @@ verified by the *existing* execution environment/runtime contracts.
 - Host positive and negative tests cover eligible R1/R2 future-qualified
   simulations, each forbidden Component/Optimizer form, missing/invalid
   checkpoint/CLIP/T5/VAE sources, SD3 Medium/Large, malformed fields,
-  and unchanged pending/inactive behavior.
+  and unchanged pending/inactive behavior. This includes real UI string and
+  post-`prepare_dataset_args` tuple resolution, stock
+  `network_dropout=None`, and both R1/R2 bucket-negative cases.
+- Start failure side-effect evidence uses a real configured output/TOML
+  path plus a materialization spy; no writes are permitted after a failed
+  asset check. Preview remains model-file-free.
 - Existing SD1/SDXL/D0 gates and SD3C1 R0 tests still pass on the new HEAD.
 - Strict source Review before merging; **no CUDA qualification claim for A**.
 
