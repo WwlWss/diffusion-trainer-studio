@@ -6,6 +6,7 @@ release path while the real sd3-lora backend remains pending.
 """
 from __future__ import annotations
 
+import argparse
 import ast
 import copy
 import importlib.util
@@ -58,7 +59,7 @@ def config(model: Path, *, accumulation: int = 1) -> dict:
         "network_alpha": 4,
         "train_batch_size": 1,
         "gradient_accumulation_steps": accumulation,
-        "resolution": 512,
+        "resolution": "512,512",
         "max_data_loader_n_workers": 0,
         "save_model_as": "safetensors",
         "optimizer_type": "AdamW",
@@ -379,8 +380,12 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                 )
                 self.assertIn(marker, " ".join(issues), issues)
 
-    def _ui_request_config(self, model: Path) -> dict:
-        policy = make_policy()
+    def _ui_request_config(
+        self, model: Path, *, policy: dict | None = None,
+        accumulation: int = 1,
+    ) -> dict:
+        if policy is None:
+            policy = make_policy()
         return {
             "optimization_mode": "component",
             "parameter_policy_profiles": copy.deepcopy(policy["optimizer_profiles"]),
@@ -388,12 +393,143 @@ class SD3C2AScopeContractTests(unittest.TestCase):
             "sd3_lora_target": "mmdit",
             "train_data_dir": str(self.root),
             "max_train_steps": 2,
-            **config(model),
+            **config(model, accumulation=accumulation),
         }
+
+
+    def test_reference_resolution_production_forms_and_invalid_inputs(self):
+        cases = (
+            ("512", True),
+            ("512,512", True),
+            ("512, 512", True),
+            ((512, 512), True),
+            ("768,768", False),
+            ("512,768", False),
+            ((512, 768), False),
+            ("512,512,512", False),
+            ([512, 512], False),
+            (512, False),
+            (True, False),
+            (None, False),
+            (float("nan"), False),
+            ("512,garbage", False),
+            ((True, 512), False),
+        )
+        for value, allowed in cases:
+            with self.subTest(value=value):
+                candidate = config(self.model)
+                candidate["resolution"] = value
+                blockers = sd3.sd3_full_bf16_config_blockers(make_policy(), candidate)
+                self.assertEqual(not blockers, allowed, blockers)
+
+    def test_r1_r2_network_dropout_stock_none_and_bucket_flag(self):
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            with self.subTest(case=label):
+                reference = config(self.model, accumulation=accumulation)
+                reference["resolution"] = "512,512"
+                reference["network_dropout"] = None
+                reference["enable_bucket"] = False
+                before = copy.deepcopy(reference)
+                self.assertEqual(
+                    sd3.sd3_full_bf16_config_blockers(policy, reference), [],
+                )
+                self.assertEqual(reference, before, "scope must not mutate effective config")
+                positive_zero = dict(reference, network_dropout=0.0)
+                self.assertEqual(
+                    sd3.sd3_full_bf16_config_blockers(policy, positive_zero), [],
+                )
+                for field, value in (
+                    ("enable_bucket", True),
+                    ("enable_bucket", "maybe"),
+                    ("network_dropout", 0.1),
+                    ("network_dropout", float("nan")),
+                ):
+                    with self.subTest(case=label, field=field, value=value):
+                        bad = dict(reference, **{field: value})
+                        blockers = sd3.sd3_full_bf16_config_blockers(policy, bad)
+                        self.assertIn(field, " ".join(blockers), blockers)
+
+    def test_r1_r2_ui_request_uses_real_resolution_and_config_path(self):
+        prepare = _real_prepare_request()
+        qualified = execution.ExecutionFeatureQualification(
+            "qualified", "test-only future R1/R2", "test:sd3c2a-production-shape",
+        )
+        with patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+            {"sd3-lora": qualified},
+        ), patch.object(
+            sd3, "_read_safetensors_shape_index",
+            side_effect=AssertionError("Preview must not read model header"),
+        ):
+            for label, policy, accumulation in (
+                ("r1", make_policy(), 1),
+                ("r2", r2_policy(), 2),
+            ):
+                with self.subTest(case=label):
+                    raw = self._ui_request_config(
+                        self.root / "ui-model-not-mounted.safetensors",
+                        policy=policy, accumulation=accumulation,
+                    )
+                    raw.update(
+                        resolution="512,512",
+                        network_dropout=None,
+                        enable_bucket=False,
+                    )
+                    prepared = prepare(raw, "sd3-lora", launch=False)
+                    self.assertEqual(prepared.runtime_blockers, [])
+                    self.assertEqual(prepared.config["resolution"], "512,512")
+
+    def test_production_prepare_dataset_args_yields_qualifying_trainer_tuple(self):
+        # Run the actual production conversion function without importing its
+        # heavyweight CUDA/torch module in pure Host CI.
+        train_util_src = (ROOT / "scripts/dev/library/train_util.py").read_text(
+            encoding="utf-8",
+        )
+        tree = ast.parse(train_util_src, filename="scripts/dev/library/train_util.py")
+        func = next(
+            node for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "prepare_dataset_args"
+        )
+        extracted = ast.Module(body=[func], type_ignores=[])
+        ast.fix_missing_locations(extracted)
+        namespace = {"argparse": argparse}
+        exec(compile(extracted, "scripts/dev/library/train_util.py", "exec"), namespace)
+        prepare_dataset_args = namespace["prepare_dataset_args"]
+
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            with self.subTest(case=label):
+                values = config(self.model, accumulation=accumulation)
+                values.update(
+                    resolution="512", network_dropout=None,
+                    enable_bucket=False, caption_extention=None,
+                    face_crop_aug_range=None, in_json=None,
+                    color_aug=False, random_crop=False,
+                )
+                args = argparse.Namespace(**values)
+                prepare_dataset_args(args, True)
+                self.assertEqual(args.resolution, (512, 512))
+                # Session consumes exactly vars(args), not the pre-parser
+                # or manually assembled shorthand fixture.
+                self.assertEqual(
+                    sd3.sd3_full_bf16_config_blockers(policy, vars(args)), [],
+                )
 
     def test_real_request_preview_keeps_asset_free_start_remains_strict(self):
         missing = self.root / "missing.safetensors"
-        prepare = _real_prepare_request()
+        materialized = []
+        prepare = _real_prepare_request(
+            materialize_sidecars=lambda sidecars: materialized.append(
+                dict(sidecars)
+            ),
+        )
+        output_dir = self.root / "new-output"
+        toml_path = output_dir / "training.toml"
         fake = execution.ExecutionFeatureQualification(
             "qualified", "test-only qualified", "test:sd3c2a-future",
         )
@@ -408,11 +544,16 @@ class SD3C2AScopeContractTests(unittest.TestCase):
         with patch.dict(
             execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
         ), self.assertRaisesRegex(ValueError, "existing absolute local"):
+            start_config = self._ui_request_config(missing)
+            start_config["output_dir"] = str(output_dir)
             prepare(
-                self._ui_request_config(missing), "sd3-lora",
-                launch=True, materialize=True,
+                start_config, "sd3-lora",
+                launch=True, materialize=True, toml_path=str(toml_path),
             )
-        self.assertFalse((self.root / "new-output").exists())
+        self.assertEqual(materialized, [], "Start must not stage sidecars after asset failure")
+        self.assertFalse(output_dir.exists(), "Start must not create output directory")
+        self.assertFalse(toml_path.exists(), "Start must not emit training TOML")
+        self.assertFalse(list(self.root.rglob("*parameter-policy*.json")))
 
     def test_direct_trainer_preserves_independent_strict_asset_gate(self):
         if importlib.util.find_spec("torch") is None:
