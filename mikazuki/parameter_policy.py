@@ -546,6 +546,7 @@ def parameter_policy_runtime_blockers(
     train_type: str | None = None,
     effective_config: Mapping[str, Any] | None = None,
     integrated_train_types: Iterable[str] = (),
+    require_assets: bool = True,
 ) -> list[str]:
     """Return deterministic blockers for request-level Component-wise Start.
 
@@ -589,6 +590,7 @@ def parameter_policy_runtime_blockers(
                 canonical,
                 train_type=normalized_train_type,
                 effective_config=effective_config,
+                require_assets=require_assets,
             )
         )
         if normalized_train_type not in {"anima-lora", "anima-finetune"}:
