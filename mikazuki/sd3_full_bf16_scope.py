@@ -14,7 +14,6 @@ from typing import Any
 
 from mikazuki.model_component_profiles import get_model_component_profile
 from mikazuki.sd3_architecture_contract import (
-    SD3ArchitectureError,
     validate_sd3_mmdit_checkpoint,
 )
 
@@ -181,7 +180,7 @@ def _model_scope_blockers(config: Mapping[str, Any]) -> list[str]:
     if not model.is_absolute() or model.suffix.lower() != ".safetensors" or not model.is_file():
         return [
             "SD3 Full-BF16 requires an existing absolute local .safetensors "
-            "checkpoint for SD3.5 Medium."
+            "model checkpoint for SD3.5 Medium."
         ]
     try:
         shapes = _read_safetensors_shape_index(model)
