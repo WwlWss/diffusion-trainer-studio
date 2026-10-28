@@ -29,9 +29,23 @@ execution gate for Preview, backend Start, and direct production
 3. Require released evidence-backed backend qualification. **During C2-A,
    `sd3-lora` remains pending: all such jobs are blocked.**
 4. Only if that backend is subsequently released: run
-   `mikazuki.sd3_full_bf16_scope.sd3_full_bf16_scope_blockers(...)`
-   before optimizer-profile qualification, parameter routing or mutation.
-5. Enforce existing per-optimizer Full-BF16 gates and live-root/dtype/device
+   `sd3_full_bf16_config_blockers(...)` in the shared request and direct
+   execution gate. This pure stage never reads model files or imports Torch.
+5. **Preview/Export** call the shared gate with `require_assets=False`;
+   the Preview API remains model-file-independent and reports configuration
+   readiness only. **Start** calls with `require_assets=True` using the
+   original `launch` intent (not `effective_launch`, which is deliberately
+   false for Component requests); it checks model headers and external asset
+   paths before creating launch side effects.
+6. **Direct trainer** independently calls the shared gate with
+   `require_assets=True` before parameter routing/optimizer allocation,
+   regardless of any Preview/Start state. Direct trainer code may already
+   have loaded the model before this Session-level check: it is *not* claimed
+   to prevent earlier CUDA model loading.
+7. The combined helper `sd3_full_bf16_scope_blockers(...,
+   require_assets=True)` defaults to strict asset checking for any caller
+   that has not explicitly opted into pure Preview behavior.
+8. Enforce existing per-optimizer Full-BF16 gates and live-root/dtype/device
    audits in the production `ParameterPolicyTrainerSession`.
 
 There is no separate WebUI exception, second optimizer implementation,
@@ -56,6 +70,18 @@ test process to exercise the future-qualified path.
 - Only `networks.lora_sd3`, `network_train_unet_only=true`, rank=4,
   alpha=4, batch=1, resolution=512, zero workers, constant scheduler,
   safetensors output, cached latents/text-encoder outputs.
+- Unqualified alternate dataset sources are rejected: `dataset_config`,
+  `dataset_class`, `in_json`, `reg_data_dir`,
+  `multi_caption_config`, `conditioning_data_dir`, and masked loss.
+  Such sources can change the actual Dataset Blueprint `batch_size` and
+  `resolution` without modifying top-level CLI values.
+- Scope explicitly requires default SD3 conditioning and sampling semantics:
+  `pos_emb_random_crop_rate=0` (the real parser spelling), no CLIP/T5
+  attention-mask switches, zero encoder dropouts, `training_shift=1`,
+  `weighting_scheme=uniform`, `loss_type=l2`,
+  `t5xxl_max_token_length=256`. Zero-worker DataLoader cannot enable
+  `persistent_data_loader_workers`. The UI already canonicalizes this
+  combination; direct Trainer input is checked independently.
 
 The header audit establishes **topology only**, not checkpoint provenance,
 the numeric identity of the loaded tensors, the accuracy of training, or
@@ -66,8 +92,12 @@ identity to the exact-head CUDA evidence and checkpoint lifecycle.
 
 | Case | Components | Profiles | Accumulation |
 | --- | --- | --- | --- |
-| R1 | Attention + MLP + Modulation/Norm | exactly one AdamW, no fallback | 1 |
-| R2 | same three trained Components | Muon primary + separate explicit AdamW fallback on every trained route | 2 |
+| R1 | Attention + MLP + Modulation/Norm | one AdamW with `args={"weight_decay":0.01}`, no fallback | 1 |
+| R2 | same three trained Components | Muon primary `args={}` + explicit AdamW fallback `args={}` on every trained route | 2 |
+
+All three trained routes have reference `learning_rate=0.0001`; in R2
+the explicit `fallback_learning_rate` is also `0.0001`. Other
+Optimizer Profile arguments or learning rates require expanded evidence.
 
 For R2 the live SD3 adapter-target classifier is responsible for Muon
 eligibility. Attention/MLP approved hidden 2D weights are candidate Muon
@@ -90,12 +120,17 @@ or other advanced execution modes.
 
 The host contract additionally limits unreviewed geometry (rank, alpha,
 batch, resolution, accumulation, worker count) to the R1/R2 reference cases.
+Real effective dataloader batch counts (R1 one batch and R2 two batches per
+epoch) must be proven in C2-B; host config inspection alone cannot prove
+gradient accumulation semantics.
 Single GPU/process and real BF16 dtype/device ownership continue to be
 verified by the *existing* execution environment/runtime contracts.
 
 ## D1-SD3C2-A acceptance
 
-- C2 scope module remains torch-free, CUDA-free and safe for Preview.
+- C2 scope module remains torch-free, CUDA-free and safe for model-free Preview.
+  Start/Trainer perform a read-only `safetensors` header audit; a separate
+  pinned CPU test verifies the reader against a tiny actual safetensors file.
 - Qualifier is **not released**, no change to
   `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"]`.
 - Host positive and negative tests cover eligible R1/R2 future-qualified
