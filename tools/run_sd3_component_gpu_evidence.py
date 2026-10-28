@@ -222,14 +222,10 @@ def compare_component_checkpoints(first: dict[str, Any], second: dict[str, Any])
 
 
 
-def compare_component_adapter_weights(
-    fresh_path: Path, resumed_path: Path, *, policy: dict[str, Any],
+def summarize_component_weight_updates(
+    changed_flags: dict[str, bool], *, policy: dict[str, Any],
 ) -> dict[str, Any]:
-    """Require real changes in each trained MMDiT target family, not only any LoRA."""
-    result = sd3b._compare_adapter_weights(fresh_path, resumed_path)
-    from safetensors import safe_open
-    import torch
-
+    """Torch-free ownership/update contract, unit-testable on host CI."""
     group_map = {
         "mmdit.attention.adapter": "attention",
         "mmdit.mlp.adapter": "mlp",
@@ -239,36 +235,57 @@ def compare_component_adapter_weights(
         group for component, group in group_map.items()
         if policy["components"][component]["train"]
     }
-    changed = {group: 0 for group in ("attention", "mlp", "modulation", "other")}
+    changed = dict.fromkeys(("attention", "mlp", "modulation", "other"), 0)
     total = dict.fromkeys(changed, 0)
-    with safe_open(str(fresh_path), framework="pt", device="cpu") as first, (
-        safe_open(str(resumed_path), framework="pt", device="cpu")
-    ) as second:
-        for name in first.keys():
-            if not name.endswith(".weight"):
-                continue
-            if not name.startswith("lora_unet_"):
-                raise SD3ComponentBaselineError(
-                    f"R0 adapter includes non-MMDiT trainable weights: {name}"
-                )
-            lower = name.lower()
-            if "_attn_" in lower or "_attn2_" in lower:
-                group = "attention"
-            elif "_mlp_" in lower:
-                group = "mlp"
-            elif "_adaln_modulation_" in lower:
-                group = "modulation"
-            else:
-                group = "other"
-            total[group] += 1
-            if not torch.equal(first.get_tensor(name), second.get_tensor(name)):
-                changed[group] += 1
+    for name, advanced in changed_flags.items():
+        if not name.endswith(".weight"):
+            continue
+        if type(advanced) is not bool:
+            raise SD3ComponentBaselineError(f"R0 has invalid weight advance flag: {name}")
+        if not name.startswith("lora_unet_"):
+            raise SD3ComponentBaselineError(
+                f"R0 adapter includes non-MMDiT trainable weights: {name}"
+            )
+        lower = name.lower()
+        if "_attn_" in lower or "_attn2_" in lower:
+            group = "attention"
+        elif "_mlp_" in lower:
+            group = "mlp"
+        elif "_adaln_modulation_" in lower:
+            group = "modulation"
+        else:
+            group = "other"
+        total[group] += 1
+        if advanced:
+            changed[group] += 1
     if any(changed[group] <= 0 for group in required):
         raise SD3ComponentBaselineError(
             f"R0 trained MMDiT groups did not all advance: required={sorted(required)} "
             f"changed={changed}, totals={total}"
         )
-    return {**result, "changed_by_group": changed, "total_by_group": total}
+    return {"changed_by_group": changed, "total_by_group": total}
+
+
+def compare_component_adapter_weights(
+    fresh_path: Path, resumed_path: Path, *, policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Require actual MMDiT changes per trained group, not just any adapter."""
+    result = sd3b._compare_adapter_weights(fresh_path, resumed_path)
+    from safetensors import safe_open
+    import torch
+
+    with safe_open(str(fresh_path), framework="pt", device="cpu") as first, (
+        safe_open(str(resumed_path), framework="pt", device="cpu")
+    ) as second:
+        changed_flags = {
+            name: not torch.equal(first.get_tensor(name), second.get_tensor(name))
+            for name in first.keys()
+            if name.endswith(".weight")
+        }
+    return {
+        **result,
+        **summarize_component_weight_updates(changed_flags, policy=policy),
+    }
 
 
 def run(payload: dict[str, Any], *, expected_commit: str, output: Path) -> dict[str, Any]:
