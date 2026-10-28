@@ -252,43 +252,34 @@ class SD3ComponentInputGeneratorTests(unittest.TestCase):
 
 class SD3ComponentAdapterEvidenceTests(unittest.TestCase):
     def test_each_trained_group_requires_real_weight_advance(self):
-        import torch
-        from safetensors.torch import save_file
-
         names = {
             "attention": "lora_unet_joint_blocks_0_x_block_attn_qkv.lora_up.weight",
             "mlp": "lora_unet_joint_blocks_0_x_block_mlp_fc1.lora_up.weight",
             "modulation": "lora_unet_joint_blocks_0_x_block_adaLN_modulation_1.lora_up.weight",
         }
-        before = {key: torch.zeros((2, 2), dtype=torch.float32) for key in names.values()}
         policy = SD3ComponentBaselineTests()._policy()
         policy["components"]["mmdit.modulation_norm.adapter"] = {
             "train": True, "optimizer_profile": "baseline", "learning_rate": 0.0001,
         }
+        flags = {name: True for name in names.values()}
+        summary = r0.summarize_component_weight_updates(flags, policy=policy)
+        self.assertEqual(summary["changed_by_group"], {
+            "attention": 1, "mlp": 1, "modulation": 1, "other": 0,
+        })
 
-        with tempfile.TemporaryDirectory() as td:
-            first, second = Path(td) / "first.safetensors", Path(td) / "second.safetensors"
-            save_file(before, str(first))
-            advanced = {name: value + 1 for name, value in before.items()}
-            save_file(advanced, str(second))
-            result = r0.compare_component_adapter_weights(first, second, policy=policy)
-            self.assertEqual(result["changed_by_group"], {
-                "attention": 1, "mlp": 1, "modulation": 1, "other": 0,
-            })
+        flags[names["mlp"]] = False
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "did not all advance"):
+            r0.summarize_component_weight_updates(flags, policy=policy)
 
-            advanced[names["mlp"]] = before[names["mlp"]]
-            save_file(advanced, str(second))
-            with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "did not all advance"):
-                r0.compare_component_adapter_weights(first, second, policy=policy)
+        flags[names["mlp"]] = True
+        flags["lora_te1_block_0.lora_up.weight"] = True
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "non-MMDiT"):
+            r0.summarize_component_weight_updates(flags, policy=policy)
 
-            advanced[names["mlp"]] = before[names["mlp"]] + 1
-            advanced["lora_te1_block_0.lora_up.weight"] = torch.ones((2, 2))
-            augmented = {**before, "lora_te1_block_0.lora_up.weight": torch.zeros((2, 2))}
-            save_file(augmented, str(first))
-            save_file(advanced, str(second))
-            with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "non-MMDiT"):
-                r0.compare_component_adapter_weights(first, second, policy=policy)
-
+        del flags["lora_te1_block_0.lora_up.weight"]
+        flags[names["attention"]] = 1
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "invalid weight"):
+            r0.summarize_component_weight_updates(flags, policy=policy)
 
 
 if __name__ == "__main__":
