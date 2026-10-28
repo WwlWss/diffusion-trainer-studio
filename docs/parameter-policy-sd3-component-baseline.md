@@ -1,6 +1,6 @@
 # D1-SD3C1 — SD3.5 Medium Component mixed-BF16 baseline
 
-Status: **implementation / no real R0 CUDA result yet**.
+Status: **C1 R0 mixed-BF16 CUDA acceptance PASS / PR #62 merged**. Real SD3.5 Medium Component AdamW Fresh Step 1 -> new-process Resume Step 2 passed on `7ca95de475da9af5190c93abec6b6be0c8b46533`; PR #62 merged into main at `bfdac9cb040515b4ff3edb422ea414215df4e825`. This does not qualify Full-BF16.
 Base: main@bf22b93e06d978629327eeccbb550ac6942ba4bd (merged PR #61).
 
 ## Purpose
@@ -57,6 +57,7 @@ Run on the exact, clean candidate branch and the same DTS Python/CUDA
 environment already used for PR #61.
 
 ~~~powershell
+& "C:\DTS-test\dts-d0-qual\Scripts\Activate.ps1"
 cd C:\DTS-test\dts-sd3b-ui-audit
 git fetch origin
 git switch feature/d1-sd3c1-component-baseline
@@ -68,9 +69,16 @@ git status --porcelain
 $sha = (git rev-parse HEAD).Trim()
 
 # NEW location outside the repo, never reuse existing results.
-$work = "C:\DTS-test\sd3c1-r0-evidence"
+$work = "C:\DTS-test\sd3c1-r0-evidence-NEW"
 
-python tools/prepare_sd3_component_baseline.py --model "G:\model\SD35\sd3.5_medium.safetensors" --data-dir "C:\DTS-test\sd3b-data" --work-dir $work --cache-latents --cache-text-encoder-outputs
+python tools/prepare_sd3_component_baseline.py `
+  --model "G:\model\SD35\sd3.5_medium.safetensors" `
+  --data-dir "C:\DTS-test\sd3b-data" `
+  --work-dir $work `
+  --clip-l "G:\model\SD35\text_encoders\clip_l.safetensors" `
+  --clip-g "G:\model\SD35\text_encoders\clip_g.safetensors" `
+  --t5xxl "G:\model\SD35\text_encoders\t5xxl_fp16.safetensors" `
+  --cache-latents --cache-text-encoder-outputs
 
 python tools/run_sd3_component_gpu_evidence.py --manifest "$work\manifest.json" --expected-commit $sha --output "$work\result.json" --preflight
 
