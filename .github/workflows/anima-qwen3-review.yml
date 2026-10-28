@@ -15,6 +15,9 @@ on:
       - "tests/test_sd3_resume_cursor.py"
       - "tests/test_sd3_runtime_evidence.py"
       - "tools/run_sd3_runtime_gpu_evidence.py"
+      - "tools/run_sd3_component_gpu_evidence.py"
+      - "tools/prepare_sd3_component_baseline.py"
+      - "tests/test_sd3_component_gpu_evidence.py"
       - "docs/parameter-policy-sd3-runtime-correctness.md"
       - "mikazuki/sd3_architecture_contract.py"
       - "mikazuki/sd3_component_audit.py"
@@ -198,6 +201,8 @@ jobs:
             tools/run_parameter_policy_backend_gpu_matrix.py \
             tools/run_parameter_policy_backend_feature_gpu_matrix.py \
             tools/run_sd3_runtime_gpu_evidence.py \
+            tools/run_sd3_component_gpu_evidence.py \
+            tools/prepare_sd3_component_baseline.py \
             tools/parameter_policy_backend_feature_gpu_support.py \
             scripts/stable/library/multi_caption.py \
             scripts/stable/library/train_util.py \
@@ -254,6 +259,7 @@ jobs:
             tests/test_sd3_forward_contract.py \
             tests/test_sd3_resume_cursor.py \
             tests/test_sd3_runtime_evidence.py \
+            tests/test_sd3_component_gpu_evidence.py \
             tests/test_parameter_policy_network_runtime_smoke.py \
             tests/test_parameter_policy_full_runtime_smoke.py \
             tests/test_parameter_policy_anima_runtime_smoke.py \
@@ -355,7 +361,7 @@ jobs:
         run: python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
 
       - name: SD3 forward/resume/evidence pure contracts
-        run: python -m unittest tests.test_sd3_forward_contract tests.test_sd3_resume_cursor tests.test_sd3_runtime_evidence -v
+        run: python -m unittest tests.test_sd3_forward_contract tests.test_sd3_resume_cursor tests.test_sd3_runtime_evidence tests.test_sd3_component_gpu_evidence -v
 
       - name: SD3 WebUI duration and checkpoint preflight
         run: python -m unittest tests.test_sd3_ui_resume -v
