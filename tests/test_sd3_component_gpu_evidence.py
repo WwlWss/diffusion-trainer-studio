@@ -5,6 +5,7 @@ These tests use no CUDA device and do not claim Full-BF16 qualification.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 from pathlib import Path
 import tempfile
@@ -163,11 +164,17 @@ class SD3ComponentBaselineTests(unittest.TestCase):
                 "topology_fingerprint": "child-topology",
             }],
             "scheduler_identity": {"scheduler": "constant"},
-            "scheduler_signature": "scheduler-signature",
+            "scheduler_signature": None,
+            "schedulers": [{"profile_name": "baseline", "topology_fingerprint": "sched-topology"}],
         }
+        manifest["scheduler_signature"] = hashlib.sha256(
+            json.dumps(manifest["scheduler_identity"], sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
         evidence = {
             "parameter_policy_manifest": manifest,
             "progress": {
+                "schema": "dts.sd3.resume-progress", "version": 1,
+                "current_epoch": 1,
                 "completed_optimizer_steps": 1, "gradient_accumulation_steps": 1,
                 "num_processes": 1, "dataloader_batches": 1,
             },
@@ -191,12 +198,23 @@ class SD3ComponentBaselineTests(unittest.TestCase):
             r0.verify_component_checkpoint(wrong, policy=canonical, policy_hash=digest, expected_step=1)
 
         wrong = copy.deepcopy(evidence)
+        wrong["parameter_policy_manifest"]["scheduler_signature"] = "forged"
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "signature"):
+            r0.verify_component_checkpoint(wrong, policy=canonical, policy_hash=digest, expected_step=1)
+
+        wrong = copy.deepcopy(evidence)
+        wrong["progress"]["schema"] = "bad"
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "Epoch boundary"):
+            r0.verify_component_checkpoint(wrong, policy=canonical, policy_hash=digest, expected_step=1)
+
+        wrong = copy.deepcopy(evidence)
         wrong["progress"]["num_processes"] = 2
         with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "Epoch boundary"):
             r0.verify_component_checkpoint(wrong, policy=canonical, policy_hash=digest, expected_step=1)
 
         second = copy.deepcopy(evidence)
         second["progress"]["completed_optimizer_steps"] = 2
+        second["progress"]["current_epoch"] = 2
         second["optimizer_state_sha256"]["optimizer.bin"] = "step-2"
         r0.compare_component_checkpoints(evidence, second)
         second["parameter_policy_manifest"]["optimizer_profiles"] = {"foreign": "AdamW"}
@@ -277,6 +295,12 @@ class SD3ComponentAdapterEvidenceTests(unittest.TestCase):
             r0.summarize_component_weight_updates(flags, policy=policy)
 
         del flags["lora_te1_block_0.lora_up.weight"]
+        flags[names["attention"]] = True
+        flags["lora_unet_x_embedder_proj.lora_up.weight"] = True
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "frozen MMDiT Other"):
+            r0.summarize_component_weight_updates(flags, policy=policy)
+        del flags["lora_unet_x_embedder_proj.lora_up.weight"]
+
         flags[names["attention"]] = 1
         with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "invalid weight"):
             r0.summarize_component_weight_updates(flags, policy=policy)
