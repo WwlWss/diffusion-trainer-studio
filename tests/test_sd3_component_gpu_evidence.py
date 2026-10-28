@@ -306,5 +306,34 @@ class SD3ComponentAdapterEvidenceTests(unittest.TestCase):
             r0.summarize_component_weight_updates(flags, policy=policy)
 
 
+class SD3WeightSourcePreflightTests(unittest.TestCase):
+    def test_missing_all_external_encoders_rejected_before_gpu(self):
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "--clip_l.*--clip_g.*--t5xxl.*--vae"):
+            r0.require_sd3_weight_sources({}, {"model.diffusion_model.x_embedder.proj.weight": (1536, 16, 2, 2)})
+
+    def test_embedded_checkpoint_sources_accepted(self):
+        shape_index = {
+            key: (1,)
+            for key in r0._EMBEDDED_TEXT_KEYS.values()
+        }
+        shape_index["first_stage_model.encoder.conv_in.weight"] = (4, 4, 3, 3)
+        r0.require_sd3_weight_sources({}, shape_index)
+
+    def test_external_encoder_paths_are_accepted_when_present_in_manifest(self):
+        shape_index = {"first_stage_model.encoder.conv_in.weight": (4, 4, 3, 3)}
+        options = {"--clip_l": "CLIP-L", "--clip_g": "CLIP-G", "--t5xxl": "T5XXL"}
+        r0.require_sd3_weight_sources(options, shape_index)
+        options.pop("--clip_g")
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "--clip_g"):
+            r0.require_sd3_weight_sources(options, shape_index)
+
+    def test_missing_vae_requires_explicit_path(self):
+        options = {name: "path" for name in r0._EMBEDDED_TEXT_KEYS}
+        with self.assertRaisesRegex(r0.SD3ComponentBaselineError, "--vae"):
+            r0.require_sd3_weight_sources(options, {})
+        r0.require_sd3_weight_sources({**options, "--vae": "VAE"}, {})
+
+
+
 if __name__ == "__main__":
     unittest.main()
