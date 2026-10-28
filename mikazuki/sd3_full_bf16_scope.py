@@ -46,6 +46,11 @@ _UNQUALIFIED_DATA_SOURCES = (
 _UNQUALIFIED_SD3_MODEL_OVERRIDES = (
     "t5xxl_device", "t5xxl_dtype",
 )
+_OPTIONAL_ZERO_SCALARS = frozenset({
+    # These stock argparse None values mean that the feature is disabled.
+    # Other scalars (e.g. training_shift) must not inherit this equivalence.
+    "blocks_to_swap", "fused_optimizer_groups", "network_dropout",
+})
 _REFERENCE_SD3_SCALARS = (
     ("blocks_to_swap", 0),
     ("fused_optimizer_groups", 0),
@@ -63,6 +68,9 @@ _REFERENCE_R1_ADAMW_ARGS = {"weight_decay": 0.01}
 _REFERENCE_R2_MUON_ARGS: dict[str, Any] = {}
 _REFERENCE_R2_FALLBACK_ADAMW_ARGS: dict[str, Any] = {}
 _UNQUALIFIED_SWITCHES = (
+    # Ordinary DreamBooth can use variable aspect-ratio buckets without
+    # dataset_config. R1/R2 qualify fixed 512x512 geometry only.
+    "enable_bucket",
     "gradient_checkpointing",
     "fp8_base",
     "fp8_base_unet",
@@ -116,6 +124,33 @@ def _is_exact_number(value: object, expected: int | float) -> bool:
     # Decimal(float) exposes binary representation noise (e.g. 0.0001);
     # both canonical Policy floats and reference values use decimal text.
     return parsed.is_finite() and parsed == Decimal(str(expected))
+
+
+def _is_reference_resolution(value: object) -> bool:
+    """Accept exactly 512x512 in *production* GUI/CLI and Trainer forms.
+
+    The raw SD3 UI/argparse uses a string ("512" or "512,512").
+    train_util.prepare_dataset_args() later rewrites it to a 2-int tuple.
+    Do not mutate either representation, or admit non-production list/int
+    shapes that the stock string parser cannot consume.
+    """
+    if isinstance(value, str):
+        tokens = value.split(",")
+        if len(tokens) not in (1, 2) or any(not t.strip() for t in tokens):
+            return False
+        try:
+            dimensions = tuple(int(t.strip()) for t in tokens)
+        except ValueError:
+            return False
+        if len(dimensions) == 1:
+            dimensions = (dimensions[0], dimensions[0])
+    elif type(value) is tuple:
+        if len(value) != 2 or any(type(item) is not int for item in value):
+            return False
+        dimensions = value
+    else:
+        return False
+    return dimensions == (512, 512)
 
 
 def _is_unset(value: object) -> bool:
@@ -298,8 +333,9 @@ def sd3_full_bf16_config_blockers(
             problems.append(f"SD3 Full-BF16 does not qualify nonempty {flag}.")
     for flag, expected in _REFERENCE_SD3_SCALARS:
         value = effective_config.get(flag, expected)
-        if value is None and flag in {"blocks_to_swap", "fused_optimizer_groups"}:
-            value = 0  # sd-scripts declares these optional off-switches.
+        if value is None and flag in _OPTIONAL_ZERO_SCALARS:
+            # A local comparison value only; never rewrite effective_config.
+            value = 0
         if not _is_exact_number(value, expected):
             problems.append(f"SD3 Full-BF16 requires {flag}={expected}.")
 
@@ -308,11 +344,12 @@ def sd3_full_bf16_config_blockers(
         ("network_alpha", 4),
         ("train_batch_size", 1),
         ("gradient_accumulation_steps", _SD3_FULL_BF16_CASE_ACCUMULATION[case]),
-        ("resolution", 512),
         ("max_data_loader_n_workers", 0),
     ):
         if not _is_exact_number(effective_config.get(field), expected):
             problems.append(f"SD3 Full-BF16 {case} requires {field}={expected}.")
+    if not _is_reference_resolution(effective_config.get("resolution")):
+        problems.append("SD3 Full-BF16 requires fixed resolution=512x512.")
     for flag in ("cache_latents", "cache_text_encoder_outputs"):
         if not _is_explicit_true(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 {case} requires {flag}=true.")
