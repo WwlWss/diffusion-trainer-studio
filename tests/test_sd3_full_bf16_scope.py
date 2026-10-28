@@ -8,10 +8,14 @@ from __future__ import annotations
 
 import ast
 import copy
+import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+
+from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
+from tests.test_parameter_policy_request_contract import _real_prepare_request
 
 from mikazuki import parameter_policy_execution as execution
 from mikazuki import sd3_full_bf16_scope as sd3
@@ -39,7 +43,7 @@ def r2_policy() -> dict:
             "fallback_optimizer_profile": "adamw_fallback",
             "fallback_learning_rate": 0.0001,
         }
-    return policy
+    return validate_parameter_policy(policy)
 
 
 def config(model: Path, *, accumulation: int = 1) -> dict:
@@ -221,7 +225,7 @@ class SD3C2AScopeContractTests(unittest.TestCase):
             ("blocks_to_swap", 2),
             ("fused_optimizer_groups", 2),
             ("enable_scaled_pos_embed", True),
-            ("pos_embed_random_crop_rate", 0.1),
+            ("pos_emb_random_crop_rate", 0.1),
             ("network_dropout", 0.1),
             ("network_args", ["train_t5xxl=true"]),
             ("network_weights", str(self.model)),
@@ -269,6 +273,188 @@ class SD3C2AScopeContractTests(unittest.TestCase):
         with patch.object(sd3, "_read_safetensors_shape_index", side_effect=ImportError("missing safetensors")):
             blockers = sd3.sd3_full_bf16_scope_blockers(make_policy(), config(self.model))
             self.assertIn("audit failed", " ".join(blockers))
+
+
+    def test_config_only_does_not_touch_checkpoint_and_strict_default_does(self):
+        missing = self.root / "absent.safetensors"
+        self.reader.reset_mock()
+        with patch.object(sd3, "_read_safetensors_shape_index", side_effect=AssertionError("model I/O from Preview")):
+            self.assertEqual(sd3.sd3_full_bf16_config_blockers(make_policy(), config(missing)), [])
+            self.assertEqual(
+                sd3.sd3_full_bf16_scope_blockers(
+                    make_policy(), config(missing), require_assets=False,
+                ),
+                [],
+            )
+        self.reader.assert_not_called()
+        self.assertIn(
+            "existing absolute local",
+            " ".join(sd3.sd3_full_bf16_scope_blockers(make_policy(), config(missing))),
+        )
+        self.assertIn(
+            "require_assets",
+            " ".join(sd3.sd3_full_bf16_scope_blockers(
+                make_policy(), config(missing), require_assets="false",
+            )),
+        )
+
+    def test_unreviewed_dataset_inputs_are_rejected_without_reading_external_toml(self):
+        dataset_toml = self.root / "override.toml"
+        dataset_toml.write_text(
+            "[[datasets]]\nbatch_size = 4\nresolution = 1024\n",
+            encoding="utf-8",
+        )
+        changes = {
+            "dataset_config": str(dataset_toml),
+            "dataset_class": "my_loader.CustomDataset",
+            "in_json": "images.json",
+            "reg_data_dir": str(self.root),
+            "multi_caption_config": "captions.json",
+            "conditioning_data_dir": str(self.root),
+            "masked_loss": True,
+        }
+        for field, value in changes.items():
+            with self.subTest(field=field), patch.object(
+                sd3, "_read_safetensors_shape_index",
+                side_effect=AssertionError("Unqualified config must fail before model I/O"),
+            ):
+                spec = config(self.model)
+                spec[field] = value
+                issues = sd3.sd3_full_bf16_config_blockers(make_policy(), spec)
+                self.assertIn(field, " ".join(issues), issues)
+
+    def test_sd3_real_parser_spelling_conditioning_and_dataloader_fail_closed(self):
+        cases = (
+            ("pos_emb_random_crop_rate", 0.1),
+            ("pos_emb_random_crop_rate", float("nan")),
+            ("clip_l_dropout_rate", 0.1),
+            ("clip_g_dropout_rate", 0.1),
+            ("t5_dropout_rate", 0.1),
+            ("training_shift", 2.0),
+            ("t5xxl_max_token_length", 512),
+            ("apply_lg_attn_mask", True),
+            ("apply_t5_attn_mask", True),
+            ("persistent_data_loader_workers", True),
+            ("weighting_scheme", "cosmap"),
+            ("loss_type", "huber"),
+            ("t5xxl_dtype", "fp16"),
+            ("t5xxl_device", "cuda:1"),
+            ("resume_from_huggingface", True),
+            ("min_timestep", 5),
+            ("max_timestep", 900),
+        )
+        for field, value in cases:
+            with self.subTest(field=field):
+                candidate = config(self.model)
+                candidate[field] = value
+                self.assertIn(field, " ".join(
+                    sd3.sd3_full_bf16_config_blockers(make_policy(), candidate)
+                ))
+        for field in ("training_shift", "t5xxl_max_token_length", "pos_emb_random_crop_rate"):
+            config_ = config(self.model)
+            defaults = {"training_shift": 1.0, "t5xxl_max_token_length": 256,
+                        "pos_emb_random_crop_rate": 0}
+            config_[field] = defaults[field]
+            self.assertEqual(sd3.sd3_full_bf16_config_blockers(make_policy(), config_), [])
+
+    def test_reference_optimizer_arguments_and_rates_are_strict(self):
+        r1 = make_policy()
+        r2 = r2_policy()
+        self.assertEqual(validate_parameter_policy(r1), r1)
+        self.assertEqual(validate_parameter_policy(r2), r2)
+        for case, mutation, marker in (
+            ("r1", lambda p: p["optimizer_profiles"]["baseline"]["args"].update({"betas": [0.8, 0.999]}), "Profile args"),
+            ("r1", lambda p: p["optimizer_profiles"]["baseline"].update({"args": {}}), "Profile args"),
+            ("r1", lambda p: p["components"]["mmdit.attention.adapter"].update({"learning_rate": 0.01}), "reference learning rate"),
+            ("r2", lambda p: p["optimizer_profiles"]["muon_primary"]["args"].update({"momentum": 0.88}), "Profile args"),
+            ("r2", lambda p: p["optimizer_profiles"]["adamw_fallback"]["args"].update({"weight_decay": 0.01}), "Profile args"),
+            ("r2", lambda p: p["components"]["mmdit.mlp.adapter"].update({"learning_rate": 0.01}), "reference learning rates"),
+            ("r2", lambda p: p["components"]["mmdit.mlp.adapter"].update({"fallback_learning_rate": 0.01}), "reference learning rates"),
+        ):
+            with self.subTest(case=case, marker=marker):
+                policy = copy.deepcopy(r1 if case == "r1" else r2)
+                mutation(policy)
+                issues = sd3.sd3_full_bf16_config_blockers(
+                    policy, config(self.model, accumulation=2 if case == "r2" else 1),
+                )
+                self.assertIn(marker, " ".join(issues), issues)
+
+    def _ui_request_config(self, model: Path) -> dict:
+        policy = make_policy()
+        return {
+            "optimization_mode": "component",
+            "parameter_policy_profiles": copy.deepcopy(policy["optimizer_profiles"]),
+            "parameter_policy_components": copy.deepcopy(policy["components"]),
+            "sd3_lora_target": "mmdit",
+            "train_data_dir": str(self.root),
+            "max_train_steps": 2,
+            **config(model),
+        }
+
+    def test_real_request_preview_keeps_asset_free_start_remains_strict(self):
+        missing = self.root / "missing.safetensors"
+        prepare = _real_prepare_request()
+        fake = execution.ExecutionFeatureQualification(
+            "qualified", "test-only qualified", "test:sd3c2a-future",
+        )
+        with patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
+        ), patch.object(sd3, "_read_safetensors_shape_index", side_effect=AssertionError(
+            "Preview/Export must not open a model"
+        )):
+            preview = prepare(self._ui_request_config(missing), "sd3-lora", launch=False)
+            self.assertEqual(preview.runtime_blockers, [])
+        self.assertNotIn("parameter_policy_config", preview.sidecars)
+        with patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
+        ), self.assertRaisesRegex(ValueError, "existing absolute local"):
+            prepare(
+                self._ui_request_config(missing), "sd3-lora",
+                launch=True, materialize=True,
+            )
+        self.assertFalse((self.root / "new-output").exists())
+
+    def test_direct_trainer_preserves_independent_strict_asset_gate(self):
+        from mikazuki.parameter_policy_trainer import (
+            ParameterPolicyTrainerRuntimeError,
+            create_parameter_policy_session,
+        )
+        policy = make_policy()
+        _name, canonical_text = serialize_parameter_policy(policy)
+        sidecar = self.root / "component-policy.json"
+        sidecar.write_text(canonical_text, encoding="utf-8")
+        missing = self.root / "missing.safetensors"
+        spec = config(missing)
+        spec["parameter_policy_config"] = str(sidecar)
+        fake = execution.ExecutionFeatureQualification(
+            "qualified", "test-only qualified", "test:sd3c2a-future",
+        )
+        with patch.dict(
+            execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
+        ), patch(
+            "mikazuki.parameter_policy_trainer.scan_parameter_roots",
+            side_effect=AssertionError("must reject before scanning roots"),
+        ), self.assertRaisesRegex(
+            ParameterPolicyTrainerRuntimeError, "existing absolute local",
+        ):
+            create_parameter_policy_session(
+                args=spec, train_type="sd3-lora", roots={},
+            )
+
+    def test_actual_safetensors_header_reader_on_small_cpu_fixture(self):
+        if (
+            importlib.util.find_spec("torch") is None
+            or importlib.util.find_spec("safetensors") is None
+        ):
+            self.skipTest("small header test runs in pinned CPU runtime smoke")
+        import torch
+        from safetensors.torch import save_file
+
+        model = self.root / "header-only.safetensors"
+        save_file({"tiny.weight": torch.zeros((2, 3), dtype=torch.float32)}, str(model))
+        with patch.object(sd3, "_read_safetensors_shape_index", wraps=sd3._read_safetensors_shape_index) as reader:
+            self.assertEqual(sd3._read_safetensors_shape_index(model), {"tiny.weight": (2, 3)})
+            reader.assert_called_once_with(model)
 
     def test_host_module_and_source_never_promote_backend(self):
         paths = [ROOT / "mikazuki" / "sd3_full_bf16_scope.py",
