@@ -71,6 +71,86 @@ class TrainingSchemaOverrideTests(unittest.TestCase):
         self.assertNotIn("network_train_text_encoder_only: Schema.boolean", fixed)
         self.assertIn("train_t5xxl", fixed)
 
+    def test_sd3_duration_schema_has_explicit_epoch_and_step_modes(self):
+        source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
+        fixed = override_raw_schema("sd3-lora", source)
+        self.assertIn('sd3_training_target_mode: Schema.union(["epochs", "steps"])', fixed)
+        self.assertIn("sd3_training_target_epochs: Schema.number().min(1).step(1).default(20)", fixed)
+        self.assertIn("sd3_training_target_steps: Schema.number().min(1).step(1).default(1600)", fixed)
+        self.assertNotIn("max_train_epochs: Schema.number().min(1).default(20)", fixed)
+        self.assertIn("仅支持单进程 Epoch 边界恢复", fixed)
+        assert_js_expression_compiles(self, fixed, "SD3 LoRA duration and resume")
+
+    def test_sd3_duration_union_accepts_initial_empty_form_and_selects_active_mode(self):
+        """Exercise the real schema fragment with the pinned union-selection contract.
+
+        A syntax-only check missed the runtime failure when both variant branches
+        required a discriminator not yet materialized in the form's {} state.
+        """
+        node = shutil.which("node")
+        if not node:
+            raise unittest.SkipTest("node required for SD3 duration union regression")
+        source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")
+        first = source.index(
+            "    Schema.intersect([\n        Schema.object({\n"
+            "            sd3_training_target_mode:"
+        )
+        last = source.index("\n\n    Schema.object({\n        train_batch_size:", first)
+        expression = source[first:last].strip().removesuffix(",")
+        # The two branches are validated before the sibling object's
+        # sd3_training_target_mode.default("epochs") is materialized.
+        script = r"""
+const assert = require("node:assert/strict");
+function decorate(node) {
+  node.meta = {};
+  for (const prop of ["default", "required", "min", "step", "description"]) {
+    node[prop] = function(value = true) { this.meta[prop] = value; return this };
+  }
+  return node;
+}
+const Schema = {
+  object(dict) { return decorate({type:"object", dict}); },
+  intersect(list) { return decorate({type:"intersect", list}); },
+  union(list) { return decorate({type:"union", list}); },
+  const(value) { return decorate({type:"const", value}); },
+  number() { return decorate({type:"number"}); },
+};
+const form = (new Function("Schema", "return (" + FRAGMENT + ")"))(Schema);
+assert.equal(form.type, "intersect");
+assert.equal(form.list[0].dict.sd3_training_target_mode.meta.default, "epochs");
+const variants = form.list[1];
+assert.equal(variants.type, "union");
+function activeMode(input) {
+  for (const branch of variants.list) {
+    const discriminator = branch.dict.sd3_training_target_mode;
+    const supplied = Object.prototype.hasOwnProperty.call(input, "sd3_training_target_mode");
+    if (!supplied && discriminator.meta.required) continue;
+    const value = supplied ? input.sd3_training_target_mode : discriminator.meta.default;
+    if (value === discriminator.value) return branch;
+  }
+  return null;
+}
+const initial = activeMode({});
+assert.ok(initial, "uninitialized {} must select the default Epoch branch");
+assert.equal(initial.dict.sd3_training_target_mode.value, "epochs");
+assert.equal(initial.dict.sd3_training_target_epochs.meta.default, 20);
+const steps = activeMode({sd3_training_target_mode:"steps"});
+assert.ok(steps, "switching to Steps must select the explicit branch");
+assert.equal(steps.dict.sd3_training_target_steps.meta.default, 1600);
+const epochs = activeMode({sd3_training_target_mode:"epochs"});
+assert.ok(epochs, "switching back to Epoch must select the fallback branch");
+assert.equal(epochs.dict.sd3_training_target_epochs.meta.default, 20);
+assert.equal(activeMode({sd3_training_target_mode:"unknown"}), null);
+""".replace("FRAGMENT", json.dumps(expression))
+        completed = subprocess.run(
+            [node, "-e", script], capture_output=True, text=True
+        )
+        self.assertEqual(
+            completed.returncode, 0,
+            "SD3 duration branch validation failed:\n"
+            + completed.stdout + completed.stderr,
+        )
+
     def test_flux_and_sd3_real_schema_defaults_keep_fp8_enabled(self):
         flux_source = (SCHEMA / "flux-lora.ts").read_text(encoding="utf-8")
         sd3_source = (SCHEMA / "sd3-lora.ts").read_text(encoding="utf-8")

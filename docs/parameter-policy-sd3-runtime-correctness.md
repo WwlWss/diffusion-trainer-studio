@@ -1,6 +1,6 @@
 # Phase D1-SD3B: SD3.5 Medium forward correctness and LoRA resume
 
-Status: **candidate, not qualified / do not merge until exact-head CUDA evidence**.
+Status: **runtime correctness accepted / PR #60 merged**. The exact-head SD3.5 Medium mixed-BF16 GPU fresh/save/resume verification passed on `5011095d30b0f958e62efc537b824825d56abe73`; PR #60 merged as `f749af6bfa14cf37dffd9a201b32c6fa3805d142`. This does **not** qualify full-BF16, FP8, distributed, or generalized mid-epoch resume.
 
 ## Scope and math contract
 
@@ -57,6 +57,47 @@ gradient checkpointing, swap, DeepSpeed or the SD3 Full training lifecycle.
 
 The CPU tests are **necessary but not sufficient**. Do not mark the GPU
 criterion PASS without executing the real model and inspecting its evidence.
+
+## WebUI duration / Resume integration (follow-up UI closure)
+
+The SD3 LoRA page (`/lora/sd3.md`) exposes a single explicit training target:
+
+- **Epoch** (fresh default: 20) compiles to `max_train_epochs` for fresh training.
+- **Optimizer Steps** compiles to `max_train_steps` for fresh training.
+- On **Resume**, both target modes compile to **absolute total**
+  `max_train_steps` (including already completed steps), and
+  `max_train_epochs` must be absent.
+- Epoch Resume computes `steps_per_epoch =
+  ceil(saved_dataloader_batches / saved_gradient_accumulation_steps)`
+  from the versioned `dts_sd3_resume_progress.json` plus
+  `train_state.json`. It then computes
+  `total_steps = target_epochs * steps_per_epoch`.
+- A read-only preflight checks missing/invalid/old progress JSON,
+  Saved Step/Epoch consistency, completed epoch boundary, process count,
+  accumulation mismatch, positive remaining steps, and explicit multi-GPU
+  selection. The actual SD3 trainer **rechecks** live DataLoader geometry
+  and forward-semantics identity before restoring optimizer state.
+- The checkpoint sidecars **do not record the original planned total
+  optimizer steps**. The UI therefore warns to use the original target;
+  it cannot certify scheduler equivalence with uninterrupted training.
+- Existing legacy effective TOMLs with both target fields keep
+  `max_train_epochs` precedence when imported; re-export uses a single
+  canonical target. Rehydrating an epoch-origin Resume configuration yields
+  Steps mode because only the absolute total is present in the effective
+  trainer TOML.
+- `ui_custom_params` is applied before the final SD3 target validation;
+  injecting conflicting legacy duration flags is an error.
+
+The WebUI preflight is a **read-only usability guard**, not another
+checkpoint format, not a model-identity oracle, and not a new runtime
+qualification. Old checkpoints without a PR #60 progress sidecar should
+use `network_weights` in a new stage, not `--resume`.
+
+For a UI CUDA smoke, manually select the verified reference configuration
+(mixed BF16, AdamW, MMDiT-only rank 4, FP8 and gradient checkpointing off)
+and a one-item dataset. The historical default SD3 UI choices can differ;
+a successful mixed-BF16 reference does not certify them. Real WebUI
+Fresh/Resume GPU acceptance belongs to the new UI-closure PR Head.
 
 ## GPU evidence driver (local; requires the actual model and all required assets)
 

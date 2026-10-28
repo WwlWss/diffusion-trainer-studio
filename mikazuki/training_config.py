@@ -7,6 +7,7 @@ from typing import Optional
 
 from mikazuki.anima_effective_config import prepare_anima_config, validate_post_override_anima_config
 from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
+from mikazuki.sd3_resume_ui import normalize_sd3_training_duration, validate_sd3_resume_gpu_selection
 from mikazuki.training_gui_args import normalize_numeric_fields
 from mikazuki.training_gui_semantics import (
     apply_raw_gui_semantics,
@@ -144,6 +145,9 @@ def _post_override_normalize(
         normalize_flux_lora_target(config, chroma=effective_train_type == "chroma-lora")
     elif effective_train_type == "sd3-lora":
         normalize_sd3_lora_target(config)
+        # Run once, after ui_custom_params: raw trainer duration overrides
+        # must not bypass the selected UI target or the resume contract.
+        normalize_sd3_training_duration(config, warnings)
     elif effective_train_type == "sdxl-finetune":
         _strip_network_training_keys(config)
         normalize_validate_sdxl_full(config)
@@ -216,6 +220,8 @@ def prepare_training_config(
     # trainer values, but it may not bypass page routing or trainer invariants.
     apply_ui_custom_overrides(config)
     _post_override_normalize(config, effective_train_type, warnings)
+    if effective_train_type == "sd3-lora":
+        validate_sd3_resume_gpu_selection(config, gpu_ids)
 
     config.pop("model_train_type", None)
     config.pop("anima_training_mode", None)
