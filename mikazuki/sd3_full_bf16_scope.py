@@ -113,7 +113,9 @@ def _is_exact_number(value: object, expected: int | float) -> bool:
         parsed = Decimal(str(value).strip())
     except InvalidOperation:
         return False
-    return parsed.is_finite() and parsed == Decimal(expected)
+    # Decimal(float) exposes binary representation noise (e.g. 0.0001);
+    # both canonical Policy floats and reference values use decimal text.
+    return parsed.is_finite() and parsed == Decimal(str(expected))
 
 
 def _is_unset(value: object) -> bool:
