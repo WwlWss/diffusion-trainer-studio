@@ -476,7 +476,8 @@ jobs:
           python -m pip install \
             accelerate==1.6.0 \
             schedulefree==1.4 \
-            pytorch-optimizer==3.10.0
+            pytorch-optimizer==3.10.0 \
+            safetensors==0.4.5
 
       - name: Show pinned runtime versions
         run: |
@@ -500,4 +501,5 @@ jobs:
             tests.test_parameter_policy_anima_runtime_smoke \
             tests.test_parameter_policy_execution_gpu_runtime \
             tests.test_sd3_attention_math \
+            tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_actual_safetensors_header_reader_on_small_cpu_fixture \
             -v
