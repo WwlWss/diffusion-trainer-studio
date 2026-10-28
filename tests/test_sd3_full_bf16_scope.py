@@ -452,9 +452,12 @@ class SD3C2AScopeContractTests(unittest.TestCase):
 
         model = self.root / "header-only.safetensors"
         save_file({"tiny.weight": torch.zeros((2, 3), dtype=torch.float32)}, str(model))
-        with patch.object(sd3, "_read_safetensors_shape_index", wraps=sd3._read_safetensors_shape_index) as reader:
-            self.assertEqual(sd3._read_safetensors_shape_index(model), {"tiny.weight": (2, 3)})
-            reader.assert_called_once_with(model)
+        # setUp mocks the reader for full SD3 shape fixtures. Explicitly stop
+        # that mock so this test exercises the real safetensors C++ header path.
+        self.shape_reader.stop()
+        self.assertEqual(
+            sd3._read_safetensors_shape_index(model), {"tiny.weight": (2, 3)},
+        )
 
     def test_host_module_and_source_never_promote_backend(self):
         paths = [ROOT / "mikazuki" / "sd3_full_bf16_scope.py",
