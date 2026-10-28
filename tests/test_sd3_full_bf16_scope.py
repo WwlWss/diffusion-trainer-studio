@@ -415,6 +415,8 @@ class SD3C2AScopeContractTests(unittest.TestCase):
         self.assertFalse((self.root / "new-output").exists())
 
     def test_direct_trainer_preserves_independent_strict_asset_gate(self):
+        if importlib.util.find_spec("torch") is None:
+            self.skipTest("direct-trainer integration runs in pinned CPU runtime smoke")
         from mikazuki.parameter_policy_trainer import (
             ParameterPolicyTrainerRuntimeError,
             create_parameter_policy_session,
