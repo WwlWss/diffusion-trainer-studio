@@ -226,6 +226,9 @@ def prepare_request_config(
             train_type=prepared.train_type,
             effective_config=prepared.config,
             integrated_train_types=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
+            # Preview/Export are model-free; Start uses the original launch
+            # intent (effective_launch is deliberately false for Components).
+            require_assets=launch,
         )
         blockers.extend(parameter_policy_gpu_selection_blockers(prepared.gpu_ids))
         prepared.runtime_blockers.extend(blockers)
