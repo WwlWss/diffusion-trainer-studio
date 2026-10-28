@@ -140,12 +140,44 @@ def _assert_unchanged_inputs(validated: dict[str, Any]) -> None:
         raise SD3ComponentBaselineError("Parameter Policy changed during the evidence run")
 
 
-def _check_architecture(model: Path) -> dict[str, Any]:
+# Mirror the source-selection checks in scripts/dev/library/sd3_utils.py.
+# A checkpoint can embed CLIP/T5/VAE; otherwise each external asset is required.
+_EMBEDDED_TEXT_KEYS = {
+    "--clip_l": "text_encoders.clip_l.transformer.text_model.embeddings.position_embedding.weight",
+    "--clip_g": "text_encoders.clip_g.transformer.text_model.embeddings.position_embedding.weight",
+    "--t5xxl": "text_encoders.t5xxl.transformer.encoder.block.0.layer.0.SelfAttention.k.weight",
+}
+
+
+def require_sd3_weight_sources(
+    options: dict[str, str | bool], shapes: dict[str, tuple[int, ...]],
+) -> None:
+    """Reject missing encoder/VAE assets during preflight, not after CUDA loads."""
+    missing = [
+        opt for opt, embedded_key in _EMBEDDED_TEXT_KEYS.items()
+        if opt not in options and embedded_key not in shapes
+    ]
+    if "--vae" not in options and not any(
+        key.startswith("first_stage_model.") for key in shapes
+    ):
+        missing.append("--vae")
+    if missing:
+        raise SD3ComponentBaselineError(
+            "SD3.5 Medium checkpoint does not include all required model weights; "
+            "provide external asset paths in the R0 manifest for: "
+            + ", ".join(missing)
+        )
+
+
+def _check_architecture(
+    model: Path, *, fresh: dict[str, str | bool],
+) -> dict[str, Any]:
     shapes = read_safetensors_shapes(model)
     audited = validate_sd3_mmdit_checkpoint(shapes, require_loader_compatible_root=True)
     report = audited.architecture.report()
     if report["variant"] != "sd35-medium" or not audited.loader_prefix_compatible:
         raise SD3ComponentBaselineError("R0 permits only DTS-loader-compatible SD3.5 Medium MMDiT")
+    require_sd3_weight_sources(fresh, shapes)
     return report
 
 
@@ -317,7 +349,7 @@ def run(payload: dict[str, Any], *, expected_commit: str, output: Path) -> dict[
     validated = validate_manifest(payload)
     sd3b._check_head(expected_commit)
     _assert_unchanged_inputs(validated)
-    architecture = _check_architecture(validated["base_model"])
+    architecture = _check_architecture(validated["base_model"], fresh=validated["fresh"])
     if os.environ.get("WORLD_SIZE", "1") != "1":
         raise SD3ComponentBaselineError("R0 is single-process only")
 
@@ -388,7 +420,7 @@ def main(argv: list[str] | None = None) -> int:
         validated = validate_manifest(payload)
         sd3b._check_head(args.expected_commit)
         _assert_unchanged_inputs(validated)
-        architecture = _check_architecture(validated["base_model"])
+        architecture = _check_architecture(validated["base_model"], fresh=validated["fresh"])
         if args.preflight:
             print(f"SD3C1 R0 preflight PASS: {architecture['variant']}; Full-BF16 remains pending")
         else:
