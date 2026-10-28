@@ -37,6 +37,31 @@ _EMBEDDED_SOURCE_KEYS = {
 }
 _FALSE_VALUES = frozenset({"", "0", "false", "off", "no"})
 _TRUE_VALUES = frozenset({"1", "true", "on", "yes"})
+# Alternative Dataset Blueprint/custom loaders can override CLI batch/resolution.
+# Keep C2-B CUDA admission on the reference single-DreamBooth dataset path.
+_UNQUALIFIED_DATA_SOURCES = (
+    "dataset_config", "dataset_class", "in_json", "reg_data_dir",
+    "multi_caption_config", "conditioning_data_dir",
+)
+_UNQUALIFIED_SD3_MODEL_OVERRIDES = (
+    "t5xxl_device", "t5xxl_dtype",
+)
+_REFERENCE_SD3_SCALARS = (
+    ("blocks_to_swap", 0),
+    ("fused_optimizer_groups", 0),
+    # Actual argparse name is pos_emb_random_crop_rate (not pos_embed_...).
+    ("pos_emb_random_crop_rate", 0),
+    ("network_dropout", 0),
+    ("clip_l_dropout_rate", 0),
+    ("clip_g_dropout_rate", 0),
+    ("t5_dropout_rate", 0),
+    ("training_shift", 1),
+    ("t5xxl_max_token_length", 256),
+)
+_REFERENCE_LEARNING_RATE = 0.0001
+_REFERENCE_R1_ADAMW_ARGS = {"weight_decay": 0.01}
+_REFERENCE_R2_MUON_ARGS: dict[str, Any] = {}
+_REFERENCE_R2_FALLBACK_ADAMW_ARGS: dict[str, Any] = {}
 _UNQUALIFIED_SWITCHES = (
     "gradient_checkpointing",
     "fp8_base",
@@ -54,6 +79,11 @@ _UNQUALIFIED_SWITCHES = (
     "cache_latents_to_disk",
     "lowram",
     "network_train_text_encoder_only",
+    "persistent_data_loader_workers",
+    "apply_lg_attn_mask",
+    "apply_t5_attn_mask",
+    "masked_loss",
+    "resume_from_huggingface",
 )
 
 
@@ -76,7 +106,7 @@ def _is_explicit_true(value: object) -> bool:
     return isinstance(value, str) and value.strip().lower() in _TRUE_VALUES
 
 
-def _is_exact_number(value: object, expected: int) -> bool:
+def _is_exact_number(value: object, expected: int | float) -> bool:
     if isinstance(value, bool) or not isinstance(value, (int, float, str)):
         return False
     try:
@@ -88,16 +118,6 @@ def _is_exact_number(value: object, expected: int) -> bool:
 
 def _is_unset(value: object) -> bool:
     return value is None or value == "" or value == () or value == []
-
-
-def _positive_learning_rate(value: object) -> bool:
-    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
-        return False
-    try:
-        parsed = Decimal(str(value).strip())
-    except InvalidOperation:
-        return False
-    return parsed.is_finite() and parsed > 0
 
 
 def _optimizer_case(policy: Mapping[str, Any]) -> tuple[str | None, list[str]]:
@@ -129,28 +149,40 @@ def _optimizer_case(policy: Mapping[str, Any]) -> tuple[str | None, list[str]]:
     by_type = {v["type"]: name for name, v in profiles.items()}
     if len(profiles) == 1 and set(by_type) == {"AdamW"}:
         adamw_name = by_type["AdamW"]
+        if profiles[adamw_name].get("args") != _REFERENCE_R1_ADAMW_ARGS:
+            return None, ["SD3 R1 AdamW Profile args must match the reviewed reference baseline."]
         for component in SD3_FULL_BF16_TRAINED_COMPONENTS:
             route = components[component]
             if (
                 route.get("optimizer_profile") != adamw_name
                 or not _is_unset(route.get("fallback_optimizer_profile"))
                 or not _is_unset(route.get("fallback_learning_rate"))
+                or not _is_exact_number(route.get("learning_rate"), _REFERENCE_LEARNING_RATE)
             ):
-                return None, ["SD3 R1 must route every trained Component to sole AdamW, without fallback."]
+                return None, [
+                    "SD3 R1 requires reference learning rate and sole AdamW routing "
+                    "for every trained Component, without fallback."
+                ]
         return "adamw", []
 
     if len(profiles) == 2 and set(by_type) == {"Muon", "AdamW"}:
         muon_name, adamw_name = by_type["Muon"], by_type["AdamW"]
+        if (
+            profiles[muon_name].get("args") != _REFERENCE_R2_MUON_ARGS
+            or profiles[adamw_name].get("args") != _REFERENCE_R2_FALLBACK_ADAMW_ARGS
+        ):
+            return None, ["SD3 R2 Muon/AdamW Profile args must match the reviewed reference baseline."]
         for component in SD3_FULL_BF16_TRAINED_COMPONENTS:
             route = components[component]
             if (
                 route.get("optimizer_profile") != muon_name
                 or route.get("fallback_optimizer_profile") != adamw_name
-                or not _positive_learning_rate(route.get("fallback_learning_rate"))
+                or not _is_exact_number(route.get("learning_rate"), _REFERENCE_LEARNING_RATE)
+                or not _is_exact_number(route.get("fallback_learning_rate"), _REFERENCE_LEARNING_RATE)
             ):
                 return None, [
-                    "SD3 R2 requires Muon primary and an explicit AdamW fallback "
-                    "Profile and LR on every trained MMDiT Component."
+                    "SD3 R2 requires reference learning rates, Muon primary and an "
+                    "explicit AdamW fallback on every trained MMDiT Component."
                 ]
         return "muon_adamw_fallback", []
 
@@ -241,9 +273,13 @@ def sd3_full_bf16_config_blockers(
         ("optimizer_type", "AdamW"),
         ("lr_scheduler", "constant"),
         ("save_model_as", "safetensors"),
+        # SD3 sampling/conditioning modes are not qualified beyond defaults.
+        ("weighting_scheme", "uniform"),
+        ("loss_type", "l2"),
     )
     for field, expected in checks:
-        if effective_config.get(field) != expected:
+        value = effective_config.get(field, expected) if field in {"weighting_scheme", "loss_type"} else effective_config.get(field)
+        if value != expected:
             problems.append(f"SD3 Full-BF16 requires {field}={expected!r}.")
 
     if not _is_explicit_true(effective_config.get("network_train_unet_only")):
@@ -251,15 +287,19 @@ def sd3_full_bf16_config_blockers(
     for flag in _UNQUALIFIED_SWITCHES:
         if _is_true(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 does not qualify {flag}=true.")
-    for flag in ("network_args", "network_weights", "base_weights", "optimizer_args"):
+    for flag in (
+        "network_args", "network_weights", "base_weights", "optimizer_args",
+        *_UNQUALIFIED_DATA_SOURCES, *_UNQUALIFIED_SD3_MODEL_OVERRIDES,
+        "min_timestep", "max_timestep",
+    ):
         if not _is_unset(effective_config.get(flag)):
             problems.append(f"SD3 Full-BF16 does not qualify nonempty {flag}.")
-    for flag in ("blocks_to_swap", "fused_optimizer_groups", "pos_embed_random_crop_rate", "network_dropout"):
-        value = effective_config.get(flag)
-        if value is None or value is False:
-            value = 0
-        if not _is_exact_number(value, 0):
-            problems.append(f"SD3 Full-BF16 requires {flag}=0.")
+    for flag, expected in _REFERENCE_SD3_SCALARS:
+        value = effective_config.get(flag, expected)
+        if value is None and flag in {"blocks_to_swap", "fused_optimizer_groups"}:
+            value = 0  # sd-scripts declares these optional off-switches.
+        if not _is_exact_number(value, expected):
+            problems.append(f"SD3 Full-BF16 requires {flag}={expected}.")
 
     for field, expected in (
         ("network_dim", 4),
