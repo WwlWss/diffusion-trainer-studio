@@ -221,6 +221,56 @@ def compare_component_checkpoints(first: dict[str, Any], second: dict[str, Any])
         raise SD3ComponentBaselineError("Optimizer state did not advance after Resume")
 
 
+
+def compare_component_adapter_weights(
+    fresh_path: Path, resumed_path: Path, *, policy: dict[str, Any],
+) -> dict[str, Any]:
+    """Require real changes in each trained MMDiT target family, not only any LoRA."""
+    result = sd3b._compare_adapter_weights(fresh_path, resumed_path)
+    from safetensors import safe_open
+    import torch
+
+    group_map = {
+        "mmdit.attention.adapter": "attention",
+        "mmdit.mlp.adapter": "mlp",
+        "mmdit.modulation_norm.adapter": "modulation",
+    }
+    required = {
+        group for component, group in group_map.items()
+        if policy["components"][component]["train"]
+    }
+    changed = {group: 0 for group in ("attention", "mlp", "modulation", "other")}
+    total = dict.fromkeys(changed, 0)
+    with safe_open(str(fresh_path), framework="pt", device="cpu") as first, (
+        safe_open(str(resumed_path), framework="pt", device="cpu")
+    ) as second:
+        for name in first.keys():
+            if not name.endswith(".weight"):
+                continue
+            if not name.startswith("lora_unet_"):
+                raise SD3ComponentBaselineError(
+                    f"R0 adapter includes non-MMDiT trainable weights: {name}"
+                )
+            lower = name.lower()
+            if "_attn_" in lower or "_attn2_" in lower:
+                group = "attention"
+            elif "_mlp_" in lower:
+                group = "mlp"
+            elif "_adaln_modulation_" in lower:
+                group = "modulation"
+            else:
+                group = "other"
+            total[group] += 1
+            if not torch.equal(first.get_tensor(name), second.get_tensor(name)):
+                changed[group] += 1
+    if any(changed[group] <= 0 for group in required):
+        raise SD3ComponentBaselineError(
+            f"R0 trained MMDiT groups did not all advance: required={sorted(required)} "
+            f"changed={changed}, totals={total}"
+        )
+    return {**result, "changed_by_group": changed, "total_by_group": total}
+
+
 def run(payload: dict[str, Any], *, expected_commit: str, output: Path) -> dict[str, Any]:
     validated = validate_manifest(payload)
     sd3b._check_head(expected_commit)
@@ -266,9 +316,10 @@ def run(payload: dict[str, Any], *, expected_commit: str, output: Path) -> dict[
             resumed, policy=validated["policy"], policy_hash=validated["policy_hash"], expected_step=2,
         )
         compare_component_checkpoints(fresh, resumed)
-        proof["adapter_updates"] = sd3b._compare_adapter_weights(
+        proof["adapter_updates"] = compare_component_adapter_weights(
             validated["paths"]["fresh_adapter_path"],
             validated["paths"]["resume_adapter_path"],
+            policy=validated["policy"],
         )
         sd3b._check_head(expected_commit)
         _assert_unchanged_inputs(validated)
