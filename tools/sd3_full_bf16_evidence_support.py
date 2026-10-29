@@ -315,6 +315,20 @@ def validate_case_manifest(payload: object, *, phase: str = "fresh") -> dict[str
     case_id = payload.get("case_id")
     spec = get_case_spec(case_id)
     _require_sha(payload.get("source_commit"), name="source_commit", commit=True)
+    submodules = payload.get("source_submodules")
+    required_submodules = {"frontend", "mikazuki/dataset-tag-editor", "sd-scripts"}
+    if (not isinstance(submodules, dict)
+            or not required_submodules.issubset(submodules)
+            or any(not isinstance(name, str)
+                   or not (name in required_submodules
+                           or any(name.startswith(parent + "/") for parent in required_submodules))
+                   or not isinstance(info, dict)
+                   or set(info) != {"gitlink_sha", "checkout"}
+                   or info["checkout"] not in ("initialized", "uninitialized")
+                   for name, info in submodules.items())):
+        _fail("Incomplete or unreviewed B0 source submodule inventory")
+    for name, info in submodules.items():
+        _require_sha(info["gitlink_sha"], name=f"{name} Gitlink", commit=True)
     ref = payload.get("reference")
     if (not isinstance(ref, dict)
             or any(type(ref.get(k)) is not int for k in (
