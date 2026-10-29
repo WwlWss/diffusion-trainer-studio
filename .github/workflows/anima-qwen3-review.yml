@@ -35,6 +35,8 @@ on:
       - "mikazuki/parameter_policy_matrix.py"
       - "mikazuki/parameter_policy_bootstrap.py"
       - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "tests/test_parameter_policy_runtime_bools.py"
       - "mikazuki/parameter_policy_runtime.py"
       - "mikazuki/parameter_policy_torch.py"
       - "mikazuki/parameter_policy_trainer.py"
@@ -165,6 +167,7 @@ jobs:
             mikazuki/parameter_policy_matrix.py \
             mikazuki/parameter_policy_bootstrap.py \
             mikazuki/parameter_policy_compat.py \
+            mikazuki/parameter_policy_runtime_bools.py \
             mikazuki/parameter_policy_runtime.py \
             mikazuki/parameter_policy_torch.py \
             mikazuki/parameter_policy_trainer.py \
@@ -242,6 +245,7 @@ jobs:
             tests/test_parameter_policy_request_contract.py \
             tests/test_parameter_policy_bootstrap.py \
             tests/test_parameter_policy_compat.py \
+            tests/test_parameter_policy_runtime_bools.py \
             tests/test_parameter_policy_step3_regression.py \
             tests/test_parameter_policy_adapter_metadata.py \
             tests/test_parameter_policy_anima_metadata.py \
