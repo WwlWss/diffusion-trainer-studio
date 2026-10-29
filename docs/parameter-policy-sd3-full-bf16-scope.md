@@ -2,9 +2,10 @@
 
 **Status: scope contract implementation / qualification still PENDING.**
 Original base: `main@bfdac9cb040515b4ff3edb422ea414215df4e825`
-(merged PR #62). **While PR #64 is under review, PR #63 is temporarily stacked
-on `fix/component-runtime-bool-contract`; no change has been merged to
-`main`. After PR #64 merges, retarget #63 to `main` and rerun CI.**
+(merged PR #62). **Shared Component Boolean Safety PR #64 is now merged
+to `main@8b00a3b16b0f71d98cab2f63294656da5ed025a2`; PR #63 has
+incorporated its exact final Anima safety preflight fix and targets `main`.
+No Full-BF16 SD3 release qualification is implied.**
 
 ## Why this is separate from C2-B
 
@@ -86,7 +87,7 @@ test process to exercise the future-qualified path.
   All three forms describe the same reference geometry. Non-square,
   wrong-sized and unsupported input shapes remain blocked. The scope leaves
   each incoming representation untouched.
-- **Boolean safety prerequisite (PR #64):** only real Boolean, None/off,
+- **Merged Boolean safety prerequisite (PR #64):** only real Boolean, None/off,
   or numeric 0/1 values are permitted for Component runtime switches.
   Quoted TOML pseudo-booleans such as `fp8_base = "false"` are rejected,
   because `bool("false")` is true inside the legacy Trainer. The R1/R2
