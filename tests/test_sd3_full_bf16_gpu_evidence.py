@@ -111,13 +111,17 @@ def _generate(root: Path, case_id: str, *, identical_pixels: bool = False) -> di
         p = root / (name[2:] + ".safetensors")
         p.write_bytes(("fixture " + name).encode("ascii"))
         external[name] = p
-    return _generator().generate(
-        case_id=case_id,
-        model=model,
-        data_dir=src,
-        work_dir=root / "work",
-        external_models=external,
-    )
+    # The Source gate is strict in production. Host fixtures can run against
+    # a development tree and explicitly inject a synthetic source identity.
+    from unittest.mock import patch
+    with patch.object(_generator(), "_source_commit", return_value=SHA):
+        return _generator().generate(
+            case_id=case_id,
+            model=model,
+            data_dir=src,
+            work_dir=root / "work",
+            external_models=external,
+        )
 
 
 def _write_tiny_bf16_safetensors(path: Path, *, payload: bytes) -> tuple[str, dict]:
@@ -601,6 +605,108 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
 
 
 
+
+def _write_host_checkpoint(
+    case: dict, *, phase: str = "fresh",
+    phase_id: str = "host-phase-1", parent_id: str | None = None,
+) -> tuple[dict, dict]:
+    """Real file layout + synthetic CPU values, never a CUDA qualification."""
+    api = _support()
+    step = 1 if phase == "fresh" else 2
+    checkpoint = Path(case["fresh_checkpoint_dir" if phase == "fresh" else "resume_checkpoint_dir"])
+    adapter = Path(case["fresh_adapter_path" if phase == "fresh" else "resume_adapter_path"])
+    checkpoint.mkdir(parents=True, exist_ok=False)
+    adapter.parent.mkdir(parents=True, exist_ok=True)
+    file_sha, live_tensors = _write_reference_adapter(adapter)
+    policy = api.build_reference_policy(case["case_id"])
+    profiles = {name: info["type"] for name, info in policy["optimizer_profiles"].items()}
+    execution = {
+        "schema": "dts.parameter-policy.execution-identity", "version": 1,
+        "train_type": "sd3-lora",
+        "features": {"full_bf16": {
+            "mixed_precision": "bf16", "trainable_parameter_dtype": "bfloat16",
+        }},
+    }
+    sched = {"schema": "dts.parameter-policy.scheduler-identity",
+             "version": 1, "fixture": True}
+    topo = "host-reference-topology-v1"
+    pmanifest = {
+        "version": 2, "train_type": "sd3-lora",
+        "policy_hash": case["input_identity"]["canonical_policy_hash"],
+        "runtime_topology_fingerprint": topo,
+        "trainable_components": sorted(k for k, v in policy["components"].items() if v["train"]),
+        "frozen_components": sorted(k for k, v in policy["components"].items() if not v["train"]),
+        "trainable_parameter_tensors": 4, "trainable_parameter_elements": 16,
+        "optimizer_profiles": profiles,
+        "optimizers": [{"profile_name": k, "optimizer_type": v,
+                        "topology_fingerprint": "host-child"}
+                       for k, v in profiles.items()],
+        "scheduler_identity": sched, "scheduler_signature": api._json_sha256(sched),
+        "schedulers": [{"profile_name": k, "mode": "constant",
+                        "scheduler_type": "LambdaLR", "topology_fingerprint": "host-scheduler"}
+                       for k in profiles],
+        "execution_identity": execution,
+        "execution_signature": api._json_sha256(execution),
+    }
+    checkpoint_id = ("a" if step == 1 else "b") * 32
+    progress = {
+        "schema": "dts.parameter-policy.checkpoint-progress", "version": 1,
+        "train_type": "sd3-lora",
+        "policy_hash": pmanifest["policy_hash"],
+        "runtime_topology_fingerprint": topo,
+        "execution_signature": pmanifest["execution_signature"],
+        "checkpoint_id": checkpoint_id,
+        "resume_source_checkpoint_id": parent_id,
+        "optimizer_profiles": {
+            name: {"optimizer_type": typ, "step_values": [step]}
+            for name, typ in profiles.items()
+        },
+        "scheduler": {"step_count": step, "last_epoch": step},
+    }
+    geometry = case["reference"]
+    sd3 = {
+        "schema": "dts.sd3.resume-progress", "version": 1,
+        "completed_optimizer_steps": step, "current_epoch": step,
+        "dataloader_batches": geometry["effective_batches_per_epoch"],
+        "gradient_accumulation_steps": geometry["gradient_accumulation_steps"],
+        "num_processes": 1,
+    }
+    sidecars = {
+        "dts_parameter_policy_manifest.json": pmanifest,
+        "dts_parameter_policy_progress.json": progress,
+        "dts_sd3_resume_progress.json": sd3,
+        "train_state.json": {"current_step": step, "current_epoch": step},
+        "dts_sd3_forward_semantics.json": {
+            "attention_contract": "extra-attention-head-dim-v1",
+            "depth": 24, "hidden_size": 1536, "num_heads": 24, "head_dim": 64,
+            "extra_attention_layers": list(range(13)),
+        },
+    }
+    for name, payload in sidecars.items():
+        (checkpoint / name).write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    (checkpoint / "optimizer.bin").write_bytes(b"host-optimizer-file-" + bytes([step]))
+    (checkpoint / "scheduler.bin").write_bytes(b"host-scheduler-file-" + bytes([step]))
+    worker = {
+        "case_id": case["case_id"], "phase_id": phase_id,
+        "logical_step": step, "checkpoint_id": checkpoint_id,
+        "expected_parent_checkpoint_id": parent_id,
+        "source_commit": case["source_commit"],
+        "input_identity_sha256": api._json_sha256(case["input_identity"]),
+        "runtime_topology_fingerprint": topo,
+        "adapter_tensors": live_tensors,
+        "state_file_sha256": {
+            p.name: _digest(p.read_bytes()) for p in checkpoint.iterdir()
+        },
+    }
+    binding = {
+        "case_id": case["case_id"], "phase_id": phase_id,
+        "logical_step": step, "checkpoint_id": checkpoint_id,
+        "adapter_path": str(adapter),
+        "adapter_file_sha256": file_sha,
+        "adapter_tensor_inventory_sha256": api._json_sha256(live_tensors),
+    }
+    return worker, binding
+
 class B0StrictReviewRegressionRED(unittest.TestCase):
     def test_real_format_scalar_alpha_f32_and_bf16_are_full_hash_verified(self):
         api = _support()
@@ -718,7 +824,7 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
         from unittest.mock import patch
         from types import SimpleNamespace
         def fake_run(cmd, **kwargs):
-            if cmd[1:3] == ["rev-parse", "HEAD"]:
+            if cmd[1] == "rev-parse":
                 return SimpleNamespace(stdout=SHA + "\n")
             if "status" in cmd:
                 return SimpleNamespace(stdout=" M tools/prepare_sd3_full_bf16_cases.py\n")
@@ -726,6 +832,62 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
         with patch.object(gen.subprocess, "run", side_effect=fake_run):
             with self.assertRaises(_support().FullBF16EvidenceError):
                 gen._source_commit()
+
+
+    def test_physical_host_binding_checks_real_state_file_layout_not_cuda(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            snapshot, binding = _write_host_checkpoint(case)
+            result = api.verify_adapter_checkpoint_binding(
+                case_manifest=case, phase="fresh", worker_snapshot=snapshot,
+                binding=binding, expected_phase_id="host-phase-1",
+            )
+            self.assertEqual(result["status"], "physical_binding_valid")
+            self.assertEqual(result["checkpoint_id"], "a" * 32)
+            self.assertNotEqual(result["status"], "pass")
+
+    def test_real_state_binding_rejects_missing_swapped_and_mismatched_evidence(self):
+        api = _support()
+        changes = ("wrong_case", "missing_adapter", "swapped_adapter",
+                   "wrong_state_dir", "altered_optimizer", "progress_mismatch",
+                   "wrong_phase_id", "wrong_scheduler", "wrong_parent")
+        for mutation in changes:
+            with tempfile.TemporaryDirectory() as td:
+                case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+                snapshot, binding = _write_host_checkpoint(case)
+                checkpoint = Path(case["fresh_checkpoint_dir"])
+                adapter = Path(case["fresh_adapter_path"])
+                if mutation == "wrong_case":
+                    binding["case_id"] = R2
+                elif mutation == "missing_adapter":
+                    adapter.unlink()
+                elif mutation == "swapped_adapter":
+                    _write_reference_adapter(adapter, alpha_bytes=struct.pack("<f", 8.0))
+                elif mutation == "wrong_state_dir":
+                    case["fresh_checkpoint_dir"] = str(checkpoint / "wrong")
+                elif mutation == "altered_optimizer":
+                    (checkpoint / "optimizer.bin").write_bytes(b"tampered")
+                elif mutation == "progress_mismatch":
+                    p = checkpoint / "dts_parameter_policy_progress.json"
+                    record = json.loads(p.read_text(encoding="utf-8"))
+                    record["checkpoint_id"] = "z" * 32
+                    p.write_text(json.dumps(record), encoding="utf-8")
+                elif mutation == "wrong_phase_id":
+                    snapshot["phase_id"] = "wrong-phase"
+                elif mutation == "wrong_scheduler":
+                    (checkpoint / "scheduler.bin").unlink()
+                elif mutation == "wrong_parent":
+                    p = checkpoint / "dts_parameter_policy_progress.json"
+                    record = json.loads(p.read_text(encoding="utf-8"))
+                    record["resume_source_checkpoint_id"] = "not-a-real-parent"
+                    p.write_text(json.dumps(record), encoding="utf-8")
+                with self.subTest(mutation=mutation), self.assertRaises(api.FullBF16EvidenceError):
+                    api.verify_adapter_checkpoint_binding(
+                        case_manifest=case, phase="fresh",
+                        worker_snapshot=snapshot, binding=binding,
+                        expected_phase_id="host-phase-1",
+                    )
 
     def test_asset_preflight_integrates_medium_shape_audit_but_rejects_other_variants(self):
         api = _support()
