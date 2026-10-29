@@ -114,7 +114,13 @@ def _generate(root: Path, case_id: str, *, identical_pixels: bool = False) -> di
     # The Source gate is strict in production. Host fixtures can run against
     # a development tree and explicitly inject a synthetic source identity.
     from unittest.mock import patch
-    with patch.object(_generator(), "_source_commit", return_value=SHA):
+    fake_submodules = {
+        name: {"gitlink_sha": SHA, "checkout": "uninitialized"}
+        for name in ("frontend", "mikazuki/dataset-tag-editor", "sd-scripts")
+    }
+    with (patch.object(_generator(), "_source_commit", return_value=SHA),
+          patch.object(_generator(), "_source_submodule_inventory",
+                       return_value=fake_submodules)):
         return _generator().generate(
             case_id=case_id,
             model=model,
@@ -1037,6 +1043,45 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
                         worker_snapshot=snapshot, binding=binding,
                         expected_phase_id="host-phase-1",
                     )
+
+    def test_submodule_inventory_records_uninitialized_gitlinks_without_qualification(self):
+        gen = _generator()
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        def git_status(command, **kwargs):
+            self.assertEqual(command[:3], ["git", "submodule", "status"])
+            return SimpleNamespace(stdout=(
+                f" {SHA} frontend (heads/main)\n"
+                f"-{SHA} mikazuki/dataset-tag-editor\n"
+                f" {SHA} sd-scripts (heads/main)\n"
+            ))
+        with patch.object(gen.subprocess, "run", side_effect=git_status):
+            inventory = gen._source_submodule_inventory()
+        self.assertEqual(inventory["frontend"]["checkout"], "initialized")
+        self.assertEqual(inventory["mikazuki/dataset-tag-editor"]["checkout"], "uninitialized")
+        self.assertEqual(inventory["sd-scripts"]["gitlink_sha"], SHA)
+
+    def test_source_manifest_rejects_unknown_or_forged_gitlinks(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            manifest = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            self.assertIn("sd-scripts", manifest["source_submodules"])
+            for kind in ("unknown", "nonhex", "missing", "false_type"):
+                with self.subTest(kind=kind):
+                    altered = copy.deepcopy(manifest)
+                    if kind == "unknown":
+                        altered["source_submodules"]["outside"] = {
+                            "gitlink_sha": SHA, "checkout": "initialized",
+                        }
+                    elif kind == "nonhex":
+                        altered["source_submodules"]["sd-scripts"]["gitlink_sha"] = "wrong"
+                    elif kind == "missing":
+                        altered["source_submodules"].pop("frontend")
+                    else:
+                        altered["source_submodules"]["sd-scripts"]["checkout"] = True
+                    with self.assertRaises(api.FullBF16EvidenceError):
+                        api.validate_case_manifest(altered)
 
     def test_git_source_identity_accepts_clean_and_rejects_gitlink_drift(self):
         gen = _generator()
