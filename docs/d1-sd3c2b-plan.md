@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** DESIGN / HOST REVIEW PENDING; implementation and CUDA execution have not started.
+> **Status:** DESIGN v2 — Fix A contract repair applied; independent re-review pending. No implementation or CUDA acceptance yet.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
@@ -29,11 +29,18 @@ The following are **sources of truth**, rather than a second runtime implementat
 
 **No production code is modified in B0:** no changes to `FULL_BF16_BACKEND_QUALIFICATIONS`, optimizer eligibility, scheduler, model forward, actual training loop, SD3 Resume hooks, UI, or R0 runner. No permissive global environment flag, `--qualification_override`, synthetic CUDA evidence, or stock SD1/SDXL `D1_STOCK_LORA_SPECS` shortcut.
 
+## 1.1 Evidence reference vs future production admission (P1-01)
+
+Three boundaries are separate: (1) C2-A's **pre-DataLoader** pure config/asset gate; (2) B0/B1/B2's two **physical reference cases**, R1 with 1 actual Batch/epoch and R2 with 2 distinct actual Batches/epoch; (3) B3's **release admission** covering the actual production options and Dataset paths. Evidence from reference geometry does **not** imply that the current C2-A production gate enforces that geometry. No B0 code may silently promote or broaden the backend.
+
+Before **any** B3 production promotion, create a `Release Admission Gap Matrix` comparing production-admitted effective flags, dataset/augmentation variants, actual DataLoader geometry and training duration to the exact CUDA-tested reference. If release is strictly reference-only, implement a separately reviewed **SD3 Component Full-BF16-only** post-Dataset guard; `Sd3NetworkTrainer.assert_extra_args(args, train_dataset_group, val_dataset_group)` runs after real DreamBooth Dataset construction and before model load and is an appropriate *candidate* seam. If broad production use is intended, qualify broader cases rather than misrepresent R1/R2. Do **not** add post-Dataset work to a pure Preview or modify production in B0.
+
 ## 2. B0 deliverables and phase gates
 
 | Artifact | Responsibility | B0 exit criterion |
 | --- | --- | --- |
 | `docs/d1-sd3c2b-plan.md` | normative implementation/evidence/negative-test contract | reviewed |
+| `tools/sd3_full_bf16_evidence_support.py` | pure Host CaseSpec, canonical Manifest/options, source/data SHA256, phase event verification, no Torch import | Host RED cases pass |
 | `tools/prepare_sd3_full_bf16_cases.py` | deterministic R1/R2 dataset+policy+manifest generator, entirely outside repo | Host fixtures pass |
 | `tools/run_sd3_full_bf16_gpu_evidence.py` | pure preflight, exact-head/file gates, orchestrate two fresh Python processes, validate post-run proof | Host simulated fixtures pass |
 | `tools/sd3_full_bf16_evidence_worker.py` | **sole** scoped in-process qualification lease and actual production Sd3NetworkTrainer execution, read-only instrumentation | import/dispatch/denial Host tests pass |
@@ -43,6 +50,8 @@ The following are **sources of truth**, rather than a second runtime implementat
 The B0 implementation PR may initially add helpers/tests alongside this plan, but must be independently strict-reviewed before running CUDA. B0 acceptance **does not** require or claim `R1 CUDA PASS` or `R2 CUDA PASS`.
 
 Sequence: **B0 Contract Review → B0 RED tests → B0 implementation → B0 independent Strict Host Review and CI → B1 R1 CUDA → B2 R2 CUDA → B3 same-HEAD regression and conditional release review.**
+
+Implementation slicing: **Fix A** this documentation-only repair and independent contract review; **Fix B** pure Host support, Generator and RED tests; **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests; **Fix D** Runner, negative cases and workflow triggers. Do not use Host fake events as CUDA qualification.
 
 ## 3. Exact candidate cases
 
@@ -60,9 +69,11 @@ Sequence: **B0 Contract Review → B0 RED tests → B0 implementation → B0 ind
 | Physical optimizer children | one nonempty AdamW | nonempty, disjoint Muon and AdamW |
 | Training target | absolute total `max_train_steps=2` in **both** processes | same |
 
-Shared execution constraints: `networks.lora_sd3`; rank/alpha 4/4; resolution exactly 512x512; batch 1; one CUDA device and one process; `mixed_precision=bf16` **and** `full_bf16=true`; constant scheduler; `save_model_as=safetensors`; `save_state`, save every optimizer step; `cache_latents` and `cache_text_encoder_outputs` true; zero DataLoader workers; `enable_bucket=false`; no trainable encoder adapter, network/base preload, arbitrary network arguments, alternate datasets, FP8, Full-FP16, gradient checkpointing, offload/lowram/swap, DeepSpeed, compile, fused paths, non-reference VAE precision, or other unreviewed mode. The **full** additional flag/field constraints are owned by C2-A and should be invoked, not reimplemented loosely.
+Shared execution constraints: `networks.lora_sd3`; rank/alpha 4/4; resolution exactly 512x512; batch 1; one CUDA device and one process; `mixed_precision=bf16` **and** `full_bf16=true`; constant scheduler; `save_model_as=safetensors`; `save_state`, save every optimizer step; `cache_latents` and `cache_text_encoder_outputs` true; zero DataLoader workers; `enable_bucket=false`; no trainable encoder adapter, network/base preload, arbitrary network arguments, alternate datasets, FP8, Full-FP16, gradient checkpointing, offload/lowram/swap, DeepSpeed, compile, fused paths, non-reference VAE precision, or other unreviewed mode. The **full** additional flag/field constraints are owned by C2-A and must be invoked, not reimplemented loosely.
 
-The R2 dataset needs **two actual** batches for each one-step epoch. `gradient_accumulation_steps=2` with a one-batch DataLoader is not valid proof.
+**Additional B0 reference-only restrictions:** fixed `seed=123456`, `max_grad_norm=1.0`, `scale_weight_norms=0`, no `flip_aug`, `color_aug`, `random_crop`, `shuffle_caption`, caption dropout/warmup, validation split, alpha mask, wildcard captions, alternate sampler, or post-step adapter regularization. Validate the *effective parsed args and the real DreamBooth subset properties*, not only raw CLI tokens. These extra reference constraints are **not yet guaranteed by the future production gate**. Outside them, the B0 evidence run fails even if C2-A admits the configuration.
+
+The R2 dataset needs **two distinct, physically observed** Batches per one-step epoch. `gradient_accumulation_steps=2` with a one-Batch DataLoader is not proof. Require **post-`accelerator.prepare`** `len(train_dataloader)==2`, two unique sample/caption identities and two real Backward events, independently confirmed by SD3 Resume Progress.
 
 **Scheduler identity caveat:** `_scheduler_identity_from_args` binds `max_train_steps`. Fresh and resumed commands must both request **total 2** steps. As in the accepted R0 lifecycle, the Fresh process may finish Step 2; the authoritative handoff is **its Step-1 state**, resumed in a newly launched process to produce a separate Step-2 state. Do not change Fresh to `max_train_steps=1` solely to make it stop early: that changes Scheduler Identity.
 
@@ -85,7 +96,31 @@ The runner does **not** apply the qualification lease to itself and then spawn `
 
 Neither WebUI nor ordinary CLI imports the evidence Worker or sees the lease. `sd3-lora` continues to return its production pending blocker when launched normally. Any new production-facing environment toggle, import-time monkeypatch, or persistent registry edit is a **P0 rejection**.
 
-### 4.3 Observation seam constraints
+### 4.3 Concrete Worker-only observation seams (P1-02 / P1-04 / P1-05)
+
+The contract-base production call order is: `Sd3NetworkTrainer.configure_parameter_policy_training(self, args, session, text_encoders)` → `session.build_scheduler(factory)` → `accelerator.prepare(network, optimizer, train_dataloader, val_dataloader, lr_scheduler)` → `session.finalize_after_prepare(...)` → `register_additional_state_hooks(...)` → optional `accelerator.load_state(...)` → `plan_backend_resume_cursor(...)` → real training loop. An observer **must not** assume a Scheduler stored on `ParameterPolicyTrainerSession`: it stores *scheduler identity/signature*, not the returned concrete object. The existing production trainer and Session APIs must remain unchanged.
+
+Implement a **Worker-only** `ObservedSd3NetworkTrainer`, delegating to `super()` exactly once at each override. In `configure_parameter_policy_training`, retain the actual Session and CompositeOptimizer. Wrap only **that Session instance's** `build_scheduler` method: call original **once**, capture its actual `CompositeLRScheduler`, reject zero/duplicate construction, restore the method on exit. Never globally monkeypatch `ParameterPolicyTrainerSession`.
+
+In `register_additional_state_hooks`, call SD3 `super()` first so Forward and Resume pre-hooks remain intact. Then check that pinned `accelerate==1.6.0` holds exactly one `AcceleratedOptimizer` and `AcceleratedScheduler` and that `accelerator._optimizers[0].optimizer is session.optimizer` and `accelerator._schedulers[0].scheduler is observed_composite_scheduler`. The underscored Accelerate collections are **test-only, version-pinned internal API expectations**: any drift fails closed, not silently downgrades to pre-Prepare object evidence. Verify each physical Child owns exactly its declared Profile parameter IDs within the process.
+
+Capture real per-Microbatch `batch["captions"]` in `on_step_start(..., is_train=True)`; first delegate to `super`. Ordinary production batches expose captions while `image_keys` exists only in debug mode; **do not enable debug or modify Dataset**. Link each of the R2 two unique caption identities to the subsequently completed Backward and the generator's unique image/caption full-byte SHA256. Reject missing, duplicate or ambiguous identities.
+
+The real loop calls `accelerator.backward(loss)`, then optional all-reduce/clipping, then the *Accelerated* `optimizer.step()`, `lr_scheduler.step()`, `optimizer.zero_grad()` every Microbatch. Observe both (1) **post-Backward/pre-clipping** BF16 gradients via instance-local `accelerator.backward` wrapper; and (2) **post-clipping/immediately pre-physical-CompositeOptimizer.step** gradients. Wrap only prepared physical Optimizer/Child methods and delegate original once; record separate Muon and AdamW actual child-step counts/states, scheduler and adapter fingerprints. Never create extra Backward/Step/zero_grad to test the model.
+
+In `accelerate==1.6.0`, the AcceleratedOptimizer suppresses actual underlying Child Steps at non-sync microbatches; the AcceleratedScheduler may advance internal `_step_count` if `gradient_state.adjust_scheduler=True`. R2 must **read actual effective state**, assert `accelerator.gradient_accumulation_steps=2`, `accelerator.step_scheduler_with_optimizer=True`, `accelerator.gradient_state.adjust_scheduler=False`, and observe `sync_gradients=[False,True]`. At **next Batch start**, verify that previous Microbatch 1 advanced neither Child nor Scheduler nor adapter weights; a missing Child callback by itself is not a no-op proof. Microbatch 2 must advance both Child optimizers and the Scheduler once. Fail, never mutate those Accelerate flags to force PASS.
+
+After original SD3/Parameter Policy hook registration, wrap this **Accelerator instance's** `save_state` and `load_state`. Capture real Child optimizer/Scheduler/adapter fingerprints immediately before save, then **after `accelerator.save_state` returns successfully** bind them to actual checkpoint sidecars and `dts_parameter_policy_progress.json.checkpoint_id`. Pre-save hook completion does not prove files were written. Resume Worker creates fresh Session, records initial state, invokes original `load_state` once, and captures actual fully restored Child, Scheduler and adapter fingerprints **after return and before resumed Backward**; those must exactly equal Fresh **Step-1** saved snapshots. No extra save/load or hook replacement.
+
+All events include `case_id`, `source_commit`, unique `phase_id`, monotone `event_seq`, logical step, microbatch index, recognized sample identity, actual sync flag, Profile/Child identity, state fingerprints and assigned Checkpoint ID. Cross-process `id(parameter)` is meaningless; compare canonical parameter names, shapes, dtypes, Component/Profile identities and digests. Fingerprinting must avoid retaining large GPU tensor clones. Instance-local wrappers are released in `finally`, and any observation error fails the case.
+
+### 4.4 Additional observer source contract
+
+Production `Sd3NetworkTrainer.on_step_start` currently modifies only cached conditioning outputs and does not provide image keys. The ordinary Dataset returns `captions` even with Text Encoder cache. `CompositeLRScheduler` is returned from `session.build_scheduler` and, on Accelerate 1.6.0, is owned by `AcceleratedScheduler.scheduler`. Actual Scheduler state must be captured, not inferred from `scheduler_signature`. The Worker is **not** permitted to change these ownership or behavior contracts.
+
+### 4.5 Earlier generic observation suggestions
+
+The constraints immediately below remain applicable only when consistent with §§4.3–4.4; the explicit V2 call-site and timing requirements above take precedence.
 
 Prefer a Worker-only observation subclass of `Sd3NetworkTrainer`:
 
@@ -109,9 +144,9 @@ External layout, **never inside the source checkout**, for example:
 `<new-work>/r1/{data,policy.json,manifest.json,fresh/,resume/,events/,result.json}`
 `<new-work>/r2/{data,policy.json,manifest.json,fresh/,resume/,events/,result.json}`
 
-R1: one valid 512x512 sample with its corresponding caption. R2: **two distinguishable** 512x512 real samples plus captions, exactly one repeat each in one ordinary DreamBooth subset (e.g. `1_dts_sd3c2b`). Produce isolated copies/hardlink-free materialization rather than modifying R0 data; reject duplicate physical file/caption identities when distinct cases are required. Restrict to recognized image extensions and the one-caption-per-image format the production Dataset parser really consumes; reject extra images/subfolders/`.npz` or cached-output files that could modify the effective dataset. No alternate `dataset_config`, training/validation split or regularization images.
+R1: one valid 512×512 image; R2: **two different image SHA256s**, two **unique nonempty UTF-8 `.caption` identity strings**, exactly one repeat each in one ordinary DreamBooth subset `1_dts_sd3c2b` (under the `--train_data_dir` **parent**). Produce isolated copies/hardlink-free materialization rather than modifying R0 data; reject duplicate physical file/caption identities when distinct cases are required. Restrict to recognized image extensions and the one-caption-per-image format the production Dataset parser really consumes; reject extra images/subfolders/`.npz` or cached-output files that could modify the effective dataset. No alternate `dataset_config`, training/validation split or regularization images.
 
-The generator should **not infer effective batches from image count**. Its inventory is an input precondition only. The Worker and checkpoint `dts_sd3_resume_progress.json` must physically prove `dataloader_batches == 1` (R1), `== 2` (R2), and `num_processes == 1`.
+Generator must ensure `r1/data/1_dts_sd3c2b/sample_0001.{png,caption}` and `r2/data/1_dts_sd3c2b/{sample_0001,sample_0002}.{png,caption}` map to the production DreamBooth parser. Use copies, never hardlinks; refuse added images, caches and symlinks. Tokens such as `dts_c2b_sample_0001` must remain distinct under default production `process_caption`. **Do not precreate the `fresh/` or `resume/` training output directories**; they are reserved Manifest paths, not Generator-created folders. The generator should **not infer effective batches from image count**. Its inventory is an input precondition only. The Worker and checkpoint `dts_sd3_resume_progress.json` must physically prove `dataloader_batches == 1` (R1), `== 2` (R2), and `num_processes == 1`.
 
 ### 5.1 Hash contract
 
@@ -124,7 +159,9 @@ Compute streaming SHA256 of the **whole bytes**, not header/size/mtime alone, fo
 - manifest body excluding any self-referential digest field; command/normalized effective options;
 - exact source HEAD and all in-use Git submodule gitlink/checkout identities.
 
-Source/case/input hashes are bound **before Fresh**, rechecked **after Fresh/before Resume**, and **after Resume**. Reject changed bytes, missing files, symlinks/realpath escape, duplicate logical paths, model/path swaps, or overwritten output evidence. Preflight may be I/O intensive for large checkpoints; it must not silently replace whole-file hashing with the prior SD3A shape index (which proves topology only).
+Source/case/input hashes are bound **before Fresh**, rechecked **after Fresh/before Resume**, and **after Resume**. Both separate Workers also recheck source/input identities and independently validate exact environment pins using existing `tools/parameter_policy_gpu_qualification_environment.validate_qualification_environment(repo_root=ROOT, torch_module=torch, require_muon=(case_is_R2))` **before** applying a temporary qualification lease (P1-03); compare Fresh/Resume Python, Torch/CUDA-build, torchvision, Accelerate, Muon-provider, requirements hash, GPU and BF16 environment identity. Host negative fixtures use `validate_qualification_environment_snapshot`. An out-of-contract version fails; no `--ignore-environment`. Reject changed bytes, missing files, symlinks/realpath escape, duplicate logical paths, model/path swaps, or overwritten output evidence. Preflight may be I/O intensive for large checkpoints; it must not silently replace whole-file hashing with the prior SD3A shape index (which proves topology only).
+
+**Three preflight modes (P2-01):** `validate_case_manifest` checks JSON/Policy/args/paths on pure Host (no Torch/model); `validate_case_assets` verifies **real full-file hashes**, safetensors headers and Dataset inventory read-only on Host (no CUDA tensor load); `validate_cuda_runtime` validates packages and physical CUDA/BF16 inside each Worker. Mocked header/asset tests must be labeled `host_fixture`, never counted as physical `preflight_pass`. None of these alone is `CUDA PASS`.
 
 The source audit validates `sd35-medium` full DTS-loader-compatible MMDiT topology (24 blocks, hidden 1536, 24 heads/head-dim 64, RMS QK-norm, 384 position grid, extra-attention on blocks 0–12). This does **not** prove official release provenance; the external full-file hashes establish only identity of the **tested local files**. **Important release boundary:** C2-A production admission is architecture/asset-based, not an exact official-weight SHA allowlist. B3 must not claim that tested digests automatically restrict future production checkpoints; if release is intended to cover *only* a particular model weight release, a separately reviewed production digest gate is needed.
 
@@ -173,7 +210,7 @@ Minimum manifest contract:
 }
 ~~~
 
-The actual `...` placeholders above are **documentation-only**; a generated manifest must have fully concrete, explicit, deterministic paths and options. Canonicalization must reject duplicate switches, `--x=value` ambiguity, boolean-string pseudo-values, unexpected positional tokens, `--config_file`, wrong launcher, case/dataset mismatches, stale output files, and all unreviewed effective defaults. Fresh and Resume training options differ **only** in `--resume` and `--output_dir`; both carry `--full_bf16` and `max_train_steps=2`. Any phase-specific evidence metadata lives outside the production trainer args.
+The actual `...` placeholders above are **documentation-only**; a generated manifest must have fully concrete, explicit, deterministic paths and options. The `fresh_command`/`resume_command` arrays are **declarative trainer argument specifications**. The Runner launches a **fixed Worker** with a one-shot ticket; the Worker resolves args through the actual `sd3_train_network.setup_parser()` and reviewed production normalization (reject `--config_file`) and calls the real `Sd3NetworkTrainer.train(args)` **inside its own** temporary qualification context. Runner must not spawn an unleased production script with `--full_bf16`. Canonicalization must reject duplicate switches, `--x=value` ambiguity, boolean-string pseudo-values, unexpected positional tokens, `--config_file`, wrong launcher, case/dataset mismatches, stale output files, and all unreviewed effective defaults. Fresh and Resume training options differ **only** in `--resume` and `--output_dir`; both carry `--full_bf16` and `max_train_steps=2`. Any phase-specific evidence metadata lives outside the production trainer args.
 
 Aggregate evidence must contain:
 
@@ -181,7 +218,7 @@ Aggregate evidence must contain:
 
 Success is a conjunction of independently verified predicates, not an uncontrolled Worker-provided `"pass"`. Default record `status="incomplete"`; any failure is `"fail"` with the original error preserved. A preflight-only result uses `"preflight_pass"`, **never** `"pass"` or `"qualified"`.
 
-All B0/B1/B2 evidence must explicitly report `production_qualification_mutated=false` and `backend_qualification_eligible=false` while the actual registry remains pending. B3 may compute a **separate reviewed candidate eligibility summary**, never mark production released automatically.
+All B0/B1/B2 evidence must report `production_qualification_mutated=false` and `backend_qualification_eligible=false` while the persistent registry remains pending. Record Worker **process-local temporary lease** independently, and verify persistent `sd3-lora:pending` from Host outside each Worker. A lease's short-lived in-process mutation does not constitute production qualification promotion. B3 may compute a **separate reviewed candidate eligibility summary**, never mark production released automatically.
 
 ## 7. Physical assertions — what is a real PASS?
 
@@ -191,7 +228,7 @@ All B0/B1/B2 evidence must explicitly report `production_qualification_mutated=f
 2. On **prepared** training roots, every optimizer-owned, trainable parameter is genuinely `torch.bfloat16`, CUDA resident, and present in exactly one physical Child param-group. A mere `mixed_precision="bf16"` / autocast string is insufficient.
 3. Audit by physical `id(parameter)` matched to actual routing descriptors and component metadata, rejecting duplicates, unknown root targets and leakage of frozen components.
 4. For every trained Component, at least one parameter shows a real, finite, nonzero weight change over the saved/resumed lifecycle. The frozen four Components must have zero optimizer ownership and no observed change; verify a complete adapter key set, not a substring guess alone.
-5. After actual Backward and before clearing gradients, capture every owned gradient with dtype/device/finite/nonzero markers. At minimum each Child and each trained Component must have a nonempty finite BF16 gradient during the appropriate synchronized logical step; report missing/zero rows, never silently skip them. Preserve the distinction between valid zero gradients on an individual tensor and a completely inactive component.
+5. After actual Backward and before clearing gradients, capture every owned gradient with dtype/device/finite/nonzero markers. On synchronized steps additionally capture **post-clipping/pre-physical-Step** gradients. At minimum each Child and each trained Component must have a nonempty finite BF16 gradient during the appropriate synchronized logical step; report missing/zero rows, never silently skip them. Preserve the distinction between valid zero gradients on an individual tensor and a completely inactive component.
 
 ### 7.2 R1 AdamW
 
@@ -205,9 +242,9 @@ All B0/B1/B2 evidence must explicitly report `production_qualification_mutated=f
 - **Two** physical nonempty children: one pinned `pytorch_optimizer.Muon` and one independent `torch.optim.AdamW`; disjoint physical IDs, union equal exactly all trainable IDs.
 - Verify routing plan `route_kind="primary"` for genuinely Muon-eligible Attention/MLP 2-D hidden weights, `route_kind="fallback"` for incompatible AdaLN/Modulation (and any additional *legitimately ineligible* matrices/weights). Do not invent fixed cardinalities; derive exact expected counts from live audited SD3 targets and assert **both** classes populated.
 - Every Muon group has `use_muon is True` and no internally used AdamW-fallback group/state; AdamW fallback owns ineligible targets by **different Profile**, never by a Muon internal option.
-- Exactly **two physically observed training DataLoader batches per epoch**; microbatch 1 must not advance either Child, Scheduler, optimizer-step counter or adapter weights; microbatch 2 is the accumulation boundary and must advance both children and Scheduler once.
+- Exactly **two physically observed, distinct input/Backward pairs** per epoch; first Microbatch must leave physical Child/Scheduler state and adapter weights unchanged, verified at next Batch start, and second must advance both Child states and Scheduler. Require effective Accelerate `adjust_scheduler=False`.
 - Capture actual BF16 gradients after each Backward; no false claim from an empty gradient after zero-grad.
-- After Fresh Step-1, both children possess nonempty appropriate state. Before resumed Step-2, the newly constructed children are initially fresh; after actual checkpoint load their state fingerprints **equal** saved Step-1. After resumed optimizer Step-2, **both** child fingerprints, step counters and relevant adapter weights advance.
+- After Fresh Step-1, both children possess nonempty appropriate state. Before resumed Step-2, newly constructed children are fresh; after actual `accelerator.load_state` **returns**, physical Child, Scheduler and adapter fingerprints **equal** the Fresh Step-1 saved state, before new Backward. After resumed optimizer Step-2, **both** child fingerprints, step counters and relevant adapter weights advance.
 - Verify Muon provider version/class and explicit `use_muon` topology; fallback AdamW state keys/step values; child Scheduler state per Profile; `runtime_topology_fingerprint`, `execution_identity`/signature, `scheduler_identity`/signature identical across Fresh and Resume.
 
 ### 7.4 Saved state and SD3 Resume lineage
@@ -235,7 +272,8 @@ B0 tests are CPU/Host; real CUDA is reserved for B1/B2. Use synthetic case fixtu
 | Grad/ownership | BF16 autocast with FP32 trainable params; FP32/missing/NaN gradient; gradient sampled after zero; CPU-owned parameter; duplicate or frozen Child ownership; missing updated Component |
 | Muon & accumulation | Muon Child empty; internal fallback `use_muon=false`; absent independent AdamW; only one actual R2 batch; early microbatch update; only one Child Step advances |
 | Resume/checkpoints | absent/forged Manifest v2, Execution Identity, Policy Hash, child state or `Progress v1`; wrong parent checkpoint ID; divergent saved/restored fingerprint; mismatched Scheduler Identity; mid-epoch or multiprocess SD3 cursor; missing SD3 forward sidecar |
-| Evidence result | partial evidence marked PASS; failed subprocess ignored; sha mismatch mid-run; false production promotion claim |
+| Environment and sample identities | wrong pinned packages; changed Fresh/Resume environment; duplicate R2 source/Caption; two actual Batches not linked to two Backward events |
+| Evidence result | partial evidence marked PASS; failed subprocess ignored; SHA mismatch mid-run; wrong phase/Checkpoint ID or event order; false promotion claim |
 
 Strict Host Review checklist:
 
@@ -243,7 +281,7 @@ Strict Host Review checklist:
 2. Prove the exact observational seam is non-invasive: no extra Backward, optimizer/scheduler Step, or lost save/load hook; observation survives `Accelerator.prepare` and Resume.
 3. Check each claimed physical predicate is sourced from a real runtime object or checkpoint, not solely policy metadata or hardcoded/duplicated results.
 4. Run focused tests, `test_sd3_full_bf16_scope.py`, `test_sd3_component_gpu_evidence.py`, SD3 forward/resume tests and existing Parameter Policy runtime/boolean tests on the B0 commit.
-5. Wire changed-file triggers **and** test steps in `.github/workflows/anima-qwen3-review.yml`; confirm full exact-head `validate` and `Parameter Policy runtime smoke` pass.
+5. **Fix D / P2-03:** extend (do not replace) `.github/workflows/anima-qwen3-review.yml` triggers for this document, all new B0 tools and focused Host tests; add those tests to existing validation jobs. The **docs-only Fix A SHA currently has no triggered B0 workflow**, so no CI success is claimed. Later require green exact-head `validate` and `Parameter Policy runtime smoke` before B0 implementation acceptance.
 6. No GPU PASS, no release-status change, no file written inside repository by the generator/runner, no quiet lowering of requirements to accommodate 16-GB memory.
 
 B0 is **ready for B1**, not `qualified`, only after independent Strict Host Review, complete negative cases and green exact-head CI.
@@ -254,11 +292,15 @@ B0 is **ready for B1**, not `qualified`, only after independent Strict Host Revi
 
 **B2 / R2:** separate new dataset and output; same HEAD, two real batches/epoch, two disjoint physical optimizer children, explicit fallback, full two-microbatch timeline, both child states restored and updated. A single batch with `accum2` is FAIL.
 
-**B3:** on the **same final candidate SHA**, rerun D0 shared C1–C4 8/8 and SD3C1 R0, plus R1 and R2; verify tool/environment/input identities, zero pending qualifications mutated, exact-head CI, independent Final Strict Review and a signed, evidence-ID-bound summary. Historical GPU proof on an older SHA cannot be relabeled as proof for a changed candidate commit.
+**B3:** on the **same final candidate SHA**, rerun D0 shared C1–C4 8/8 and SD3C1 R0, plus R1 and R2; verify tool/environment/input identities, zero pending qualifications mutated, exact-head CI, independent Final Strict Review and an evidence-ID-bound **canonical SHA256 digest plus independent reviewer approval**; SHA256 is a content binding, **not a cryptographic signature** (P2-04). Historical GPU proof on an older SHA cannot be relabeled as proof for a changed candidate commit.
 
-**Release is a distinct PR:** after approved B3 evidence, narrowly update the `sd3-lora` backend qualification record with a dedicated SD3 evidence ID while keeping C2-A's restrictive second gate. If that promotion changes HEAD, repeat the required exact-head checks and state clearly what the new commit has actually been tested against. The grant is restricted to recognized SD3.5 Medium topology + three MMDiT LoRA Components + R1/R2 geometry and optimizer shapes; it is **not** SD3/3.5-wide, encoder-training-wide or optimizer-wide Full-BF16.
+**Release is a distinct PR:** only after B3 evidence **and explicit production Release Admission Gap closure**, narrowly update the `sd3-lora` backend qualification record with a dedicated SD3 evidence ID while keeping C2-A's restrictive second gate. If that promotion changes HEAD, repeat the required exact-head checks and state clearly what the new commit has actually been tested against. The grant is restricted to recognized SD3.5 Medium topology + three MMDiT LoRA Components + R1/R2 geometry and optimizer shapes; it is **not** SD3/3.5-wide, encoder-training-wide or optimizer-wide Full-BF16.
 
-### Open implementation decisions resolved at B0 Host Review
+### B3 release-gap decision checklist
+
+Audit actual C2-A-accepted effective Dataset and training options: `flip_aug`, `color_aug`, `random_crop`, caption shuffle/dropout/warmup, `scale_weight_norms`, actual prepared DataLoader batch count, repeat count, max steps, caching, LR, clipping, validation/sampling and checkpoint variants. Some combinations are rejected by other production checks (e.g. cacheability)—identify those rejection sites; **do not assume all options are admissible**. If only reference geometry will be promoted, add an SD3-only post-Dataset production guard in a separate review; if broader use is required, collect additional physical CUDA evidence first. Pending remains until that gap is closed.
+
+### Open implementation decisions to confirm in B0 Host Review
 
 - Pick and test the **actual** interception point for prepared Accelerate optimizer state and post-backward gradient; do not ship a speculative callback that observes an unused object.
 - Define unambiguous Worker/Runner phase ticket path, allowed effective argv schema, atomic result format, retry behavior and filename normalization.
