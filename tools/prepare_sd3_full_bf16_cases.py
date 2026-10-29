@@ -7,9 +7,7 @@ Header/architecture and real GPU validation belong to later preflight/Worker.
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -64,8 +62,6 @@ def _image_sources(data_dir: Path, *, expected_count: int) -> list[tuple[Path, P
             )
         if member.name.lower() != member.name or member.suffix not in (".png", ".caption"):
             raise support.FullBF16EvidenceError(f"Mixed-case dataset extension is not allowed: {member}")
-        if member.stem in files and member.suffix == ".png":
-            pass
         files[member.name] = member
     image_names = sorted(x for x in files if x.endswith(".png"))
     captions = sorted(x for x in files if x.endswith(".caption"))
@@ -116,7 +112,7 @@ def _external_models(external_models: dict[str, Path]) -> dict[str, Path]:
 
 
 def _reference_common_args(
-    *, case_id: str, spec: dict[str, Any],
+    *, spec: dict[str, Any],
     model: Path, data_root: Path, policy_path: Path,
     external: dict[str, Path],
 ) -> list[str]:
@@ -225,7 +221,7 @@ def generate(
         "canonical_policy_hash": support._sha256(canonical_text.encode("utf-8")),
     }
     common = _reference_common_args(
-        case_id=case_id, spec=spec, model=model, data_root=root / "data",
+        spec=spec, model=model, data_root=root / "data",
         policy_path=policy_path, external=external,
     )
     fresh, resumed = root / "fresh", root / "resume"
