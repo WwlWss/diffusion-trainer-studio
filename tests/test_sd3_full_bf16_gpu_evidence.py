@@ -139,6 +139,45 @@ def _write_tiny_bf16_safetensors(path: Path, *, payload: bytes) -> tuple[str, di
     }
 
 
+
+def _write_reference_adapter(
+    path: Path, *, alpha_dtype: str = "F32", alpha_bytes: bytes | None = None,
+    weight_dtype: str = "BF16", include_alpha: bool = True, unknown: bool = False,
+) -> tuple[str, dict]:
+    """Real SD3 normalized LoRA state_dict triple, including scalar alpha.
+
+    Pure CPU Safetensors layout, avoiding a heavy Torch dependency in Host CI.
+    Split QKV is already normalized by LoRANetwork.state_dict() in production.
+    """
+    prefix = "lora_unet_joint_blocks_0_attn_proj"
+    down = prefix + ".lora_down.weight"
+    up = prefix + ".lora_up.weight"
+    alpha = prefix + ".alpha"
+    down_bytes = b"\x00\x3f\x00\x40\x80\x40\x00\x41"
+    up_bytes = (b"\x00\x3f\x00\x40\x80\x40\x00\x41"
+                if weight_dtype == "BF16" else struct.pack("<4f", 1, 2, 3, 4))
+    if alpha_bytes is None:
+        alpha_bytes = struct.pack("<f", 4.0) if alpha_dtype == "F32" else b"\x80\x40"
+    entries = [
+        (down, "BF16", [2, 2], down_bytes, "trainable_weight"),
+        (up, weight_dtype, [2, 2], up_bytes, "trainable_weight"),
+    ]
+    if include_alpha:
+        entries.append((alpha, alpha_dtype, [], alpha_bytes, "alpha_buffer"))
+    if unknown:
+        entries.append((prefix + ".unreviewed", "BF16", [2], b"\x00\x40\x00\x41", "unreviewed"))
+    header, payload, expected = {}, b"", {}
+    for key, dtype, shape, raw, role in entries:
+        offset = len(payload)
+        payload += raw
+        header[key] = {"dtype": dtype, "shape": shape,
+                       "data_offsets": [offset, offset + len(raw)]}
+        expected[key] = {"dtype": dtype, "shape": shape, "role": role,
+                         "sha256": _digest(raw)}
+    header_bytes = json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    path.write_bytes(struct.pack("<Q", len(header_bytes)) + header_bytes + payload)
+    return _digest(path.read_bytes()), expected
+
 def _ticket(root: Path) -> dict:
     return {
         "schema": "dts.sd3c2b.phase-ticket", "version": 1,
@@ -513,9 +552,7 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
             path = Path(td) / "dts-step00000001.safetensors"
-            sha, inventory = _write_tiny_bf16_safetensors(
-                path, payload=b"\x00\x3f\x00\x40\x80\x40\x00\x41"
-            )
+            sha, inventory = _write_reference_adapter(path)
             self.assertIsNotNone(api.verify_adapter_file(
                 path, expected_file_sha256=sha, expected_tensors=inventory
             ))
@@ -527,9 +564,7 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
             sha, inventory = _write_tiny_bf16_safetensors(
                 path, payload=b"\x00\x3f\x00\x40\x80\x40\x00\x41"
             )
-            _write_tiny_bf16_safetensors(
-                path, payload=b"\x00\x3f\x00\x40\x80\x40\x00\x42"
-            )
+            _write_reference_adapter(path, alpha_bytes=struct.pack("<f", 8.0))
             with self.assertRaises(api.FullBF16EvidenceError):
                 api.verify_adapter_file(
                     path, expected_file_sha256=sha, expected_tensors=inventory
@@ -546,8 +581,10 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
         }
         progress = {"schema": "dts.parameter-policy.checkpoint-progress",
                     "version": 1, "checkpoint_id": "c" * 32}
-        self.assertIsNotNone(api.validate_adapter_checkpoint_binding(
-            binding, progress, expected_phase_id="fresh-unique", expected_step=1
+        self.assertIsNotNone(api.validate_adapter_checkpoint_metadata(
+            binding, progress, expected_case_id=R1,
+            expected_phase_id="fresh-unique", expected_step=1,
+            expected_adapter_path=binding["adapter_path"],
         ))
         for field, value in (("logical_step", 2),
                              ("phase_id", "resume-unique"),
@@ -556,10 +593,154 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
                 wrong = dict(binding)
                 wrong[field] = value
                 with self.assertRaises(api.FullBF16EvidenceError):
-                    api.validate_adapter_checkpoint_binding(
-                        wrong, progress, expected_phase_id="fresh-unique",
-                        expected_step=1,
+                    api.validate_adapter_checkpoint_metadata(
+                        wrong, progress, expected_case_id=R1,
+                        expected_phase_id="fresh-unique", expected_step=1,
+                        expected_adapter_path=binding["adapter_path"],
                     )
+
+
+
+class B0StrictReviewRegressionRED(unittest.TestCase):
+    def test_real_format_scalar_alpha_f32_and_bf16_are_full_hash_verified(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            for dtype in ("F32", "BF16"):
+                with self.subTest(alpha=dtype):
+                    path = Path(td) / f"{dtype}-step00000001.safetensors"
+                    sha, tensors = _write_reference_adapter(path, alpha_dtype=dtype)
+                    evidence = api.verify_adapter_file(
+                        path, expected_file_sha256=sha, expected_tensors=tensors
+                    )
+                    self.assertEqual(evidence["tensor_count"], 3)
+
+    def test_scalar_alpha_missing_or_tampered_or_wrong_role_rejected(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "candidate.safetensors"
+            sha, expected = _write_reference_adapter(path)
+            for mutation in ("missing_alpha", "wrong_buffer_dtype", "wrong_buffer_hash",
+                             "wrong_buffer_shape", "unexpected_key", "fp32_trainable"):
+                with self.subTest(mutation=mutation):
+                    if mutation == "missing_alpha":
+                        alt_sha, _ = _write_reference_adapter(path, include_alpha=False)
+                        inventory = expected
+                    elif mutation == "unexpected_key":
+                        alt_sha, inventory = _write_reference_adapter(path, unknown=True)
+                    elif mutation == "fp32_trainable":
+                        alt_sha, inventory = _write_reference_adapter(path, weight_dtype="F32")
+                    else:
+                        alt_sha, inventory = _write_reference_adapter(path)
+                        inventory = copy.deepcopy(inventory)
+                        alpha = next(k for k in inventory if k.endswith(".alpha"))
+                        if mutation == "wrong_buffer_dtype":
+                            inventory[alpha]["dtype"] = "BF16"
+                        elif mutation == "wrong_buffer_shape":
+                            inventory[alpha]["shape"] = [1]
+                        else:
+                            inventory[alpha]["sha256"] = "f" * 64
+                    with self.assertRaises(api.FullBF16EvidenceError):
+                        api.verify_adapter_file(
+                            path, expected_file_sha256=alt_sha,
+                            expected_tensors=inventory,
+                        )
+
+    def test_extra_dreambooth_sibling_subset_rejected_before_fresh_and_resume(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = json.loads(Path(_generate(root, R1)["manifest"]).read_text(encoding="utf-8"))
+            sibling = root / "work" / "data" / "1_extra"
+            sibling.mkdir()
+            from PIL import Image
+            Image.new("RGB", (512, 512), (9, 17, 22)).save(sibling / "unexpected.png")
+            (sibling / "unexpected.caption").write_text("unexpected", encoding="utf-8")
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_case_inputs(manifest, phase="fresh")
+            ckpt = Path(manifest["fresh_checkpoint_dir"])
+            ckpt.mkdir(parents=True)
+            Path(manifest["fresh_adapter_path"]).write_bytes(b"fixture")
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_case_inputs(manifest, phase="resume")
+
+    def test_input_parent_rejects_extra_file_and_nested_unapproved_subtree(self):
+        api = _support()
+        for suffix in ("extra-file", "extra-directory"):
+            with tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                manifest = json.loads(Path(_generate(root, R1)["manifest"]).read_text(encoding="utf-8"))
+                extra = root / "work" / "data" / "stray"
+                if suffix == "extra-directory":
+                    extra.mkdir()
+                    (extra / "junk").write_bytes(b"data")
+                else:
+                    extra.write_bytes(b"data")
+                with self.subTest(extra=suffix), self.assertRaises(api.FullBF16EvidenceError):
+                    api.verify_case_inputs(manifest)
+
+    def test_metadata_only_does_not_claim_physical_checkpoint_pass(self):
+        api = _support()
+        path = Path(tempfile.gettempdir()) / "uncreated-step00000001.safetensors"
+        data = {"case_id": R1, "phase_id": "fresh-unique", "logical_step": 1,
+                "checkpoint_id": "a"*32, "adapter_path": str(path),
+                "adapter_file_sha256": "b"*64, "adapter_tensor_inventory_sha256": "c"*64}
+        progress = {"schema":"dts.parameter-policy.checkpoint-progress",
+                    "version":1,"checkpoint_id":"a"*32}
+        metadata = api.validate_adapter_checkpoint_metadata(
+            data, progress, expected_case_id=R1, expected_phase_id="fresh-unique",
+            expected_step=1, expected_adapter_path=str(path))
+        self.assertEqual(metadata["status"], "metadata_valid")
+        with self.assertRaises(api.FullBF16EvidenceError):
+            api.verify_adapter_checkpoint_binding(
+                case_manifest={"schema":"untrusted"}, phase="fresh",
+                worker_snapshot={}, binding=data
+            )
+        wrong = dict(data, case_id=R2)
+        with self.assertRaises(api.FullBF16EvidenceError):
+            api.validate_adapter_checkpoint_metadata(
+                wrong, progress, expected_case_id=R1, expected_phase_id="fresh-unique",
+                expected_step=1, expected_adapter_path=str(path))
+
+    def test_result_writer_refuses_final_cuda_pass_without_host_verification(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            for status in ("pass", "qualified"):
+                with self.subTest(status=status), self.assertRaises(api.FullBF16EvidenceError):
+                    api.publish_phase_result(
+                        Path(td) / (status + ".json"),
+                        {"schema":"dts.sd3c2b.full-bf16-worker-phase",
+                         "version":1,"status":status}
+                    )
+            self.assertIsNone(next(Path(td).glob("*.json"), None))
+
+    def test_generator_source_is_not_accepted_when_git_status_is_dirty(self):
+        gen = _generator()
+        from unittest.mock import patch
+        from types import SimpleNamespace
+        def fake_run(cmd, **kwargs):
+            if cmd[1:3] == ["rev-parse", "HEAD"]:
+                return SimpleNamespace(stdout=SHA + "\n")
+            if "status" in cmd:
+                return SimpleNamespace(stdout=" M tools/prepare_sd3_full_bf16_cases.py\n")
+            return SimpleNamespace(stdout="")
+        with patch.object(gen.subprocess, "run", side_effect=fake_run):
+            with self.assertRaises(_support().FullBF16EvidenceError):
+                gen._source_commit()
+
+    def test_asset_preflight_integrates_medium_shape_audit_but_rejects_other_variants(self):
+        api = _support()
+        from unittest.mock import patch
+        from tests.test_sd3_full_bf16_scope import shape_fixture
+        from mikazuki import sd3_full_bf16_scope as scope
+        with tempfile.TemporaryDirectory() as td:
+            payload = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            with patch.object(scope, "_read_safetensors_shape_index", return_value=shape_fixture()):
+                result = api.validate_case_assets(payload)
+                self.assertEqual(result["status"], "preflight_pass")
+            with patch.object(scope, "_read_safetensors_shape_index",
+                              return_value=shape_fixture(variant="sd3-medium")):
+                with self.assertRaises(api.FullBF16EvidenceError):
+                    api.validate_case_assets(payload)
 
 
 if __name__ == "__main__":
