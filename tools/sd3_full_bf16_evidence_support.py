@@ -1105,6 +1105,7 @@ def verify_adapter_checkpoint_binding(
     *, case_manifest: dict[str, Any], phase: str,
     worker_snapshot: Mapping[str, Any], binding: Mapping[str, Any],
     expected_phase_id: str | None = None,
+    accepted_fresh_evidence: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Physical Host file/lineage binding, NOT a CUDA qualification decision.
 
@@ -1204,9 +1205,13 @@ def verify_adapter_checkpoint_binding(
     if phase == "fresh":
         if expected_parent is not None or progress.get("resume_source_checkpoint_id") is not None:
             _fail("Fresh checkpoint must not claim a resume parent")
-    elif (not isinstance(expected_parent, str) or not expected_parent
-          or progress.get("resume_source_checkpoint_id") != expected_parent):
-        _fail("Resumed checkpoint did not link to exact Fresh checkpoint ID")
+    else:
+        _verify_resume_fresh_parent(
+            case_manifest=case_manifest,
+            accepted_fresh_evidence=accepted_fresh_evidence,
+            resume_progress=progress,
+            snapshot=worker_snapshot,
+        )
     if progress.get("checkpoint_id") != worker_snapshot.get("checkpoint_id"):
         _fail("Worker checkpoint ID differs from actual on-disk Progress sidecar")
     spec = manifest_view["case_spec"]
@@ -1224,13 +1229,9 @@ def verify_adapter_checkpoint_binding(
             or train_state["current_step"] != expected_step
             or train_state["current_epoch"] != expected_step):
         _fail("Actual SD3 Resume cursor does not match physical reference geometry")
-    if (semantics.get("attention_contract") != "extra-attention-head-dim-v1"
-            or semantics.get("depth") != 24
-            or semantics.get("hidden_size") != 1536
-            or semantics.get("num_heads") != 24
-            or semantics.get("head_dim") != 64
-            or semantics.get("extra_attention_layers") != list(range(13))):
-        _fail("Checkpoint SD3.5 Medium forward semantics are not the audited reference")
+    _verify_reference_forward_identity(semantics, worker_snapshot)
+    _verify_reference_scheduler_identity(pmanifest, worker_snapshot)
+    _verify_checkpoint_progress_consistency(progress, expected_step=expected_step)
 
     all_files = _checkpoint_file_inventory(checkpoint)
     if (not isinstance(worker_snapshot.get("state_file_sha256"), dict)
@@ -1239,12 +1240,23 @@ def verify_adapter_checkpoint_binding(
     expected_tensors = worker_snapshot.get("adapter_tensors")
     if not isinstance(expected_tensors, Mapping) or not expected_tensors:
         _fail("Missing real prepared-network adapter Tensor snapshot")
+    ownership_check = verify_reference_parameter_ownership(
+        case_manifest=case_manifest, worker_snapshot=worker_snapshot,
+        checkpoint_manifest=pmanifest, adapter_tensors=expected_tensors,
+    )
     if _json_sha256(expected_tensors) != binding.get("adapter_tensor_inventory_sha256"):
         _fail("Adapter Tensor inventory hash differs from real Worker snapshot")
     if binding.get("adapter_file_sha256") != _sha256_file(expected_adapter_path):
         _fail("Actual Step adapter file bytes differ from bound evidence")
     adapter_check = verify_adapter_file(
         expected_adapter_path, expected_file_sha256=binding["adapter_file_sha256"],
+        expected_tensors=expected_tensors,
+    )
+    # Accelerate's prepared Network state must match the same-step LoRA
+    # snapshot, without assuming file-level metadata is byte-identical.
+    network_check = verify_adapter_file(
+        checkpoint / "model.safetensors",
+        expected_file_sha256=all_files["model.safetensors"],
         expected_tensors=expected_tensors,
     )
     return {
@@ -1254,6 +1266,11 @@ def verify_adapter_checkpoint_binding(
         "adapter_file_sha256": adapter_check["file_sha256"],
         "adapter_tensor_inventory_sha256": adapter_check["tensor_inventory_sha256"],
         "checkpoint_file_sha256": all_files,
+        "network_state_sha256": network_check["file_sha256"],
+        "execution_signature": pmanifest["execution_signature"],
+        "runtime_topology_fingerprint": pmanifest["runtime_topology_fingerprint"],
+        "scheduler_signature": pmanifest["scheduler_signature"],
+        "parameter_ownership_summary": ownership_check,
     }
 
 
@@ -1264,5 +1281,5 @@ __all__ = [
     "validate_qualification_lease_records", "issue_phase_ticket",
     "claim_phase_ticket", "publish_phase_result", "verify_adapter_file",
     "validate_adapter_checkpoint_metadata",
-    "verify_adapter_checkpoint_binding",
+    "verify_reference_parameter_ownership", "verify_adapter_checkpoint_binding",
 ]
