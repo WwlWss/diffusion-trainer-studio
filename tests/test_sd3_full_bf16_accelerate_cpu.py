@@ -70,6 +70,67 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
                     f"Accelerate load_state failed to restore {k}",
                 )
 
+    def test_one_composite_optimizer_and_scheduler_have_one_accelerate_state_each(self):
+        from types import SimpleNamespace
+        from mikazuki.parameter_policy_torch import (
+            CompositeOptimizer, CompositeLRScheduler,
+            OptimizerRuntimeEntry, SchedulerRuntimeEntry,
+        )
+
+        model = torch.nn.Linear(3, 2)
+        child = torch.optim.AdamW(model.parameters(), lr=0.0001)
+        scheduler_child = torch.optim.lr_scheduler.LambdaLR(child, lambda _: 1.0)
+        topology = SimpleNamespace(topology_fingerprint="host-accelerate-composite-fixture")
+        optimizer = CompositeOptimizer(
+            topology,
+            (OptimizerRuntimeEntry(
+                profile_name="adamw_main", optimizer_type="AdamW",
+                topology_fingerprint="cpu-child", optimizer=child,
+            ),),
+        )
+        scheduler = CompositeLRScheduler(
+            optimizer,
+            (SchedulerRuntimeEntry(
+                profile_name="adamw_main", optimizer_type="AdamW",
+                topology_fingerprint="cpu-child", mode="external",
+                optimizer=child, scheduler=scheduler_child,
+                scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+            ),),
+        )
+        self.assertEqual(scheduler.state_dict()["step_count"], 1)
+        self.assertEqual(scheduler.state_dict()["last_epoch"], 0)
+        acc = Accelerator(cpu=True, mixed_precision="no")
+        model, optimizer, scheduler = acc.prepare(model, optimizer, scheduler)
+        optimizer.zero_grad(set_to_none=True)
+        acc.backward(model(torch.ones((2, 3))).square().sum())
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad(set_to_none=True)
+        actual = getattr(scheduler, "scheduler", scheduler)
+        progress = actual.state_dict()
+        self.assertEqual(progress["step_count"], 2)
+        self.assertEqual(progress["last_epoch"], 1)
+        self.assertEqual(set(progress["children"]), {"adamw_main"})
+        saved = {k: v.detach().clone() for k, v in acc.unwrap_model(model).state_dict().items()}
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            acc.save_state(str(root), safe_serialization=True)
+            self.assertEqual(
+                set(p.name for p in root.iterdir()),
+                {"model.safetensors", "optimizer.bin",
+                 "scheduler.bin", "random_states_0.pkl"},
+            )
+            with torch.no_grad():
+                for p in model.parameters():
+                    p.add_(100)
+            acc.load_state(str(root))
+            self.assertEqual(actual.state_dict()["step_count"], 2)
+            self.assertEqual(actual.state_dict()["last_epoch"], 1)
+            for name, tensor in saved.items():
+                self.assertTrue(torch.equal(
+                    acc.unwrap_model(model).state_dict()[name], tensor,
+                ))
+
     def test_host_reference_scheduler_identity_matches_production_factory(self):
         from mikazuki.parameter_policy_trainer import _scheduler_identity_from_args
         from tools import sd3_full_bf16_evidence_support as host
