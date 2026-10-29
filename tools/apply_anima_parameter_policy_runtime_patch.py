@@ -139,6 +139,16 @@ def patch_anima_train_network(text: str) -> str:
 
 
 def patch_anima_train(text: str) -> str:
+    # Anima Full's policy read originally happened after dataset setup,
+    # Qwen3 loading and optional embedding/latent caching. The Boolean
+    # safety boundary must run at the very first train() statement,
+    # before all of those operations, irrespective of Qwen joint mode.
+    text = replace_once(
+        text,
+        """def train(args):\n    args_util.verify_training_args(args)\n""",
+        """def train(args):\n    if str(getattr(args, "parameter_policy_config", "") or "").strip():\n        from library import dts_parameter_policy_bridge\n        dts_parameter_policy_bridge.preflight_component_runtime_booleans(\n            args=args, train_type="anima-finetune",\n        )\n    args_util.verify_training_args(args)\n""",
+        "Anima Full pre-dataset, pre-Qwen early boolean preflight",
+    )
     has_qwen_patch = "train_qwen3 = bool(getattr(args, \"train_qwen3_text_encoder\", False))" in text
 
     if has_qwen_patch:
@@ -274,12 +284,6 @@ def patch_anima_train(text: str) -> str:
         """    anima_train_utils.add_anima_training_arguments(parser)\n""",
         """    anima_train_utils.add_anima_training_arguments(parser)\n    parser.add_argument(\"--parameter_policy_config\", type=str, default=None)\n""",
         "Anima Full policy CLI argument",
-    )
-    text = replace_once(
-        text,
-        """        from library import dts_parameter_policy_bridge as parameter_policy_bridge\n        policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file(\n""",
-        """        from library import dts_parameter_policy_bridge as parameter_policy_bridge\n        parameter_policy_bridge.preflight_component_runtime_booleans(\n            args=args, train_type="anima-finetune",\n        )\n        policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file(\n""",
-        "Anima Full early Component boolean preflight",
     )
     return text
 
