@@ -29,6 +29,17 @@ def load_parameter_policy_trainer():
     return importlib.import_module("mikazuki.parameter_policy_trainer")
 
 
+def preflight_component_runtime_booleans(*, args, train_type: str) -> None:
+    """Pure early type check; do not import the heavyweight trainer/session."""
+    root_text = str(_find_dts_root())
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    contract = importlib.import_module("mikazuki.parameter_policy_runtime_bools")
+    contract.require_component_runtime_booleans(
+        vars(args), train_type=train_type,
+    )
+
+
 def create_parameter_policy_session(*args, **kwargs):
     return load_parameter_policy_trainer().create_parameter_policy_session(*args, **kwargs)
 
@@ -46,6 +57,7 @@ def make_legacy_scheduler_factory(*args, **kwargs):
 
 
 __all__ = [
+    "preflight_component_runtime_booleans",
     "create_parameter_policy_session",
     "load_parameter_policy_file",
     "load_parameter_policy_train_flags",
