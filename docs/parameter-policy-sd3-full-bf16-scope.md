@@ -147,7 +147,11 @@ No trainable text encoders, alternate LoRA network, network_args or preloaded
 network/base weights, optimizer_args, dropout, positional embedding scaling
 or random cropping, gradient checkpointing, FP8, Full-FP16, compile,
 DeepSpeed, fused variants, block swapping, CPU/offload, cached output files,
-or other advanced execution modes.
+or other advanced execution modes. The additional `no_half_vae=true` mode
+would run the VAE in FP32 instead of the reviewed BF16 reference path
+(`train_network.py` computes `vae_dtype` from this flag). It is now
+explicitly rejected for R1/R2, including string pseudo-booleans; this does
+not change the ordinary SD3 mixed-precision/Standard VAE options.
 
 The host contract additionally limits unreviewed geometry (rank, alpha,
 batch, resolution, accumulation, worker count) to the R1/R2 reference cases.
