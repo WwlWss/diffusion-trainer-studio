@@ -18,6 +18,8 @@ on:
       - "tools/run_sd3_component_gpu_evidence.py"
       - "tools/prepare_sd3_component_baseline.py"
       - "tests/test_sd3_component_gpu_evidence.py"
+      - "tests/test_sd3_full_bf16_scope.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
       - "docs/parameter-policy-sd3-runtime-correctness.md"
       - "mikazuki/sd3_architecture_contract.py"
       - "mikazuki/sd3_component_audit.py"
@@ -159,6 +161,7 @@ jobs:
             mikazuki/multi_caption_config.py \
             mikazuki/optimizer_profiles.py \
             mikazuki/model_component_profiles.py \
+            mikazuki/sd3_full_bf16_scope.py \
             mikazuki/parameter_routing.py \
             mikazuki/parameter_policy.py \
             mikazuki/parameter_policy_matrix.py \
@@ -364,8 +367,8 @@ jobs:
       - name: SD3 architecture and component audit contracts
         run: python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
 
-      - name: SD3 forward/resume/evidence pure contracts
-        run: python -m unittest tests.test_sd3_forward_contract tests.test_sd3_resume_cursor tests.test_sd3_runtime_evidence tests.test_sd3_component_gpu_evidence -v
+      - name: SD3 forward/resume/evidence and Full-BF16 scope pure contracts
+        run: python -m unittest tests.test_sd3_forward_contract tests.test_sd3_resume_cursor tests.test_sd3_runtime_evidence tests.test_sd3_component_gpu_evidence tests.test_sd3_full_bf16_scope -v
 
       - name: SD3 WebUI duration and checkpoint preflight
         run: python -m unittest tests.test_sd3_ui_resume -v
@@ -477,7 +480,8 @@ jobs:
           python -m pip install \
             accelerate==1.6.0 \
             schedulefree==1.4 \
-            pytorch-optimizer==3.10.0
+            pytorch-optimizer==3.10.0 \
+            safetensors==0.4.5
 
       - name: Show pinned runtime versions
         run: |
@@ -501,4 +505,7 @@ jobs:
             tests.test_parameter_policy_anima_runtime_smoke \
             tests.test_parameter_policy_execution_gpu_runtime \
             tests.test_sd3_attention_math \
+            tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_actual_safetensors_header_reader_on_small_cpu_fixture \
+            tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_direct_trainer_preserves_independent_strict_asset_gate \
+            tests.test_sd3_full_bf16_scope.SD3C2AScopeContractTests.test_direct_trainer_r1_r2_production_namespace_reaches_parameter_scan \
             -v

@@ -481,6 +481,7 @@ def parameter_policy_execution_blockers(
     *,
     train_type: str,
     effective_config: Mapping[str, Any],
+    require_assets: bool = True,
 ) -> list[str]:
     """Return execution-feature blockers for one canonical Component policy.
 
@@ -538,6 +539,18 @@ def parameter_policy_execution_blockers(
     )
     if backend_blocker is not None:
         return [backend_blocker]
+
+    if normalized_train_type == "sd3-lora":
+        # D1-SD3C2-A: no promotion. This is a second, model/target/optimizer
+        # scoped gate *after* the backend's evidence-bound release check.
+        # Preview, Start and direct trainer all call this same blocker path.
+        from mikazuki.sd3_full_bf16_scope import sd3_full_bf16_scope_blockers
+
+        sd3_scope_blockers = sd3_full_bf16_scope_blockers(
+            canonical_policy, effective_config, require_assets=require_assets,
+        )
+        if sd3_scope_blockers:
+            return sd3_scope_blockers
 
     profiles = canonical_policy.get("optimizer_profiles")
     if not isinstance(profiles, Mapping):
