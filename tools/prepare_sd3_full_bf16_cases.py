@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -53,6 +54,46 @@ def _source_commit() -> str:
                 f"Submodule checkout differs from Gitlink: {row}"
             )
     return head
+
+
+_SOURCE_SUBMODULES = frozenset({
+    "frontend", "mikazuki/dataset-tag-editor", "sd-scripts",
+})
+_GITLINK_STATUS = re.compile(r"^([ +U-])([0-9a-f]{40}) ([^ ()]+)(?: \(.*\))?$")
+
+
+def _source_submodule_inventory() -> dict[str, dict[str, str]]:
+    """Record uninitialized Gitlinks without claiming them runtime-ready.
+
+    This Generator is Host-only; later Runner/Worker MUST independently
+    require every actual runtime-in-use submodule initialized and clean.
+    """
+    try:
+        output = subprocess.run(
+            ["git", "submodule", "status", "--recursive"],
+            cwd=ROOT, capture_output=True, text=True, check=True,
+        ).stdout
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise support.FullBF16EvidenceError(
+            f"Cannot inspect source submodule Gitlinks: {exc}"
+        ) from exc
+    result: dict[str, dict[str, str]] = {}
+    for line in output.splitlines():
+        match = _GITLINK_STATUS.fullmatch(line)
+        if match is None:
+            raise support.FullBF16EvidenceError(f"Invalid git submodule status row: {line!r}")
+        status, commit, name = match.groups()
+        if name in result or name not in _SOURCE_SUBMODULES:
+            raise support.FullBF16EvidenceError(f"Unreviewed or duplicate source submodule: {name!r}")
+        if status in ("+", "U"):
+            raise support.FullBF16EvidenceError(f"Submodule mismatches Gitlink: {line!r}")
+        result[name] = {
+            "gitlink_sha": support._require_sha(commit, name=f"{name} Gitlink", commit=True),
+            "checkout": "uninitialized" if status == "-" else "initialized",
+        }
+    if set(result) != _SOURCE_SUBMODULES:
+        raise support.FullBF16EvidenceError("Missing expected source submodule Gitlinks")
+    return dict(sorted(result.items()))
 
 
 def _input_file(raw: Path, *, name: str) -> Path:
@@ -193,6 +234,7 @@ def generate(
     if input_root == root or root in input_root.parents or input_root in root.parents:
         raise support.FullBF16EvidenceError("Input and output directories may not overlap")
     head = _source_commit()
+    submodules = _source_submodule_inventory()
     root.mkdir(parents=True, exist_ok=False)
     subset = root / "data" / "1_dts_sd3c2b"
     subset.mkdir(parents=True, exist_ok=False)
@@ -251,6 +293,7 @@ def generate(
         "version": support.VERSION,
         "case_id": case_id,
         "source_commit": head,
+        "source_submodules": submodules,
         "work_root": str(root),
         "input_identity": identity,
         "reference": {
