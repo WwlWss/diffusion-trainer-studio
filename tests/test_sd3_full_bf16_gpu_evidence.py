@@ -508,6 +508,23 @@ class B0OneShotTicketRED(unittest.TestCase):
             with self.assertRaises(api.FullBF16EvidenceError):
                 api.issue_phase_ticket(path, payload)
 
+    def test_ticket_rejects_invalid_nonce_and_path_like_identifiers(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            for field, value in (
+                ("nonce", "short"),
+                ("nonce", "G" * 64),
+                ("run_id", "../../outside"),
+                ("phase_id", "x"),
+            ):
+                with self.subTest(field=field):
+                    payload = _ticket(Path(td))
+                    payload[field] = value
+                    with self.assertRaises(api.FullBF16EvidenceError):
+                        api.issue_phase_ticket(
+                            Path(td) / f"invalid_{field}.json", payload,
+                        )
+
     def test_ticket_tamper_fails_before_consumption(self):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
