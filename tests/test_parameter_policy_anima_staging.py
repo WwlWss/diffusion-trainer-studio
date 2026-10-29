@@ -49,9 +49,19 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
                 network_text.index("preflight_component_runtime_booleans"),
                 network_text.index("args_util.verify_training_args(args)"),
             )
+            # Anima Full performs dataset preparation, Qwen3 loading, and
+            # optional caching long before the old policy-file read. The
+            # safety preflight must be before verify_training_args itself.
+            self.assertLess(
+                full_text.index("preflight_component_runtime_booleans"),
+                full_text.index("args_util.verify_training_args(args)"),
+            )
             self.assertLess(
                 full_text.index("preflight_component_runtime_booleans"),
                 full_text.index("policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file("),
+            )
+            self.assertEqual(
+                full_text.count("preflight_component_runtime_booleans("), 1,
             )
             second = materialize_anima_runtime_tree(
                 ("parameter_policy_runtime",),
