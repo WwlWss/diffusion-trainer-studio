@@ -1,4 +1,5 @@
 import ast
+import copy
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -295,13 +296,13 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
             full_bf16=False,
         )
         raw["ui_custom_params"] = 'full_bf16 = "false"'
-        prepared = prepare(raw, "flux-finetune", launch=False)
+        prepared = prepare(copy.deepcopy(raw), "flux-finetune", launch=False)
         self.assertTrue(
             any("full_bf16" in blocker and "boolean" in blocker for blocker in prepared.runtime_blockers),
             prepared.runtime_blockers,
         )
         with self.assertRaisesRegex(ValueError, "full_bf16"):
-            prepare(raw, "flux-finetune", launch=True)
+            prepare(copy.deepcopy(raw), "flux-finetune", launch=True)
 
     def test_fp8_survives_bootstrap_then_blocks_runtime(self):
         prepare = _real_prepare_request()
