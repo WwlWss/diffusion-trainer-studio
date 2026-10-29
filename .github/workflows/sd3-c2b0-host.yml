@@ -8,6 +8,24 @@ on:
       - "tools/sd3_full_bf16_evidence_support.py"
       - "tools/prepare_sd3_full_bf16_cases.py"
       - ".github/workflows/sd3-c2b0-host.yml"
+      - "tests/test_sd3_full_bf16_accelerate_cpu.py"
+      - "requirements.txt"
+      - ".gitmodules"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/parameter_policy_torch.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_routing.py"
+      - "mikazuki/model_component_profiles.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+      - "scripts/dev/sd3_train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/dev/library/sd3_forward_contract.py"
+      - "scripts/dev/library/sd3_resume_cursor.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/dev/networks/lora_sd3.py"
+      - "scripts/dev/networks/lora_flux.py"
 
 permissions:
   contents: read
@@ -43,3 +61,28 @@ jobs:
 
       - name: Re-run C2-A and mixed-BF16 R0 Host regression
         run: python -m unittest tests.test_sd3_full_bf16_scope tests.test_sd3_component_gpu_evidence -v
+
+
+  accelerate-160-cpu:
+    name: Pinned Accelerate 1.6.0 CPU save/load contract (NO CUDA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned CPU Torch 2.7.0
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0"
+
+      - name: Install pinned Accelerate and Host dependencies
+        run: python -m pip install --disable-pip-version-check "accelerate==1.6.0" "safetensors==0.4.5" "numpy==1.26.4" "pillow==11.1.0"
+
+      - name: Execute real CPU save/load and Scheduler identity tests
+        run: python -m unittest tests.test_sd3_full_bf16_accelerate_cpu -v
