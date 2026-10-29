@@ -182,6 +182,69 @@ def _write_reference_adapter(
     path.write_bytes(struct.pack("<Q", len(header_bytes)) + header_bytes + payload)
     return _digest(path.read_bytes()), expected
 
+def _write_three_component_reference_adapter(path: Path) -> tuple[str, dict, dict]:
+    """Pure Host serialization of 3 real SD3 LoRA triplets, NOT live CUDA."""
+    modules = (
+        ("lora_unet_joint_blocks_0_attn_proj", "mmdit.attention.adapter"),
+        ("lora_unet_joint_blocks_0_mlp_fc1", "mmdit.mlp.adapter"),
+        ("lora_unet_joint_blocks_0_adaLN_modulation", "mmdit.modulation_norm.adapter"),
+    )
+    arrays = {}
+    inventory = {}
+    components = {}
+    payload = b""
+    for prefix, component in modules:
+        for suffix, dtype, shape, raw, role in (
+            (".lora_down.weight", "BF16", [2, 2],
+             b"\x00\x3f\x00\x40\x80\x40\x00\x41", "trainable_weight"),
+            (".lora_up.weight", "BF16", [2, 2],
+             b"\x00\x40\x00\x3f\x00\x41\x80\x40", "trainable_weight"),
+            (".alpha", "F32", [], struct.pack("<f", 4.0), "alpha_buffer"),
+        ):
+            key = prefix + suffix
+            start = len(payload)
+            payload += raw
+            arrays[key] = {"dtype": dtype, "shape": shape,
+                           "data_offsets": [start, len(payload)]}
+            inventory[key] = {"dtype": dtype, "shape": shape, "role": role,
+                              "sha256": _digest(raw)}
+            if key.endswith(".weight"):
+                components[key] = component
+    header = json.dumps(arrays, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    path.write_bytes(struct.pack("<Q", len(header)) + header + payload)
+    return _digest(path.read_bytes()), inventory, components
+
+
+def _host_parameter_ownership(case: dict, inventory: dict, components: dict,
+                              *, topology: str) -> dict:
+    """Explicitly synthetic routing evidence for pure Host shape tests."""
+    policy = _support().build_reference_policy(case["case_id"])
+    rows = {}
+    children = {name: [] for name in policy["optimizer_profiles"]}
+    for key in sorted(components):
+        component = components[key]
+        route = policy["components"][component]
+        mode = ("fallback" if case["case_id"] == R2
+                and component == "mmdit.modulation_norm.adapter" else "primary")
+        profile = (route["fallback_optimizer_profile"] if mode == "fallback"
+                   else route["optimizer_profile"])
+        canonical = "network." + key
+        rows[key] = {
+            "canonical_name": canonical, "component_id": component,
+            "optimizer_profile": profile, "route_kind": mode,
+            "requires_grad": True, "parameter_class": "matrix_weight",
+            "dtype": inventory[key]["dtype"], "shape": inventory[key]["shape"],
+        }
+        children[profile].append(canonical)
+    return {
+        "source": "prepared-runtime-ownership-v1",
+        "network_split_qkv": False,
+        "runtime_topology_fingerprint": topology,
+        "parameter_rows": rows,
+        "optimizer_child_parameter_names": {k: sorted(v) for k, v in children.items()},
+    }
+
+
 def _ticket(root: Path) -> dict:
     return {
         "schema": "dts.sd3c2b.phase-ticket", "version": 1,
@@ -634,7 +697,11 @@ def _write_host_checkpoint(
     adapter = Path(case["fresh_adapter_path" if phase == "fresh" else "resume_adapter_path"])
     checkpoint.mkdir(parents=True, exist_ok=False)
     adapter.parent.mkdir(parents=True, exist_ok=True)
-    file_sha, live_tensors = _write_reference_adapter(adapter)
+    file_sha, live_tensors, components = _write_three_component_reference_adapter(adapter)
+    # The pinned Accelerate save_state produces a separately serialized
+    # Network state, not merely the externally saved Step Adapter.
+    (checkpoint / "model.safetensors").write_bytes(adapter.read_bytes())
+    (checkpoint / "random_states_0.pkl").write_bytes(b"cpu-host-placeholder-rng-UNPICKLED")
     policy = api.build_reference_policy(case["case_id"])
     profiles = {name: info["type"] for name, info in policy["optimizer_profiles"].items()}
     execution = {
@@ -644,8 +711,7 @@ def _write_host_checkpoint(
             "mixed_precision": "bf16", "trainable_parameter_dtype": "bfloat16",
         }},
     }
-    sched = {"schema": "dts.parameter-policy.scheduler-identity",
-             "version": 1, "fixture": True}
+    sched = api._expected_reference_scheduler_identity()
     topo = "host-reference-topology-v1"
     pmanifest = {
         "version": 2, "train_type": "sd3-lora",
@@ -653,14 +719,16 @@ def _write_host_checkpoint(
         "runtime_topology_fingerprint": topo,
         "trainable_components": sorted(k for k, v in policy["components"].items() if v["train"]),
         "frozen_components": sorted(k for k, v in policy["components"].items() if not v["train"]),
-        "trainable_parameter_tensors": 4, "trainable_parameter_elements": 16,
+        "trainable_parameter_tensors": len(components),
+        "trainable_parameter_elements": len(components) * 4,
         "optimizer_profiles": profiles,
         "optimizers": [{"profile_name": k, "optimizer_type": v,
                         "topology_fingerprint": "host-child"}
                        for k, v in profiles.items()],
         "scheduler_identity": sched, "scheduler_signature": api._json_sha256(sched),
-        "schedulers": [{"profile_name": k, "mode": "constant",
-                        "scheduler_type": "LambdaLR", "topology_fingerprint": "host-scheduler"}
+        "schedulers": [{"profile_name": k, "mode": "external",
+                        "scheduler_type": "torch.optim.lr_scheduler.LambdaLR",
+                        "topology_fingerprint": "host-scheduler"}
                        for k in profiles],
         "execution_identity": execution,
         "execution_signature": api._json_sha256(execution),
@@ -678,7 +746,7 @@ def _write_host_checkpoint(
             name: {"optimizer_type": typ, "step_values": [step]}
             for name, typ in profiles.items()
         },
-        "scheduler": {"step_count": step, "last_epoch": step},
+        "scheduler": {"step_count": step + 1, "last_epoch": step},
     }
     geometry = case["reference"]
     sd3 = {
@@ -694,7 +762,9 @@ def _write_host_checkpoint(
         "dts_sd3_resume_progress.json": sd3,
         "train_state.json": {"current_step": step, "current_epoch": step},
         "dts_sd3_forward_semantics.json": {
+            "schema": "dts.sd3.forward-semantics", "version": 1,
             "attention_contract": "extra-attention-head-dim-v1",
+            "model_type_hint": "5-medium",
             "depth": 24, "hidden_size": 1536, "num_heads": 24, "head_dim": 64,
             "extra_attention_layers": list(range(13)),
         },
@@ -710,6 +780,12 @@ def _write_host_checkpoint(
         "source_commit": case["source_commit"],
         "input_identity_sha256": api._json_sha256(case["input_identity"]),
         "runtime_topology_fingerprint": topo,
+        "scheduler_identity": sched,
+        "scheduler_signature": api._json_sha256(sched),
+        "forward_semantics": sidecars["dts_sd3_forward_semantics.json"],
+        "parameter_ownership": _host_parameter_ownership(
+            case, live_tensors, components, topology=topo,
+        ),
         "adapter_tensors": live_tensors,
         "state_file_sha256": {
             p.name: _digest(p.read_bytes()) for p in checkpoint.iterdir()
@@ -883,6 +959,7 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
             second = api.verify_adapter_checkpoint_binding(
                 case_manifest=case, phase="resume", worker_snapshot=resumed_snapshot,
                 binding=resumed_binding, expected_phase_id="host-r2-resume",
+                accepted_fresh_evidence=first,
             )
             self.assertEqual(second["status"], "physical_binding_valid")
             self.assertNotEqual(second["checkpoint_id"], first["checkpoint_id"])
@@ -891,6 +968,7 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
                 api.verify_adapter_checkpoint_binding(
                     case_manifest=case, phase="resume", worker_snapshot=resumed_snapshot,
                     binding=resumed_binding, expected_phase_id="host-r2-resume",
+                    accepted_fresh_evidence=first,
                 )
 
     def test_complete_saved_module_allows_frozen_f32_weights_with_live_role(self):
@@ -1040,7 +1118,13 @@ class B0FinalStrictReviewR2RED(unittest.TestCase):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
             case = self._case(Path(td), R2)
-            _write_host_checkpoint(case, phase="fresh", phase_id="fresh-coupled")
+            fresh_snapshot, fresh_binding = _write_host_checkpoint(
+                case, phase="fresh", phase_id="fresh-coupled",
+            )
+            accepted_fresh = self._bind(
+                api, case, fresh_snapshot, fresh_binding,
+                phase="fresh", phase_id="fresh-coupled",
+            )
             forged = "c" * 32
             snapshot, binding = _write_host_checkpoint(
                 case, phase="resume", phase_id="resume-coupled",
@@ -1048,7 +1132,11 @@ class B0FinalStrictReviewR2RED(unittest.TestCase):
             )
             # Two self-consistent false claims cannot establish real lineage.
             with self.assertRaises(api.FullBF16EvidenceError):
-                self._bind(api, case, snapshot, binding, "resume", "resume-coupled")
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="resume", worker_snapshot=snapshot,
+                    binding=binding, expected_phase_id="resume-coupled",
+                    accepted_fresh_evidence=accepted_fresh,
+                )
 
     def test_red_all_frozen_roles_cannot_evict_required_bf16_components(self):
         api = _support()
