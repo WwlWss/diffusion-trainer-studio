@@ -40,9 +40,18 @@ class ParameterPolicyAnimaStagingTests(unittest.TestCase):
                 '"anima-finetune"',
                 (tree / "anima_train.py").read_text(encoding="utf-8"),
             )
-            self.assertIn(
-                "finalize_after_prepare",
-                (tree / "train_network.py").read_text(encoding="utf-8"),
+            network_text = (tree / "train_network.py").read_text(encoding="utf-8")
+            full_text = (tree / "anima_train.py").read_text(encoding="utf-8")
+            bridge_text = (tree / "library/dts_parameter_policy_bridge.py").read_text(encoding="utf-8")
+            self.assertIn("finalize_after_prepare", network_text)
+            self.assertIn("preflight_component_runtime_booleans", bridge_text)
+            self.assertLess(
+                network_text.index("preflight_component_runtime_booleans"),
+                network_text.index("args_util.verify_training_args(args)"),
+            )
+            self.assertLess(
+                full_text.index("preflight_component_runtime_booleans"),
+                full_text.index("policy, _policy_hash = parameter_policy_bridge.load_parameter_policy_file("),
             )
             second = materialize_anima_runtime_tree(
                 ("parameter_policy_runtime",),
