@@ -951,6 +951,33 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
                         expected_phase_id="host-phase-1",
                     )
 
+    def test_git_source_identity_accepts_clean_and_rejects_gitlink_drift(self):
+        gen = _generator()
+        from unittest.mock import patch
+        from types import SimpleNamespace
+
+        def run_git(command, *, gitlink_drift=False, **kwargs):
+            if command[1] == "rev-parse":
+                return SimpleNamespace(stdout=SHA + "\n")
+            if command[1] == "status":
+                return SimpleNamespace(stdout="")
+            if command[1] == "submodule":
+                return SimpleNamespace(
+                    stdout=("+1234567 deviating-submodule\n") if gitlink_drift else ""
+                )
+            raise AssertionError(f"Unexpected Git query: {command}")
+
+        with patch.object(gen.subprocess, "run", side_effect=run_git):
+            self.assertEqual(gen._source_commit(), SHA)
+        with patch.object(
+            gen.subprocess, "run",
+            side_effect=lambda command, **kwargs: run_git(
+                command, gitlink_drift=True, **kwargs
+            ),
+        ):
+            with self.assertRaises(_support().FullBF16EvidenceError):
+                gen._source_commit()
+
     def test_asset_preflight_integrates_medium_shape_audit_but_rejects_other_variants(self):
         api = _support()
         from unittest.mock import patch
