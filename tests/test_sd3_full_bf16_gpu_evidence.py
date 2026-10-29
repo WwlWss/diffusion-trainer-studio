@@ -913,7 +913,8 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
         api = _support()
         changes = ("wrong_case", "missing_adapter", "swapped_adapter",
                    "wrong_state_dir", "altered_optimizer", "progress_mismatch",
-                   "wrong_phase_id", "wrong_scheduler", "wrong_parent")
+                   "wrong_phase_id", "wrong_scheduler", "wrong_parent",
+                   "wrong_child_optimizer_type")
         for mutation in changes:
             with tempfile.TemporaryDirectory() as td:
                 case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
@@ -944,6 +945,14 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
                     record = json.loads(p.read_text(encoding="utf-8"))
                     record["resume_source_checkpoint_id"] = "not-a-real-parent"
                     p.write_text(json.dumps(record), encoding="utf-8")
+                elif mutation == "wrong_child_optimizer_type":
+                    p = checkpoint / "dts_parameter_policy_manifest.json"
+                    record = json.loads(p.read_text(encoding="utf-8"))
+                    record["optimizers"][0]["optimizer_type"] = "SGD"
+                    p.write_text(json.dumps(record), encoding="utf-8")
+                    # A matching forged Worker file digest must not bypass
+                    # semantic optimizer-child type validation.
+                    snapshot["state_file_sha256"][p.name] = _digest(p.read_bytes())
                 with self.subTest(mutation=mutation), self.assertRaises(api.FullBF16EvidenceError):
                     api.verify_adapter_checkpoint_binding(
                         case_manifest=case, phase="fresh",
