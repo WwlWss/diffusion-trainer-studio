@@ -149,7 +149,7 @@ class ParameterPolicyExecutionIdentityTests(unittest.TestCase):
 
 class ParameterPolicyExecutionContractBuilderTests(unittest.TestCase):
     def test_inactive_execution_contract_is_none_before_other_validation(self):
-        for raw in (None, False, 0, "", "false", "off", "no"):
+        for raw in (None, False, 0, 0.0):
             with self.subTest(raw=raw), patch.object(
                 execution,
                 "FULL_BF16_BACKEND_QUALIFICATIONS",
@@ -173,7 +173,7 @@ class ParameterPolicyExecutionContractBuilderTests(unittest.TestCase):
         contract = execution.build_parameter_policy_execution_contract(
             train_type=" Anima-Finetune ",
             effective_config={
-                "full_bf16": "true",
+                "full_bf16": True,
                 "mixed_precision": " BF16 ",
             },
         )
@@ -239,7 +239,7 @@ class ParameterPolicyExecutionContractBuilderTests(unittest.TestCase):
                 "learning_rate": 9e-4,
                 "batch_size": 32,
                 "mixed_precision": "BF16",
-                "full_bf16": "true",
+                "full_bf16": True,
             },
         )
         self.assertEqual(left.execution_identity(), right.execution_identity())
@@ -504,7 +504,7 @@ class ParameterPolicyExecutionMetadataTests(unittest.TestCase):
 
 class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
     def test_inactive_full_bf16_returns_before_qualification_tables(self):
-        for raw in (None, False, 0, 0.0, "", "0", "false", "off", "no"):
+        for raw in (None, False, 0, 0.0):
             with self.subTest(raw=raw), patch.object(
                 execution,
                 "FULL_BF16_BACKEND_QUALIFICATIONS",
@@ -524,7 +524,7 @@ class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
                 )
 
     def test_active_feature_detection_accepts_only_strict_boolean_forms(self):
-        for raw in (True, 1, 1.0, "1", "true", "yes", "on"):
+        for raw in (True, 1, 1.0):
             with self.subTest(raw=raw):
                 self.assertEqual(
                     execution.active_parameter_policy_execution_features(
@@ -533,7 +533,7 @@ class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
                     ("full_bf16",),
                 )
 
-        for raw in (None, False, 0, 0.0, "", "0", "false", "no", "off"):
+        for raw in (None, False, 0, 0.0):
             with self.subTest(raw=raw):
                 self.assertEqual(
                     execution.active_parameter_policy_execution_features(
@@ -543,7 +543,7 @@ class ParameterPolicyExecutionFeatureDetectionTests(unittest.TestCase):
                 )
 
     def test_malformed_full_bf16_values_fail_closed(self):
-        for raw in ("maybe", 2, 1.5, [], {}, object()):
+        for raw in ("", "0", "false", "no", "off", "1", "true", "yes", "on", "maybe", 2, 1.5, [], {}, object()):
             with self.subTest(raw=raw), self.assertRaisesRegex(
                 ValueError,
                 "full_bf16",
