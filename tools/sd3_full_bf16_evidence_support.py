@@ -855,7 +855,7 @@ def _checkpoint_file_inventory(directory: Path) -> dict[str, str]:
     """Hash all state files without loading arbitrary torch pickle payloads."""
     result: dict[str, str] = {}
     for item in directory.iterdir():
-        _check_ordinary_dataset_entry(item, is_directory=False)
+        _assert_ordinary_dataset_entry(item, is_directory=False)
         result[item.name] = _sha256_file(item)
     if not any(name.startswith("optimizer") and name.endswith(".bin") for name in result):
         _fail("Checkpoint is missing actual Accelerate optimizer state files")
