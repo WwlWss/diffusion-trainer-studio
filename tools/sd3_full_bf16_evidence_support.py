@@ -858,24 +858,247 @@ def validate_adapter_checkpoint_metadata(
             "checkpoint_id": checkpoint_id, "logical_step": expected_step}
 
 
+_SD3_STATE_FILES = frozenset({
+    # Single-process Accelerate 1.6.0: one prepared Network and one
+    # CompositeOptimizer/Scheduler, NOT one state file per optimizer Child.
+    "model.safetensors", "optimizer.bin", "scheduler.bin",
+    "random_states_0.pkl", "train_state.json",
+    "dts_parameter_policy_manifest.json",
+    "dts_parameter_policy_progress.json",
+    "dts_sd3_resume_progress.json",
+    "dts_sd3_forward_semantics.json",
+})
+_SD3_TRAINED_COMPONENTS = frozenset({
+    "mmdit.attention.adapter", "mmdit.mlp.adapter",
+    "mmdit.modulation_norm.adapter",
+})
+
+
 def _checkpoint_file_inventory(directory: Path) -> dict[str, str]:
-    """Hash all state files without loading arbitrary torch pickle payloads."""
+    """Exact pinned Accelerate+SD3 Hook layout. Never unpickle on Host.
+
+    Missing RNG does not always raise on Accelerate load_state, but is
+    forbidden here because deterministic restored RNG is an evidence goal.
+    """
     result: dict[str, str] = {}
     for item in directory.iterdir():
         _assert_ordinary_dataset_entry(item, is_directory=False)
+        if item.name not in _SD3_STATE_FILES:
+            _fail(f"Unreviewed Accelerate/SD3 state file: {item.name}")
         result[item.name] = _sha256_file(item)
-    if not any(name.startswith("optimizer") and name.endswith(".bin") for name in result):
-        _fail("Checkpoint is missing actual Accelerate optimizer state files")
-    if not any(name.startswith("scheduler") and name.endswith(".bin") for name in result):
-        _fail("Checkpoint is missing actual Accelerate scheduler state files")
-    required_sidecars = {
-        "dts_parameter_policy_manifest.json", "dts_parameter_policy_progress.json",
-        "dts_sd3_resume_progress.json", "dts_sd3_forward_semantics.json",
-        "train_state.json",
+    if set(result) != _SD3_STATE_FILES:
+        _fail(f"Incomplete single-process SD3 state: missing={sorted(_SD3_STATE_FILES - set(result))}")
+    return dict(sorted(result.items()))
+
+
+def _expected_reference_scheduler_identity() -> dict[str, Any]:
+    """Frozen R1/R2 fixed CLI + production argparse defaults and identity v1."""
+    return {
+        "schema": "dts.parameter-policy.scheduler-identity",
+        "version": 1, "provider": "sd-scripts.get_scheduler_fix",
+        "lr_scheduler": "constant", "lr_scheduler_type": "",
+        "lr_scheduler_args": {}, "max_train_steps": 2,
+        "num_processes": 1, "num_training_steps": 2,
+        "num_warmup_steps": 0, "num_decay_steps": 0,
+        "num_stable_steps": 2, "num_cycles": 1,
+        "power": 1.0, "timescale": None, "min_lr_ratio": None,
     }
-    if not required_sidecars.issubset(result):
-        _fail("Full-BF16 SD3 checkpoint is missing required sidecars")
-    return result
+
+
+def _verify_reference_scheduler_identity(
+    manifest: Mapping[str, Any], snapshot: Mapping[str, Any],
+) -> None:
+    expected = _expected_reference_scheduler_identity()
+    if (manifest.get("scheduler_identity") != expected
+            or manifest.get("scheduler_signature") != _json_sha256(expected)
+            or snapshot.get("scheduler_identity") != expected
+            or snapshot.get("scheduler_signature") != _json_sha256(expected)):
+        _fail("Self-signed Scheduler differs from the reference Constant configuration")
+    children = manifest.get("schedulers")
+    if not isinstance(children, list):
+        _fail("Missing physical Scheduler children")
+    for child in children:
+        if (not isinstance(child, Mapping) or child.get("mode") != "external"
+                or child.get("scheduler_type") != "torch.optim.lr_scheduler.LambdaLR"):
+            _fail("Every R1/R2 child must use the pinned external Constant LambdaLR")
+
+
+def _verify_reference_forward_identity(
+    saved: Mapping[str, Any], snapshot: Mapping[str, Any],
+) -> None:
+    # sd3_utils.analyze_state_dict sd35-medium => model_type "5-medium".
+    # Full forward_semantics_for_mmdit() is checked, not just selected fields.
+    expected = {
+        "schema": "dts.sd3.forward-semantics", "version": 1,
+        "attention_contract": "extra-attention-head-dim-v1",
+        "model_type_hint": "5-medium",
+        "depth": 24, "hidden_size": 1536,
+        "num_heads": 24, "head_dim": 64,
+        "extra_attention_layers": list(range(13)),
+    }
+    if saved != expected or snapshot.get("forward_semantics") != expected:
+        _fail("Saved/observed full SD3.5 Medium Forward Semantics mismatch")
+
+
+def verify_reference_parameter_ownership(
+    *, case_manifest: Mapping[str, Any], worker_snapshot: Mapping[str, Any],
+    checkpoint_manifest: Mapping[str, Any], adapter_tensors: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Pure Host coherence for prepared parameter/Child ownership metadata.
+
+    Fix C MUST source the input from real Session.routing_plan, RuntimeSpec
+    and physical AcceleratedOptimizer child parameter IDs. Host evidence
+    shape validation alone does not prove genuine physical ownership.
+    """
+    policy = build_reference_policy(case_manifest.get("case_id"))
+    profiles = {k: v["type"] for k, v in policy["optimizer_profiles"].items()}
+    ownership = worker_snapshot.get("parameter_ownership")
+    if (not isinstance(ownership, Mapping)
+            or ownership.get("source") != "prepared-runtime-ownership-v1"
+            or ownership.get("network_split_qkv") is not False
+            or ownership.get("runtime_topology_fingerprint")
+            != checkpoint_manifest.get("runtime_topology_fingerprint")):
+        _fail("Unverified prepared, non-Split-QKV parameter ownership")
+    rows = ownership.get("parameter_rows")
+    children = ownership.get("optimizer_child_parameter_names")
+    if not isinstance(rows, Mapping) or not isinstance(children, Mapping):
+        _fail("Missing prepared parameter rows/physical child groups")
+    saved_parameters = {k for k in adapter_tensors if k.endswith(".weight")}
+    if set(rows) != saved_parameters or set(children) != set(profiles):
+        _fail("Saved LoRA weight keys or physical Optimizer Profiles differ")
+    seen: set[str] = set()
+    by_component: dict[str, int] = {}
+    expected_children: dict[str, set[str]] = {name: set() for name in profiles}
+    trainable_count = trainable_elements = 0
+    for key in sorted(saved_parameters):
+        row, tensor = rows[key], adapter_tensors[key]
+        if not isinstance(row, Mapping) or not isinstance(tensor, Mapping):
+            _fail("Missing ownership row or tensor descriptor")
+        canonical = row.get("canonical_name")
+        component = row.get("component_id")
+        route_kind = row.get("route_kind")
+        child = row.get("optimizer_profile")
+        if (canonical != "network." + key or canonical in seen
+                or row.get("shape") != tensor.get("shape")
+                or row.get("dtype") != tensor.get("dtype")
+                or row.get("parameter_class") != "matrix_weight"
+                or component not in policy["components"]):
+            _fail(f"Prepared ownership differs from canonical saved parameter: {key}")
+        seen.add(canonical)
+        route = policy["components"][component]
+        if route["train"] is True:
+            expected_child = (route["optimizer_profile"] if route_kind == "primary"
+                              else route.get("fallback_optimizer_profile") if route_kind == "fallback"
+                              else None)
+            if (row.get("requires_grad") is not True
+                    or tensor.get("role") != "trainable_weight"
+                    or tensor.get("dtype") != "BF16"
+                    or child != expected_child or child not in profiles):
+                _fail(f"Trainable BF16 weight/Optimizer ownership was falsely frozen: {key}")
+            expected_children[child].add(canonical)
+            by_component[component] = by_component.get(component, 0) + 1
+            trainable_count += 1
+            elements = 1
+            for dim in tensor["shape"]:
+                if type(dim) is not int or dim <= 0:
+                    _fail(f"Invalid trainable Parameter geometry: {key}")
+                elements *= dim
+            trainable_elements += elements
+        elif (row.get("requires_grad") is not False
+              or tensor.get("role") != "frozen_weight"
+              or child is not None
+              or route_kind not in ("frozen", "unavailable")):
+            _fail(f"Frozen Parameter leaked into physical Optimizer: {key}")
+    if set(by_component) != _SD3_TRAINED_COMPONENTS:
+        _fail("At least one mandatory trained MMDiT Component has no BF16 parameters")
+    for name, expected in expected_children.items():
+        actual = children.get(name)
+        if (not isinstance(actual, list)
+                or any(not isinstance(t, str) for t in actual)
+                or len(actual) != len(set(actual))
+                or set(actual) != expected or not actual):
+            _fail(f"Duplicate, missing or wrong actual Optimizer Child parameters: {name}")
+    if (checkpoint_manifest.get("trainable_parameter_tensors") != trainable_count
+            or checkpoint_manifest.get("trainable_parameter_elements") != trainable_elements):
+        _fail("Checkpoint trainable tensor counts disagree with ownership")
+    return {
+        "status": "ownership_metadata_valid",
+        "trainable_parameter_tensors": trainable_count,
+        "trainable_parameter_elements": trainable_elements,
+        "trained_components": dict(sorted(by_component.items())),
+        "optimizer_children": {k: sorted(v) for k, v in sorted(expected_children.items())},
+    }
+
+
+def _verify_checkpoint_progress_consistency(
+    progress: Mapping[str, Any], *, expected_step: int,
+) -> None:
+    scheduler = progress.get("scheduler")
+    if (not isinstance(scheduler, Mapping)
+            or type(scheduler.get("step_count")) is not int
+            or type(scheduler.get("last_epoch")) is not int
+            or scheduler["step_count"] != expected_step + 1
+            or scheduler["last_epoch"] != expected_step):
+        _fail("Constant LambdaLR Scheduler progress differs from initialization offset + real steps")
+    profiles = progress.get("optimizer_profiles")
+    if not isinstance(profiles, Mapping):
+        _fail("No actual Optimizer Profile progress")
+    for name, child in profiles.items():
+        if not isinstance(child, Mapping):
+            _fail("Invalid child optimizer progress")
+        values = child.get("step_values")
+        if (not isinstance(values, list)
+                or any(type(t) is not int or t < 1 or t > expected_step for t in values)):
+            _fail(f"Invalid optimizer state Step value for {name}")
+        # AdamW state.step is reliable; Muon 3.10.0 may not retain it.
+        if child.get("optimizer_type") == "AdamW" and (
+            not values or set(values) != {expected_step}
+        ):
+            _fail(f"AdamW child progress does not equal actual completed steps: {name}")
+
+
+def _verify_resume_fresh_parent(
+    *, case_manifest: Mapping[str, Any],
+    accepted_fresh_evidence: Mapping[str, Any] | None,
+    resume_progress: Mapping[str, Any],
+    snapshot: Mapping[str, Any],
+) -> str:
+    if (not isinstance(accepted_fresh_evidence, Mapping)
+            or accepted_fresh_evidence.get("status") != "physical_binding_valid"
+            or accepted_fresh_evidence.get("case_id") != case_manifest.get("case_id")
+            or accepted_fresh_evidence.get("logical_step") != 1):
+        _fail("Resume requires independently accepted Fresh Step-1 evidence")
+    root = _real_path(case_manifest.get("fresh_checkpoint_dir"), name="Fresh Step-1", must_exist=True)
+    if not root.is_dir():
+        _fail("Fresh Step-1 checkpoint disappeared")
+    files = _checkpoint_file_inventory(root)
+    if files != accepted_fresh_evidence.get("checkpoint_file_sha256"):
+        _fail("Fresh Step-1 files changed since Host acceptance")
+    progress = _read_json(root / "dts_parameter_policy_progress.json")
+    manifest = _read_json(root / "dts_parameter_policy_manifest.json")
+    try:
+        from tools.parameter_policy_backend_feature_gpu_support import (
+            validate_full_bf16_checkpoint_manifest, validate_checkpoint_progress,
+        )
+        validate_full_bf16_checkpoint_manifest(manifest, train_type="sd3-lora", manifest_version=2)
+        validate_checkpoint_progress(progress, checkpoint_manifest=manifest)
+    except (ValueError, RuntimeError, TypeError, KeyError) as exc:
+        raise FullBF16EvidenceError(f"Actual Fresh parent sidecars invalid: {exc}") from exc
+    parent_id = progress.get("checkpoint_id")
+    if (not isinstance(parent_id, str) or not parent_id
+            or parent_id != accepted_fresh_evidence.get("checkpoint_id")
+            or progress.get("resume_source_checkpoint_id") is not None):
+        _fail("Fresh parent ID/lineage is not the accepted Step-1 state")
+    if (manifest.get("policy_hash") != case_manifest["input_identity"]["canonical_policy_hash"]
+            or manifest.get("execution_signature") != accepted_fresh_evidence.get("execution_signature")
+            or manifest.get("runtime_topology_fingerprint")
+            != accepted_fresh_evidence.get("runtime_topology_fingerprint")):
+        _fail("Fresh Parent Policy/Execution/Topology differs from accepted evidence")
+    if (resume_progress.get("resume_source_checkpoint_id") != parent_id
+            or snapshot.get("expected_parent_checkpoint_id") != parent_id
+            or resume_progress.get("checkpoint_id") == parent_id):
+        _fail("Resumed checkpoint does not descend from actual Fresh Step-1")
+    return parent_id
 
 
 def verify_adapter_checkpoint_binding(
