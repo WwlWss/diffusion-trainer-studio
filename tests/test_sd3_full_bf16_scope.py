@@ -452,6 +452,73 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                         blockers = sd3.sd3_full_bf16_config_blockers(policy, bad)
                         self.assertIn(field, " ".join(blockers), blockers)
 
+    def test_all_unqualified_switches_reject_quoted_pseudo_booleans_in_r1_r2(self):
+        # Exhaustive coverage of the declared forbidden-switch registry.
+        # In real Python Trainer truthiness, bool("false") is True.
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            for field in sd3._UNQUALIFIED_SWITCHES:
+                for value in ("false", "0", "off", "true", "1", ""):
+                    with self.subTest(case=label, field=field, value=value):
+                        candidate = config(self.model, accumulation=accumulation)
+                        candidate[field] = value
+                        before = copy.deepcopy(candidate)
+                        blockers = sd3.sd3_full_bf16_config_blockers(policy, candidate)
+                        self.assertIn(field, " ".join(blockers), blockers)
+                        self.assertEqual(candidate, before)
+                candidate = config(self.model, accumulation=accumulation)
+                candidate[field] = False
+                self.assertEqual(
+                    sd3.sd3_full_bf16_config_blockers(policy, candidate), [],
+                )
+
+    def test_required_sd3_runtime_boolean_inputs_reject_quoted_values(self):
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            for field in (
+                "network_train_unet_only",
+                "cache_latents",
+                "cache_text_encoder_outputs",
+                "full_bf16",
+            ):
+                for value in ("true", "false", "1", "0", ""):
+                    with self.subTest(case=label, field=field, value=value):
+                        candidate = config(self.model, accumulation=accumulation)
+                        candidate[field] = value
+                        blockers = sd3.sd3_full_bf16_config_blockers(policy, candidate)
+                        self.assertIn(field, " ".join(blockers), blockers)
+
+    def test_webui_custom_toml_false_fp8_is_blocked_before_assets(self):
+        prepare = _real_prepare_request()
+        fake = execution.ExecutionFeatureQualification(
+            "qualified", "test-only future qualified", "test:sd3c2a-bool",
+        )
+        for label, policy, accumulation in (
+            ("r1", make_policy(), 1),
+            ("r2", r2_policy(), 2),
+        ):
+            with self.subTest(case=label), patch.dict(
+                execution.FULL_BF16_BACKEND_QUALIFICATIONS,
+                {"sd3-lora": fake},
+            ), patch.object(
+                sd3, "_read_safetensors_shape_index",
+                side_effect=AssertionError("type blocker must precede model I/O"),
+            ):
+                request = self._ui_request_config(
+                    self.root / "not-mounted.safetensors",
+                    policy=policy, accumulation=accumulation,
+                )
+                request.update(enable_bucket=False, network_dropout=None)
+                request["ui_custom_params"] = 'fp8_base = "false"'
+                prepared = prepare(copy.deepcopy(request), "sd3-lora", launch=False)
+                self.assertIn("fp8_base", " ".join(prepared.runtime_blockers))
+                with self.assertRaisesRegex(ValueError, "fp8_base"):
+                    prepare(copy.deepcopy(request), "sd3-lora", launch=True)
+
     def test_r1_r2_ui_request_uses_real_resolution_and_config_path(self):
         prepare = _real_prepare_request()
         qualified = execution.ExecutionFeatureQualification(
