@@ -23,16 +23,36 @@ from tools import sd3_full_bf16_evidence_support as support
 
 
 def _source_commit() -> str:
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=ROOT,
-            capture_output=True, text=True, check=True,
-        )
-    except (OSError, subprocess.CalledProcessError) as exc:
+    """Never attribute dirty Trainer/tool/submodule code to a clean Git SHA."""
+    def git(*args: str) -> str:
+        try:
+            output = subprocess.run(
+                ["git", *args], cwd=ROOT,
+                capture_output=True, text=True, check=True,
+            )
+        except (OSError, subprocess.CalledProcessError) as exc:
+            raise support.FullBF16EvidenceError(
+                f"Cannot establish clean B0 source identity: {args}: {exc}"
+            ) from exc
+        return output.stdout.strip()
+
+    head = support._require_sha(
+        git("rev-parse", "--verify", "HEAD"), name="source HEAD", commit=True,
+    )
+    if git("status", "--porcelain=v1", "--untracked-files=all",
+           "--ignore-submodules=none"):
         raise support.FullBF16EvidenceError(
-            f"Exact source HEAD unavailable: {exc}"
-        ) from exc
-    return support._require_sha(result.stdout.strip(), name="source HEAD", commit=True)
+            "B0 evidence must not attribute modified/untracked source to a clean HEAD"
+        )
+    # An uninitialized checkout (-) is not used by this Host generator.
+    # Any mismatched (+) or conflicted (U) gitlink is rejected; the later
+    # GPU Runner must also require all in-use submodules to be initialized.
+    for row in git("submodule", "status", "--recursive").splitlines():
+        if row.startswith(("+", "U")):
+            raise support.FullBF16EvidenceError(
+                f"Submodule checkout differs from Gitlink: {row}"
+            )
+    return head
 
 
 def _input_file(raw: Path, *, name: str) -> Path:
