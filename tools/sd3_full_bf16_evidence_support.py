@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import struct
+import stat
 import tempfile
 from typing import Any
 
@@ -423,6 +424,42 @@ def validate_case_manifest(payload: object, *, phase: str = "fresh") -> dict[str
     }
 
 
+def _assert_ordinary_dataset_entry(path: Path, *, is_directory: bool) -> None:
+    """Reject linked, reparse, and nonstandard Dataset entries."""
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise FullBF16EvidenceError(f"Unstatable Dataset path {path}: {exc}") from exc
+    if stat.S_ISLNK(info.st_mode) or (
+        os.name == "nt" and getattr(info, "st_file_attributes", 0)
+        & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    ):
+        _fail(f"Unreviewed linked/reparse Dataset path: {path}")
+    if is_directory and not stat.S_ISDIR(info.st_mode):
+        _fail(f"Dataset subset must be an ordinary directory: {path}")
+    if not is_directory and not stat.S_ISREG(info.st_mode):
+        _fail(f"Dataset image/caption must be an ordinary file: {path}")
+
+
+def _verify_reference_dataset_tree(
+    work: Path, expected_inventory: Mapping[str, Any],
+) -> None:
+    """Audit the full train_data_dir as parsed by production DreamBooth."""
+    data_root = work / "data"
+    _assert_ordinary_dataset_entry(data_root, is_directory=True)
+    entries = list(data_root.iterdir())
+    if len(entries) != 1 or entries[0].name != "1_dts_sd3c2b":
+        _fail("DreamBooth data parent must contain exactly one approved subset")
+    subset = entries[0]
+    _assert_ordinary_dataset_entry(subset, is_directory=True)
+    observed: set[str] = set()
+    for item in subset.iterdir():
+        _assert_ordinary_dataset_entry(item, is_directory=False)
+        observed.add(item.relative_to(work).as_posix())
+    if observed != set(expected_inventory):
+        _fail("DreamBooth directory has an unrecorded, missing or altered member")
+
+
 def verify_case_inputs(payload: dict[str, Any], *, phase: str = "fresh") -> dict[str, Any]:
     """Rehash immutable inputs for every phase without requiring model header.
 
@@ -440,6 +477,7 @@ def verify_case_inputs(payload: dict[str, Any], *, phase: str = "fresh") -> dict
         if not path.is_file() or _sha256_file(path) != identity["assets"][key[2:]]["sha256"]:
             _fail(f"Full-file {key} SHA256 mismatch")
     work = verified["work_root"]
+    _verify_reference_dataset_tree(work, identity["dataset_files"])
     for relative, recorded in identity["dataset_files"].items():
         path = _real_path(str(work / relative), name=relative, must_exist=True)
         if not path.is_file() or _sha256_file(path) != recorded["sha256"]:
@@ -453,10 +491,6 @@ def verify_case_inputs(payload: dict[str, Any], *, phase: str = "fresh") -> dict
                 raise FullBF16EvidenceError(f"Cannot read caption: {exc}") from exc
             if not caption.startswith(recorded["identity"] + ", "):
                 _fail(f"Caption identity marker disappeared: {relative}")
-    actual_dataset = work / "data" / "1_dts_sd3c2b"
-    actual = {p.relative_to(work).as_posix() for p in actual_dataset.iterdir()}
-    if actual != set(identity["dataset_files"]):
-        _fail("Unrecorded, removed or extra DreamBooth dataset file")
     return {"status": "identity_pass", "case_id": verified["case_id"],
             "source_commit": payload["source_commit"], "phase": phase,
             "input_identity_sha256": _json_sha256(identity)}
@@ -611,6 +645,8 @@ def publish_phase_result(path: Path, payload: dict[str, Any]) -> dict[str, Any]:
     path = _external_work_path(str(Path(path).absolute()), name="phase result")
     if not isinstance(payload, dict) or payload.get("schema") != PHASE_SCHEMA or type(payload.get("version")) is not int or payload["version"] != 1:
         _fail("Invalid phase-result schema")
+    if payload.get("status") not in ("incomplete", "fail", "worker_complete"):
+        _fail("Publishing a Worker result cannot declare final CUDA PASS")
     if path.exists():
         _fail("Refusing to overwrite existing phase result")
     raw = _canonical_json_bytes(payload) + b"\n"
