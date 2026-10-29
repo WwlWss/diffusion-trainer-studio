@@ -1,7 +1,10 @@
 # D1-SD3C2-A — SD3.5 Medium Component Full-BF16 scoped admission foundation
 
 **Status: scope contract implementation / qualification still PENDING.**
-Base: `main@bfdac9cb040515b4ff3edb422ea414215df4e825` (merged PR #62).
+Original base: `main@bfdac9cb040515b4ff3edb422ea414215df4e825`
+(merged PR #62). **While PR #64 is under review, PR #63 is temporarily stacked
+on `fix/component-runtime-bool-contract`; no change has been merged to
+`main`. After PR #64 merges, retarget #63 to `main` and rerun CI.**
 
 ## Why this is separate from C2-B
 
@@ -83,6 +86,15 @@ test process to exercise the future-qualified path.
   All three forms describe the same reference geometry. Non-square,
   wrong-sized and unsupported input shapes remain blocked. The scope leaves
   each incoming representation untouched.
+- **Boolean safety prerequisite (PR #64):** only real Boolean, None/off,
+  or numeric 0/1 values are permitted for Component runtime switches.
+  Quoted TOML pseudo-booleans such as `fp8_base = "false"` are rejected,
+  because `bool("false")` is true inside the legacy Trainer. The R1/R2
+  scope reuses the shared `component_runtime_boolean_type_blockers` and
+  `strict_component_runtime_bool`, not a second permissive string parser.
+  Both forbidden and required-true switches are covered. Preview still
+  avoids model-header I/O; Start and direct trainers retain strict asset
+  preflight. The shared early trainer preflight precedes model/FP8 load.
 - In stock argparse, `network_dropout=None` means the feature is off,
   equivalently to `0` for **that specific field**. The scope compares a
   local off-state value without mutating arguments and continues to block
@@ -157,6 +169,10 @@ verified by the *existing* execution environment/runtime contracts.
   and unchanged pending/inactive behavior. This includes real UI string and
   post-`prepare_dataset_args` tuple resolution, stock
   `network_dropout=None`, and both R1/R2 bucket-negative cases.
+  Every forbidden switch additionally rejects quoted `"false"`, `"0"`,
+  `"off"`, `"true"` and `"1"` in both R1 and R2; required-true
+  switches also reject strings. Real `ui_custom_params` TOML
+  `fp8_base = "false"` is blocked before any asset read.
 - Start failure side-effect evidence uses a real configured output/TOML
   path plus a materialization spy; no writes are permitted after a failed
   asset check. Preview remains model-file-free.
