@@ -279,30 +279,13 @@ _FULL_BF16_ADAMW_ARGUMENTS = frozenset({"betas", "eps", "weight_decay"})
 
 
 def _strict_bool(value: object, *, field: str) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        if value == 1:
-            return True
-        if value == 0:
-            return False
-        raise ValueError(
-            f"Parameter Policy execution: {field} must be true/false or 1/0."
-        )
-    if isinstance(value, str):
-        lowered = value.strip().lower()
-        if lowered in {"1", "true", "yes", "on"}:
-            return True
-        if lowered in {"0", "false", "no", "off", ""}:
-            return False
-        raise ValueError(
-            f"Parameter Policy execution: {field} cannot parse boolean value {value!r}."
-        )
-    raise ValueError(
-        f"Parameter Policy execution: {field} cannot parse boolean value {value!r}."
+    # Keep this compatibility entrypoint, but forbid strings that the stock
+    # trainer would treat as True despite a text parser reporting False.
+    from mikazuki.parameter_policy_runtime_bools import (
+        strict_component_runtime_bool,
     )
+
+    return strict_component_runtime_bool(value, field=field)
 
 
 def active_parameter_policy_execution_features(
@@ -505,7 +488,12 @@ def parameter_policy_execution_blockers(
     function returns before consulting backend/optimizer qualification metadata.
     """
 
-    features = active_parameter_policy_execution_features(effective_config)
+    try:
+        features = active_parameter_policy_execution_features(effective_config)
+    except ValueError as exc:
+        # Preview/Start must report an actionable blocker, not a crashed API.
+        # The direct contract builder still fails closed with ValueError.
+        return [str(exc)]
     if "full_bf16" not in features:
         return []
 

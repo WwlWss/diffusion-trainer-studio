@@ -214,6 +214,19 @@ def parameter_policy_v1_semantic_blockers(
     # Validate against the same registry used by the pure router.
     get_model_component_profile(train_type)
 
+    # The stock trainer evaluates these booleans through Python truthiness.
+    # A quoted TOML "false" is therefore actually True at runtime; reject
+    # this type BEFORE legacy compatibility checks can parse it as disabled.
+    from mikazuki.parameter_policy_runtime_bools import (
+        component_runtime_boolean_type_blockers,
+    )
+
+    type_blockers = component_runtime_boolean_type_blockers(
+        effective_config, train_type=train_type,
+    )
+    if type_blockers:
+        return type_blockers
+
     network_args = _parse_network_args(effective_config.get("network_args"))
     blockers: list[str] = []
     seen: set[str] = set()

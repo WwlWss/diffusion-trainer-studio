@@ -40,6 +40,12 @@ def patch_train_network(text: str) -> str:
     )
     text = replace_once(
         text,
+        """        args_util.verify_training_args(args)\n""",
+        """        if parameter_policy_requested:\n            from library import dts_parameter_policy_bridge\n            dts_parameter_policy_bridge.preflight_component_runtime_booleans(\n                args=args, train_type=parameter_policy_train_type,\n            )\n        args_util.verify_training_args(args)\n""",
+        "NetworkTrainer early Component boolean preflight",
+    )
+    text = replace_once(
+        text,
         """        if args.network_weights is not None:\n            # FIXME consider alpha of weights: this assumes that the alpha is not changed\n            info = network.load_weights(args.network_weights)\n            accelerator.print(f\"load network weights from {args.network_weights}: {info}\")\n\n        if args.gradient_checkpointing:\n""",
         """        if args.network_weights is not None:\n            # FIXME consider alpha of weights: this assumes that the alpha is not changed\n            info = network.load_weights(args.network_weights)\n            accelerator.print(f\"load network weights from {args.network_weights}: {info}\")\n\n        parameter_policy_session = None\n        parameter_policy_bridge = None\n        if parameter_policy_requested:\n            from library import dts_parameter_policy_bridge as parameter_policy_bridge\n\n            parameter_policy_session = parameter_policy_bridge.create_parameter_policy_session(\n                args=args,\n                train_type=parameter_policy_train_type,\n                roots={\"network\": network},\n            )\n            train_unet, train_text_encoder = self.configure_parameter_policy_training(\n                args, parameter_policy_session, text_encoders\n            )\n\n        if args.gradient_checkpointing:\n""",
         "NetworkTrainer session creation",
@@ -133,6 +139,16 @@ def patch_anima_train_network(text: str) -> str:
 
 
 def patch_anima_train(text: str) -> str:
+    # Anima Full's policy read originally happened after dataset setup,
+    # Qwen3 loading and optional embedding/latent caching. The Boolean
+    # safety boundary must run at the very first train() statement,
+    # before all of those operations, irrespective of Qwen joint mode.
+    text = replace_once(
+        text,
+        """def train(args):\n    args_util.verify_training_args(args)\n""",
+        """def train(args):\n    if str(getattr(args, "parameter_policy_config", "") or "").strip():\n        from library import dts_parameter_policy_bridge\n        dts_parameter_policy_bridge.preflight_component_runtime_booleans(\n            args=args, train_type="anima-finetune",\n        )\n    args_util.verify_training_args(args)\n""",
+        "Anima Full pre-dataset, pre-Qwen early boolean preflight",
+    )
     has_qwen_patch = "train_qwen3 = bool(getattr(args, \"train_qwen3_text_encoder\", False))" in text
 
     if has_qwen_patch:
@@ -317,6 +333,7 @@ def validate_patch(sd_scripts_dir: Path) -> None:
     required = {
         sd_scripts_dir / "train_network.py": (
             "parameter_policy_session",
+            "preflight_component_runtime_booleans",
             "component_lr_logs",
             "finalize_after_prepare",
             "model_metadata",
@@ -328,6 +345,7 @@ def validate_patch(sd_scripts_dir: Path) -> None:
         ),
         sd_scripts_dir / "anima_train.py": (
             '"anima-finetune"',
+            "preflight_component_runtime_booleans",
             "parameter_policy_session",
             "--parameter_policy_config",
             "_dts_parameter_policy_model_metadata",
@@ -336,6 +354,7 @@ def validate_patch(sd_scripts_dir: Path) -> None:
             "_dts_parameter_policy_model_metadata",
         ),
         sd_scripts_dir / "library" / "dts_parameter_policy_bridge.py": (
+            "preflight_component_runtime_booleans",
             "load_parameter_policy_file",
             "create_parameter_policy_session",
         ),

@@ -56,6 +56,12 @@ def train(args):
     parameter_policy_requested = bool(
         str(getattr(args, "parameter_policy_config", "") or "").strip()
     )
+    if parameter_policy_requested:
+        from library import dts_parameter_policy_bridge
+
+        dts_parameter_policy_bridge.preflight_component_runtime_booleans(
+            args=args, train_type="flux-finetune",
+        )
     train_util.verify_training_args(
         args,
         parameter_policy_runtime_enabled=parameter_policy_requested,
