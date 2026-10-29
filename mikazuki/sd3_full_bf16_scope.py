@@ -77,6 +77,9 @@ _UNQUALIFIED_SWITCHES = (
     "fp8_base",
     "fp8_base_unet",
     "full_fp16",
+    # VAE float32 vs reference BF16 changes cached latents and device/dtype
+    # execution. The R1/R2 physical evidence does not qualify this variant.
+    "no_half_vae",
     "deepspeed",
     "torch_compile",
     "compile",
@@ -317,7 +320,16 @@ def sd3_full_bf16_config_blockers(
     ):
         problems.append("SD3 Full-BF16 requires network_train_unet_only=true.")
     for flag in _UNQUALIFIED_SWITCHES:
-        if strict_component_runtime_bool(effective_config.get(flag), field=flag):
+        try:
+            enabled = strict_component_runtime_bool(
+                effective_config.get(flag), field=flag,
+            )
+        except ValueError as exc:
+            # Newly scoped flags also fail closed even when they do not yet
+            # belong to the shared early-preflight registry.
+            problems.append(str(exc))
+            continue
+        if enabled:
             problems.append(f"SD3 Full-BF16 does not qualify {flag}=true.")
     for flag in (
         "network_args", "network_weights", "base_weights", "optimizer_args",
