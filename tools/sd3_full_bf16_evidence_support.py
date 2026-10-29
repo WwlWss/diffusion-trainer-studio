@@ -292,8 +292,15 @@ def _assert_reference_flags(options: dict[str, str | bool], case_id: str) -> Non
         _fail("C2-A reference scope mismatch: " + "; ".join(problems))
 
 
-def validate_case_manifest(payload: object) -> dict[str, Any]:
-    """Pure Host manifest/policy/options gate; no model header or CUDA loads."""
+def validate_case_manifest(payload: object, *, phase: str = "fresh") -> dict[str, Any]:
+    """Pure Host phase-aware policy/options gate; never loads model tensors.
+
+    fresh: both trainer output directories must be absent;
+    resume: verified Step-1 Fresh artifacts must exist, Resume output absent;
+    complete: both declared Step-1/Step-2 outputs must exist.
+    """
+    if phase not in ("fresh", "resume", "complete"):
+        _fail(f"Unknown evidence validation phase: {phase!r}")
     if not isinstance(payload, dict):
         _fail("Case manifest must be a JSON object")
     if payload.get("schema") != SCHEMA or type(payload.get("version")) is not int or payload["version"] != VERSION:
@@ -307,7 +314,12 @@ def validate_case_manifest(payload: object) -> dict[str, Any]:
     spec = get_case_spec(case_id)
     _require_sha(payload.get("source_commit"), name="source_commit", commit=True)
     ref = payload.get("reference")
-    if not isinstance(ref, dict) or ref != {
+    if (not isinstance(ref, dict)
+            or any(type(ref.get(k)) is not int for k in (
+                "train_batch_size", "effective_batches_per_epoch",
+                "gradient_accumulation_steps", "max_train_steps",
+            ))
+            or ref != {
         "train_type": "sd3-lora", "model_variant": "sd35-medium",
         "resolution": [512, 512], "train_batch_size": 1,
         "effective_batches_per_epoch": spec["effective_batches_per_epoch"],
@@ -386,56 +398,81 @@ def validate_case_manifest(payload: object) -> dict[str, Any]:
             _fail(f"Fresh/Resume {name} input mismatch")
         if identity["assets"][name].get("path") != str(path):
             _fail(f"Manifest {name} identity path mismatch")
-    for phase, opts in (("fresh", fresh), ("resume", resume)):
-        output = _external_work_path(opts["--output_dir"], name=f"{phase} output")
-        if output != root / phase:
-            _fail(f"{phase} output must be under the isolated work root")
-        if output.exists():
-            _fail(f"Stale {phase} output directory already exists")
-        expected_checkpoint = output / f"{spec['output_name']}-step{1 if phase=='fresh' else 2:08d}-state"
-        expected_adapter = output / f"{spec['output_name']}-step{1 if phase=='fresh' else 2:08d}.safetensors"
-        for suffix, path in (("checkpoint_dir", expected_checkpoint), ("adapter_path", expected_adapter)):
-            key = f"{phase}_{suffix}"
-            if _real_path(payload.get(key), name=key) != path:
+    for output_phase, opts in (("fresh", fresh), ("resume", resume)):
+        output = _external_work_path(opts["--output_dir"], name=f"{output_phase} output")
+        if output != root / output_phase:
+            _fail(f"{output_phase} output must be under the isolated work root")
+        expected_checkpoint = output / f"{spec['output_name']}-step{1 if output_phase=='fresh' else 2:08d}-state"
+        expected_adapter = output / f"{spec['output_name']}-step{1 if output_phase=='fresh' else 2:08d}.safetensors"
+        for suffix, expected_path in (("checkpoint_dir", expected_checkpoint), ("adapter_path", expected_adapter)):
+            key = f"{output_phase}_{suffix}"
+            if _real_path(payload.get(key), name=key) != expected_path:
                 _fail(f"Wrong {key}: expected exact physical Step path")
+        should_exist = (phase == "complete" or (phase == "resume" and output_phase == "fresh"))
+        if should_exist:
+            if not output.is_dir() or not expected_checkpoint.is_dir() or not expected_adapter.is_file():
+                _fail(f"{output_phase} real Step output/adapter is missing for {phase} validation")
+        elif output.exists():
+            _fail(f"Stale {output_phase} output directory already exists before {phase} phase")
     if _real_path(resume["--resume"], name="resume source") != _real_path(payload["fresh_checkpoint_dir"], name="checkpoint source"):
         _fail("Resume must read exact Fresh Step-1 checkpoint")
     return {
-        "case_spec": spec, "case_id": case_id,
+        "case_spec": spec, "case_id": case_id, "phase": phase,
         "fresh": fresh, "resume": resume, "policy": policy,
         "work_root": root, "input_identity": identity,
         "policy_hash": identity["canonical_policy_hash"],
     }
 
 
-def validate_case_assets(payload: dict[str, Any]) -> dict[str, Any]:
-    """Real read-only complete assets/architecture gate; rejects fake model."""
-    verified = validate_case_manifest(payload)
+def verify_case_inputs(payload: dict[str, Any], *, phase: str = "fresh") -> dict[str, Any]:
+    """Rehash immutable inputs for every phase without requiring model header.
+
+    This is intentionally not a GPU PASS or even a full model-asset preflight.
+    It supports before-Fresh, before-Resume and after-Resume integrity checks.
+    """
+    verified = validate_case_manifest(payload, phase=phase)
     identity = verified["input_identity"]
-    fresh = verified["fresh"]
-    model = _real_path(fresh["--pretrained_model_name_or_path"], name="model", must_exist=True)
+    options = verified["fresh"]
+    model = _real_path(options["--pretrained_model_name_or_path"], name="model", must_exist=True)
     if not model.is_file() or _sha256_file(model) != identity["model_sha256"]:
         _fail("Full-file model SHA256 mismatch")
     for key in _INPUT_FILES:
-        p = _real_path(fresh[key], name=key, must_exist=True)
-        if not p.is_file() or _sha256_file(p) != identity["assets"][key[2:]]["sha256"]:
+        path = _real_path(options[key], name=key, must_exist=True)
+        if not path.is_file() or _sha256_file(path) != identity["assets"][key[2:]]["sha256"]:
             _fail(f"Full-file {key} SHA256 mismatch")
     work = verified["work_root"]
     for relative, recorded in identity["dataset_files"].items():
-        p = _real_path(str(work / relative), name=relative, must_exist=True)
-        if not p.is_file() or _sha256_file(p) != recorded["sha256"]:
+        path = _real_path(str(work / relative), name=relative, must_exist=True)
+        if not path.is_file() or _sha256_file(path) != recorded["sha256"]:
             _fail(f"Dataset changed after generation: {relative}")
-        if recorded["kind"] == "image" and decoded_rgb_pixel_sha256(p) != recorded["rgb_pixel_sha256"]:
+        if recorded["kind"] == "image" and decoded_rgb_pixel_sha256(path) != recorded["rgb_pixel_sha256"]:
             _fail(f"Image pixels changed after generation: {relative}")
-    # This gate is intentionally *after* whole-byte provenance checks.
+        if recorded["kind"] == "caption":
+            try:
+                caption = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise FullBF16EvidenceError(f"Cannot read caption: {exc}") from exc
+            if not caption.startswith(recorded["identity"] + ", "):
+                _fail(f"Caption identity marker disappeared: {relative}")
+    actual_dataset = work / "data" / "1_dts_sd3c2b"
+    actual = {p.relative_to(work).as_posix() for p in actual_dataset.iterdir()}
+    if actual != set(identity["dataset_files"]):
+        _fail("Unrecorded, removed or extra DreamBooth dataset file")
+    return {"status": "identity_pass", "case_id": verified["case_id"],
+            "source_commit": payload["source_commit"], "phase": phase,
+            "input_identity_sha256": _json_sha256(identity)}
+
+
+def validate_case_assets(payload: dict[str, Any], *, phase: str = "fresh") -> dict[str, Any]:
+    """Real full-file identity and SD3 safetensors-header preflight (no CUDA)."""
+    verified = verify_case_inputs(payload, phase=phase)
+    fresh = validate_case_manifest(payload, phase=phase)["fresh"]
     from mikazuki.sd3_full_bf16_scope import sd3_full_bf16_asset_blockers
-    config = {k[2:]: v for k, v in fresh.items()}
+    config = {key[2:]: value for key, value in fresh.items()}
     errors = sd3_full_bf16_asset_blockers(config)
     if errors:
         _fail("SD3.5 Medium architecture/asset validation failed: " + "; ".join(errors))
-    return {"status": "preflight_pass", "case_id": verified["case_id"],
-            "source_commit": payload["source_commit"],
-            "input_identity_sha256": _json_sha256(identity)}
+    return {**verified, "status": "preflight_pass"}
 
 
 def _record_value(record: object, key: str) -> Any:
@@ -715,7 +752,7 @@ def validate_adapter_checkpoint_binding(
 
 __all__ = [
     "FullBF16EvidenceError", "get_case_spec", "build_reference_policy",
-    "validate_case_manifest", "validate_case_assets",
+    "validate_case_manifest", "validate_case_assets", "verify_case_inputs",
     "decoded_rgb_pixel_sha256", "validate_qualification_preconditions",
     "validate_qualification_lease_records", "issue_phase_ticket",
     "claim_phase_ticket", "publish_phase_result", "verify_adapter_file",
