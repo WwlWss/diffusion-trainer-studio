@@ -131,6 +131,59 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
                     acc.unwrap_model(model).state_dict()[name], tensor,
                 ))
 
+    def test_production_style_hook_discards_unet_and_retains_only_adapter_model(self):
+        # Production NetworkTrainer.prepare_unet_with_accelerator prepares
+        # the MMDiT as an extra registered model, then its save/load pre-hook
+        # removes all model weights except the LoRA Network.
+        acc = Accelerator(cpu=True, mixed_precision="no")
+        base = torch.nn.Sequential(torch.nn.Linear(3, 3))
+        network = torch.nn.Linear(3, 2)
+        optimizer = torch.optim.AdamW(network.parameters(), lr=0.0001)
+        scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lambda _: 1.0)
+        base = acc.prepare(base)
+        network, optimizer, scheduler = acc.prepare(network, optimizer, scheduler)
+        self.assertEqual(len(acc._models), 2)
+
+        def save_hook(models, weights, output_dir):
+            to_remove = [
+                i for i, model in enumerate(models)
+                if not isinstance(model, type(acc.unwrap_model(network)))
+            ]
+            for i in reversed(to_remove):
+                if len(weights) > i:
+                    weights.pop(i)
+
+        def load_hook(models, input_dir):
+            for i in reversed([
+                i for i, model in enumerate(models)
+                if not isinstance(model, type(acc.unwrap_model(network)))
+            ]):
+                models.pop(i)
+
+        acc.register_save_state_pre_hook(save_hook)
+        acc.register_load_state_pre_hook(load_hook)
+        with tempfile.TemporaryDirectory() as td:
+            acc.save_state(td, safe_serialization=True)
+            folder = Path(td)
+            self.assertEqual(
+                {p.name for p in folder.iterdir()},
+                {"model.safetensors", "optimizer.bin",
+                 "scheduler.bin", "random_states_0.pkl"},
+            )
+            # The one remaining model.safetensors contains the Network,
+            # not the separately registered MMDiT.
+            from safetensors import safe_open
+            with safe_open(str(folder / "model.safetensors"), framework="pt", device="cpu") as f:
+                self.assertEqual(set(f.keys()), {"weight", "bias"})
+                saved = {k: f.get_tensor(k).clone() for k in f.keys()}
+            with torch.no_grad():
+                network.weight.add_(33)
+                base[0].weight.add_(55)
+            base_after = base[0].weight.detach().clone()
+            acc.load_state(td)
+            self.assertTrue(torch.equal(network.weight.detach().cpu(), saved["weight"]))
+            self.assertTrue(torch.equal(base[0].weight.detach(), base_after))
+
     def test_host_reference_scheduler_identity_matches_production_factory(self):
         from mikazuki.parameter_policy_trainer import _scheduler_identity_from_args
         from tools import sd3_full_bf16_evidence_support as host
