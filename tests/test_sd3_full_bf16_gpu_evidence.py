@@ -1015,5 +1015,101 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
                             api.validate_case_assets(payload)
 
 
+class B0FinalStrictReviewR2RED(unittest.TestCase):
+    """Source-derived negative tests: failures must be from Host Binder itself."""
+
+    def _case(self, root: Path, case_id: str = R1) -> dict:
+        return json.loads(Path(_generate(root, case_id)["manifest"]).read_text(encoding="utf-8"))
+
+    def _bind(self, api, case, snapshot, binding, phase="fresh", phase_id="host-phase-1"):
+        return api.verify_adapter_checkpoint_binding(
+            case_manifest=case, phase=phase, worker_snapshot=snapshot,
+            binding=binding, expected_phase_id=phase_id,
+        )
+
+    def test_red_checkpoint_missing_accelerate_network_and_rng_cannot_bind(self):
+        api = _support()
+        # GREEN-1R fixture omits model.safetensors and random_states_0.pkl.
+        with tempfile.TemporaryDirectory() as td:
+            case = self._case(Path(td))
+            snapshot, binding = _write_host_checkpoint(case)
+            with self.assertRaises(api.FullBF16EvidenceError):
+                self._bind(api, case, snapshot, binding)
+
+    def test_red_resume_coupled_false_parent_is_rejected_against_actual_fresh(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = self._case(Path(td), R2)
+            _write_host_checkpoint(case, phase="fresh", phase_id="fresh-coupled")
+            forged = "c" * 32
+            snapshot, binding = _write_host_checkpoint(
+                case, phase="resume", phase_id="resume-coupled",
+                parent_id=forged,
+            )
+            # Two self-consistent false claims cannot establish real lineage.
+            with self.assertRaises(api.FullBF16EvidenceError):
+                self._bind(api, case, snapshot, binding, "resume", "resume-coupled")
+
+    def test_red_all_frozen_roles_cannot_evict_required_bf16_components(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = self._case(Path(td))
+            snapshot, binding = _write_host_checkpoint(case)
+            adapter = Path(case["fresh_adapter_path"])
+            file_sha, inventory = _write_reference_adapter(adapter, weight_dtype="F32")
+            for key, entry in inventory.items():
+                if key.endswith(".weight"):
+                    entry["role"] = "frozen_weight"
+            snapshot["adapter_tensors"] = inventory
+            binding["adapter_file_sha256"] = file_sha
+            binding["adapter_tensor_inventory_sha256"] = api._json_sha256(inventory)
+            with self.assertRaises(api.FullBF16EvidenceError):
+                self._bind(api, case, snapshot, binding)
+
+    def test_red_forward_semantics_wrong_schema_hint_or_version_not_accepted(self):
+        api = _support()
+        for field, bad in (("schema", "not-the-forward-schema"),
+                           ("version", 2), ("model_type_hint", "wrong-model")):
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td))
+                snapshot, binding = _write_host_checkpoint(case)
+                path = Path(case["fresh_checkpoint_dir"]) / "dts_sd3_forward_semantics.json"
+                sem = json.loads(path.read_text(encoding="utf-8"))
+                sem[field] = bad
+                path.write_text(json.dumps(sem), encoding="utf-8")
+                snapshot["state_file_sha256"][path.name] = _digest(path.read_bytes())
+                with self.subTest(field=field), self.assertRaises(api.FullBF16EvidenceError):
+                    self._bind(api, case, snapshot, binding)
+
+    def test_red_scheduler_self_signed_wrong_reference_config_rejected(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = self._case(Path(td))
+            snapshot, binding = _write_host_checkpoint(case)
+            path = Path(case["fresh_checkpoint_dir"]) / "dts_parameter_policy_manifest.json"
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+            manifest["scheduler_identity"]["lr_scheduler"] = "cosine"
+            manifest["scheduler_signature"] = api._json_sha256(manifest["scheduler_identity"])
+            path.write_text(json.dumps(manifest), encoding="utf-8")
+            snapshot["state_file_sha256"][path.name] = _digest(path.read_bytes())
+            with self.assertRaises(api.FullBF16EvidenceError):
+                self._bind(api, case, snapshot, binding)
+
+    def test_red_step_zero_progress_cannot_prove_completed_step(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = self._case(Path(td))
+            snapshot, binding = _write_host_checkpoint(case)
+            path = Path(case["fresh_checkpoint_dir"]) / "dts_parameter_policy_progress.json"
+            progress = json.loads(path.read_text(encoding="utf-8"))
+            for child in progress["optimizer_profiles"].values():
+                child["step_values"] = [0]
+            progress["scheduler"]["step_count"] = 0
+            path.write_text(json.dumps(progress), encoding="utf-8")
+            snapshot["state_file_sha256"][path.name] = _digest(path.read_bytes())
+            with self.assertRaises(api.FullBF16EvidenceError):
+                self._bind(api, case, snapshot, binding)
+
+
 if __name__ == "__main__":
     unittest.main()
