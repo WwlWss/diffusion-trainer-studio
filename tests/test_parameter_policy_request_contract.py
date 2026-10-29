@@ -272,7 +272,7 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
 
     def test_inactive_full_bf16_does_not_change_normal_component_readiness(self):
         prepare = _real_prepare_request()
-        for raw in (False, "false", 0):
+        for raw in (False, 0, 0.0):
             with self.subTest(raw=raw):
                 prepared = prepare(
                     _component_gui_config(
@@ -285,6 +285,23 @@ class ParameterPolicyRealPipelineContractTests(unittest.TestCase):
                     launch=False,
                 )
                 self.assertEqual(prepared.runtime_blockers, [])
+
+    def test_quoted_false_full_bf16_is_a_blocker_not_inactive(self):
+        prepare = _real_prepare_request()
+        raw = _component_gui_config(
+            "flux-finetune",
+            ["transformer.double_stream"],
+            mixed_precision="bf16",
+            full_bf16=False,
+        )
+        raw["ui_custom_params"] = 'full_bf16 = "false"'
+        prepared = prepare(raw, "flux-finetune", launch=False)
+        self.assertTrue(
+            any("full_bf16" in blocker and "boolean" in blocker for blocker in prepared.runtime_blockers),
+            prepared.runtime_blockers,
+        )
+        with self.assertRaisesRegex(ValueError, "full_bf16"):
+            prepare(raw, "flux-finetune", launch=True)
 
     def test_fp8_survives_bootstrap_then_blocks_runtime(self):
         prepare = _real_prepare_request()
