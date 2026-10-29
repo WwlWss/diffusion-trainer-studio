@@ -961,6 +961,21 @@ def verify_adapter_checkpoint_binding(
             or len(actual_optimizers) != len(expected_profiles)
             or len(actual_schedulers) != len(expected_profiles)):
         _fail("Physical checkpoint Optimizer/Scheduler child Profile topology mismatch")
+    for child in actual_optimizers:
+        if (not isinstance(child, dict)
+                or child.get("optimizer_type") != expected_profiles.get(child.get("profile_name"))
+                or not isinstance(child.get("topology_fingerprint"), str)
+                or not child["topology_fingerprint"]):
+            _fail("Physical Optimizer child type/topology differs from canonical Policy")
+    for child in actual_schedulers:
+        if (not isinstance(child, dict)
+                or not isinstance(child.get("scheduler_type"), str)
+                or not child["scheduler_type"]
+                or not isinstance(child.get("mode"), str)
+                or not child["mode"]
+                or not isinstance(child.get("topology_fingerprint"), str)
+                or not child["topology_fingerprint"]):
+            _fail("Physical Scheduler child identity is missing required topology evidence")
 
     expected_parent = worker_snapshot.get("expected_parent_checkpoint_id")
     if phase == "fresh":
