@@ -847,6 +847,51 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
             self.assertEqual(result["checkpoint_id"], "a" * 32)
             self.assertNotEqual(result["status"], "pass")
 
+    def test_r2_fresh_then_resumed_step2_bound_to_exact_parent_checkpoint(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R2)["manifest"]).read_text(encoding="utf-8"))
+            fresh_snapshot, fresh_binding = _write_host_checkpoint(
+                case, phase="fresh", phase_id="host-r2-fresh",
+            )
+            first = api.verify_adapter_checkpoint_binding(
+                case_manifest=case, phase="fresh", worker_snapshot=fresh_snapshot,
+                binding=fresh_binding, expected_phase_id="host-r2-fresh",
+            )
+            self.assertEqual(first["status"], "physical_binding_valid")
+            resumed_snapshot, resumed_binding = _write_host_checkpoint(
+                case, phase="resume", phase_id="host-r2-resume",
+                parent_id=first["checkpoint_id"],
+            )
+            second = api.verify_adapter_checkpoint_binding(
+                case_manifest=case, phase="resume", worker_snapshot=resumed_snapshot,
+                binding=resumed_binding, expected_phase_id="host-r2-resume",
+            )
+            self.assertEqual(second["status"], "physical_binding_valid")
+            self.assertNotEqual(second["checkpoint_id"], first["checkpoint_id"])
+            resumed_snapshot["expected_parent_checkpoint_id"] = "wrong-parent"
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="resume", worker_snapshot=resumed_snapshot,
+                    binding=resumed_binding, expected_phase_id="host-r2-resume",
+                )
+
+    def test_complete_saved_module_allows_frozen_f32_weights_with_live_role(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "frozen.safetensors"
+            sha, saved = _write_reference_adapter(path, weight_dtype="F32")
+            # This fixture models frozen Adapter weights in the same file.
+            # Full-BF16 is mandatory for trainable parameters, not frozen ones.
+            for key, value in saved.items():
+                if key.endswith(".weight"):
+                    value["role"] = "frozen_weight"
+            # The fake generator's down Matrix remains BF16; both dtypes
+            # must be checked against the exact Worker live descriptors.
+            self.assertEqual(api.verify_adapter_file(
+                path, expected_file_sha256=sha, expected_tensors=saved,
+            )["status"], "file_verified")
+
     def test_real_state_binding_rejects_missing_swapped_and_mismatched_evidence(self):
         api = _support()
         changes = ("wrong_case", "missing_adapter", "swapped_adapter",
