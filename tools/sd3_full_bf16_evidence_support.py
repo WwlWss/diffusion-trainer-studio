@@ -325,7 +325,7 @@ def validate_case_manifest(payload: object, *, phase: str = "fresh") -> dict[str
         "effective_batches_per_epoch": spec["effective_batches_per_epoch"],
         "gradient_accumulation_steps": spec["gradient_accumulation_steps"],
         "max_train_steps": 2, "optimizer_profiles": spec["optimizer_types"],
-    }:
+    }):
         _fail("Reference must match exactly the reviewed R1/R2 case geometry")
     identity = payload.get("input_identity")
     if not isinstance(identity, dict):
