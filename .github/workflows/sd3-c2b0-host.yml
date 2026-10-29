@@ -53,6 +53,9 @@ jobs:
       - name: Install minimal Host decoding dependencies
         run: python -m pip install --disable-pip-version-check "numpy==1.26.4" "safetensors==0.4.5" "pillow==11.1.0"
 
+      - name: Read real Gitlink checkout status without claiming runtime readiness
+        run: python -c "from tools.prepare_sd3_full_bf16_cases import _source_submodule_inventory; print(_source_submodule_inventory())"
+
       - name: Compile B0 Host modules and RED tests
         run: python -m py_compile tools/sd3_full_bf16_evidence_support.py tools/prepare_sd3_full_bf16_cases.py tests/test_sd3_full_bf16_gpu_evidence.py
 
