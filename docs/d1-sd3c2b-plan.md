@@ -164,6 +164,8 @@ This implementation closes the following *code review* gaps without changing pro
 
 **Scheduler/step:** require the complete \`_scheduler_identity_from_args\` v1 reference (constant, two total max steps, one process, default warmup/decay/cycles/power), correctly SHA256-bound to both Session snapshot and Checkpoint; each child is the pinned external \`torch.optim.lr_scheduler.LambdaLR\`. For this **fixed** reference, real pinned CPU evidence confirms \`_step_count=1, last_epoch=0\` immediately after construction and \`_step_count=2, last_epoch=1\` after one effective update; consequently, the saved \`step_count == logical_step + 1\` and \`last_epoch == logical_step\`. The AdamW child must have per-parameter Step values agreeing with the logical Step; Muon's \`step_values\` may be absent, and its **actual** Child update still needs Fix C physical observation. Progress JSON/Host check alone is not proof that a Child was stepped.
 
+**Recorded source Gitlinks:** the Generator now records every returned recursive submodule Gitlink and its checkout state in `source_submodules`, requiring the three top-level paths declared in `.gitmodules`. A missing/forged/unrecognized path, invalid SHA or mismatched/conflicted Gitlink fails. `checkout="uninitialized"` is recorded accurately, **not** accepted as evidence of runtime readiness. The future Runner/Worker independently enforces exact source SHA, cleanliness and initialization for each submodule actually imported by physical training. Host fixtures explicitly mock source/gitlink identities to avoid requiring a developer's checkout to be clean.
+
 **New independent CPU gate:** \`tests/test_sd3_full_bf16_accelerate_cpu.py\` runs actual pinned Torch+Accelerate in Linux CI to check state file names, save/load roundtrip, real CompositeOptimizer/CompositeLRScheduler and the production-style non-Network model removal hooks. This is separate from the dependency-light 2-OS Host CI and deliberately **not CUDA qualification**. Future Fix C/D must additionally verify exact source HEAD, all runtime-in-use initialized submodules, a truly complete Worker ticket/event schema, CUDA BF16 parameter/gradient/update evidence, and end-to-end Resume; none of those is claimed by GREEN-1R2.
 
 ### 4.5 Mandatory observation Host negatives
@@ -218,6 +220,11 @@ Minimum manifest contract:
   "version": 1,
   "case_id": "r2-muon-adamw-fallback-accum2",
   "source_commit": "<exact candidate SHA>",
+  "source_submodules": {
+    "frontend": {"gitlink_sha": "<gitlink SHA>", "checkout": "initialized"},
+    "mikazuki/dataset-tag-editor": {"gitlink_sha": "<gitlink SHA>", "checkout": "uninitialized"},
+    "sd-scripts": {"gitlink_sha": "<gitlink SHA>", "checkout": "initialized"}
+  },
   "input_identity": {
     "model_sha256": "<whole-file SHA256>",
     "assets": {},
