@@ -1107,10 +1107,35 @@ class B0FinalStrictReviewR2RED(unittest.TestCase):
 
     def test_red_checkpoint_missing_accelerate_network_and_rng_cannot_bind(self):
         api = _support()
-        # GREEN-1R fixture omits model.safetensors and random_states_0.pkl.
+        for filename in ("model.safetensors", "random_states_0.pkl",
+                         "optimizer.bin", "scheduler.bin"):
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td))
+                snapshot, binding = _write_host_checkpoint(case)
+                (Path(case["fresh_checkpoint_dir"]) / filename).unlink()
+                with self.subTest(missing=filename), self.assertRaises(api.FullBF16EvidenceError):
+                    self._bind(api, case, snapshot, binding)
+
+    def test_state_rejects_an_extra_accelerate_checkpoint_file(self):
+        api = _support()
+        for filename in ("optimizer_1.bin", "custom_checkpoint_0.pkl", "unknown.pt"):
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td))
+                snapshot, binding = _write_host_checkpoint(case)
+                path = Path(case["fresh_checkpoint_dir"]) / filename
+                path.write_bytes(b"forged-extra-accelerate-state")
+                snapshot["state_file_sha256"][filename] = _digest(path.read_bytes())
+                with self.subTest(extra=filename), self.assertRaises(api.FullBF16EvidenceError):
+                    self._bind(api, case, snapshot, binding)
+
+    def test_network_state_tensor_swapped_even_with_updated_file_digest(self):
+        api = _support()
         with tempfile.TemporaryDirectory() as td:
             case = self._case(Path(td))
             snapshot, binding = _write_host_checkpoint(case)
+            path = Path(case["fresh_checkpoint_dir"]) / "model.safetensors"
+            _write_reference_adapter(path, alpha_bytes=struct.pack("<f", 9.0))
+            snapshot["state_file_sha256"][path.name] = _digest(path.read_bytes())
             with self.assertRaises(api.FullBF16EvidenceError):
                 self._bind(api, case, snapshot, binding)
 
