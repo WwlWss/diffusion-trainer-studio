@@ -235,7 +235,7 @@ class B0GeneratorAndInputIdentityRED(unittest.TestCase):
                 (subset / "sample_0001.caption").read_text(encoding="utf-8"),
                 (subset / "sample_0002.caption").read_text(encoding="utf-8"),
             )
-            self.assertEqual(Path(result["manifest"]), work / "manifest.json")
+            self.assertEqual(Path(result["manifest"]).resolve(), (work / "manifest.json").resolve())
             payload = json.loads(Path(result["manifest"]).read_text(encoding="utf-8"))
             self.assertEqual(payload["reference"]["effective_batches_per_epoch"], 2)
             self.assertEqual(payload["reference"]["gradient_accumulation_steps"], 2)
@@ -526,7 +526,7 @@ class B0AdapterArtifactBindingRED(unittest.TestCase):
         binding = {
             "case_id": R1, "phase_id": "fresh-unique", "logical_step": 1,
             "checkpoint_id": "c" * 32,
-            "adapter_path": "/outside/dts-step00000001.safetensors",
+            "adapter_path": str(Path(tempfile.gettempdir()) / "dts-step00000001.safetensors"),
             "adapter_file_sha256": "a" * 64,
             "adapter_tensor_inventory_sha256": "b" * 64,
         }
