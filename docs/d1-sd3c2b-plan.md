@@ -29,7 +29,7 @@ The following are **sources of truth**, rather than a second runtime implementat
 
 **No production code is modified in B0:** no changes to `FULL_BF16_BACKEND_QUALIFICATIONS`, optimizer eligibility, scheduler, model forward, actual training loop, SD3 Resume hooks, UI, or R0 runner. No permissive global environment flag, `--qualification_override`, synthetic CUDA evidence, or stock SD1/SDXL `D1_STOCK_LORA_SPECS` shortcut.
 
-## 1.1 Evidence reference vs future production admission (P1-01)
+### 1.1 Evidence reference vs future production admission (P1-01)
 
 Three boundaries are separate: (1) C2-A's **pre-DataLoader** pure config/asset gate; (2) B0/B1/B2's two **physical reference cases**, R1 with 1 actual Batch/epoch and R2 with 2 distinct actual Batches/epoch; (3) B3's **release admission** covering the actual production options and Dataset paths. Evidence from reference geometry does **not** imply that the current C2-A production gate enforces that geometry. No B0 code may silently promote or broaden the backend.
 
@@ -118,26 +118,13 @@ All events include `case_id`, `source_commit`, unique `phase_id`, monotone `even
 
 Production `Sd3NetworkTrainer.on_step_start` currently modifies only cached conditioning outputs and does not provide image keys. The ordinary Dataset returns `captions` even with Text Encoder cache. `CompositeLRScheduler` is returned from `session.build_scheduler` and, on Accelerate 1.6.0, is owned by `AcceleratedScheduler.scheduler`. Actual Scheduler state must be captured, not inferred from `scheduler_signature`. The Worker is **not** permitted to change these ownership or behavior contracts.
 
-### 4.5 Earlier generic observation suggestions
+### 4.5 Mandatory observation Host negatives
 
-The constraints immediately below remain applicable only when consistent with §§4.3–4.4; the explicit V2 call-site and timing requirements above take precedence.
-
-Prefer a Worker-only observation subclass of `Sd3NetworkTrainer`:
-
-- `configure_parameter_policy_training`: call `super`, retain the actual `ParameterPolicyTrainerSession` and physical CompositeOptimizer instance, audit resolved routing/physical parameter identities. Never change train/freeze or optimizer construction.
-- `register_additional_state_hooks`: call `super`; register strictly observational callbacks or wrap the **instance** `accelerator.backward` only while running to capture **post-backward, pre-step/pre-zero** gradients, and record actual train and optimizer/scheduler states at the Step-1 save boundary. Do not replace or skip the existing SD3/Parameter Policy Accelerate hooks.
-- `on_step_start`: call `super`, count real training DataLoader microbatches; bind a stable dataset/caption sample identity where available. A call with `is_train=false` is excluded. Do not rely on synthetic iterations.
-- `plan_backend_resume_cursor`: call `super` after real `accelerator.load_state` and post-resume audit; before Step-2 training, snapshot **actually restored** child optimizer, scheduler and adapter parameters. Assert saved Step-1 handoff matches restored state.
-- A Worker-only observation around the real `CompositeOptimizer.step`/Accelerate step path can record pre/post physical child state, but must call the original exactly once and preserve the Accelerator's accumulation/no-op behavior. If a proposed interception changes optimizer/scheduler step counts or causes an extra step, reject it.
-- Keep large tensor payloads out of JSON. Use audited, hash-based fingerprints/counters and bounded failure diagnostics. Atomic write to an external evidence directory; no trainer parameter mutation by observation.
-
-The source's physical loop order is `accelerator.backward(loss) → optional grad clipping → optimizer.step() → scheduler.step() → optimizer.zero_grad()`. The gradient evidence must be captured after **that real** `accelerator.backward`, not after zero-grad or merely from a mocked graph.
-
-The exact hook implementation/order is a **blocking B0 source-review item**: demonstrate that the worker observes the optimizer that Accelerate actually owns (not a stale pre-`prepare` object), and does not suppress/duplicate an inherited production hook.
+Before B1, run small real CPU CompositeOptimizer/CompositeLRScheduler behavioral tests and synthetic failure-injection tests. They must reject: wrong prepared wrapper identity; missing/duplicate scheduler construction; missing/duplicate Batch/Backward; no pre-physical-step BF16 gradient; R2 first-Microbatch state drift; skipped physical child, missing scheduler change; partial/failed save, state-load mismatch, stale source or invalid checkpoint parent. Such Host tests establish **instrumentation correctness**, not CUDA qualification.
 
 ## 5. Generator, external inputs and content identity
 
-The generator must use the C2-A canonical contract, rather than handcrafting a visually similar but semantically different policy. Reuse `validate_parameter_policy` and `serialize_parameter_policy`; R1 can derive the reviewed `prepare_sd3_component_baseline.make_policy()` and R2 can derive exactly the host-verified shape in `tests/test_sd3_full_bf16_scope.py::r2_policy`, with production-owned definitions preferred over importing test helpers at runtime.
+The generator must use the C2-A canonical contract, rather than handcrafting a visually similar but semantically different policy. Reuse `validate_parameter_policy` and `serialize_parameter_policy`; R1 can derive the reviewed `prepare_sd3_component_baseline.make_policy()` and R2 must use an independent deterministic builder that produces the same canonical policy shape as `tests/test_sd3_full_bf16_scope.py::r2_policy` without importing test-only utilities at runtime.
 
 External layout, **never inside the source checkout**, for example:
 
@@ -146,7 +133,7 @@ External layout, **never inside the source checkout**, for example:
 
 R1: one valid 512×512 image; R2: **two different image SHA256s**, two **unique nonempty UTF-8 `.caption` identity strings**, exactly one repeat each in one ordinary DreamBooth subset `1_dts_sd3c2b` (under the `--train_data_dir` **parent**). Produce isolated copies/hardlink-free materialization rather than modifying R0 data; reject duplicate physical file/caption identities when distinct cases are required. Restrict to recognized image extensions and the one-caption-per-image format the production Dataset parser really consumes; reject extra images/subfolders/`.npz` or cached-output files that could modify the effective dataset. No alternate `dataset_config`, training/validation split or regularization images.
 
-Generator must ensure `r1/data/1_dts_sd3c2b/sample_0001.{png,caption}` and `r2/data/1_dts_sd3c2b/{sample_0001,sample_0002}.{png,caption}` map to the production DreamBooth parser. Use copies, never hardlinks; refuse added images, caches and symlinks. Tokens such as `dts_c2b_sample_0001` must remain distinct under default production `process_caption`. **Do not precreate the `fresh/` or `resume/` training output directories**; they are reserved Manifest paths, not Generator-created folders. The generator should **not infer effective batches from image count**. Its inventory is an input precondition only. The Worker and checkpoint `dts_sd3_resume_progress.json` must physically prove `dataloader_batches == 1` (R1), `== 2` (R2), and `num_processes == 1`.
+**P2-02 dataset/output layout:** Generator must ensure `r1/data/1_dts_sd3c2b/sample_0001.{png,caption}` and `r2/data/1_dts_sd3c2b/{sample_0001,sample_0002}.{png,caption}` map to the production DreamBooth parser. Use copies, never hardlinks; refuse added images, caches and symlinks. Tokens such as `dts_c2b_sample_0001` must remain distinct under default production `process_caption`. **Do not precreate the `fresh/` or `resume/` training output directories**; they are reserved Manifest paths, not Generator-created folders. The generator should **not infer effective batches from image count**. Its inventory is an input precondition only. The Worker and checkpoint `dts_sd3_resume_progress.json` must physically prove `dataloader_batches == 1` (R1), `== 2` (R2), and `num_processes == 1`.
 
 ### 5.1 Hash contract
 
@@ -251,7 +238,7 @@ All B0/B1/B2 evidence must report `production_qualification_mutated=false` and `
 
 Use the actual checkpoint directory files:
 
-- `dts_parameter_policy_manifest.json` v2, including correct canonical Policy SHA, seven-component train/freeze set, physical child profile topology, Full-BF16 `Execution Identity v1`, and signed Scheduler Identity.
+- `dts_parameter_policy_manifest.json` v2, including correct canonical Policy SHA, seven-component train/freeze set, physical child profile topology, Full-BF16 `Execution Identity v1`, and SHA256-bound Scheduler Identity.
 - `dts_parameter_policy_progress.json` v1: valid `checkpoint_id`, `resume_source_checkpoint_id` lineage, every child `step_values=[1]` then `[2]`, correct Scheduler `step_count`/`last_epoch`.
 - `dts_sd3_forward_semantics.json`: corrected extra-attention head-dim contract; SD3.5 Medium architecture.
 - `dts_sd3_resume_progress.json` plus `train_state.json`: one-process, expected effective-batch/accumulation geometry, Step/Epoch 1→2, epoch-boundary-only Resume.
