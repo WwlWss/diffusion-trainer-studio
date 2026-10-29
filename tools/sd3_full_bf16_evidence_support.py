@@ -819,32 +819,197 @@ def verify_adapter_file(
     }
 
 
-def validate_adapter_checkpoint_binding(
+def validate_adapter_checkpoint_metadata(
     binding: object, progress: object, *,
-    expected_phase_id: str, expected_step: int,
+    expected_case_id: str, expected_phase_id: str,
+    expected_step: int, expected_adapter_path: str | Path,
 ) -> dict[str, Any]:
+    """Metadata-only comparison: NEVER returns physical evidence PASS."""
     if not isinstance(binding, dict) or not isinstance(progress, dict):
-        _fail("Adapter/checkpoint binding must use dict records")
+        _fail("Adapter metadata and checkpoint progress must be objects")
+    get_case_spec(expected_case_id)
     if type(expected_step) is not int or expected_step not in (1, 2):
-        _fail("Reference step must be 1 or 2")
-    if progress.get("schema") != PROGRESS_SCHEMA or type(progress.get("version")) is not int or progress["version"] != 1:
-        _fail("Expected real checkpoint-progress v1 sidecar")
-    if (binding.get("phase_id") != expected_phase_id
+        _fail("Invalid reference optimizer step")
+    if (progress.get("schema") != PROGRESS_SCHEMA
+            or type(progress.get("version")) is not int or progress["version"] != 1):
+        _fail("Wrong checkpoint progress schema/version")
+    if (binding.get("case_id") != expected_case_id
+            or binding.get("phase_id") != expected_phase_id
             or type(binding.get("logical_step")) is not int
             or binding["logical_step"] != expected_step):
-        _fail("Adapter phase/step identity does not match current Worker phase")
-    if not isinstance(binding.get("case_id"), str) or binding["case_id"] not in _CASES:
-        _fail("Invalid Adapter case ID")
-    checkpoint = progress.get("checkpoint_id")
-    if not isinstance(checkpoint, str) or not checkpoint or binding.get("checkpoint_id") != checkpoint:
-        _fail("Saved adapter does not match actual checkpoint identity")
-    adapter = _real_path(binding.get("adapter_path"), name="adapter binding")
-    if not adapter.name.endswith(f"-step{expected_step:08d}.safetensors"):
-        _fail("Adapter filename does not identify the expected physical Step")
+        _fail("Adapter metadata case/phase/step differs from trusted expectation")
+    checkpoint_id = progress.get("checkpoint_id")
+    if not isinstance(checkpoint_id, str) or not checkpoint_id or binding.get("checkpoint_id") != checkpoint_id:
+        _fail("Adapter checkpoint ID differs from progress record")
+    adapter = _real_path(binding.get("adapter_path"), name="adapter metadata")
+    expected = _real_path(str(expected_adapter_path), name="expected adapter")
+    if adapter != expected or not adapter.name.endswith(f"-step{expected_step:08d}.safetensors"):
+        _fail("Adapter path does not match exact Manifest step artifact")
     for key in ("adapter_file_sha256", "adapter_tensor_inventory_sha256"):
         _require_sha(binding.get(key), name=key)
-    return {"status": "pass", "checkpoint_id": checkpoint,
-            "case_id": binding["case_id"], "logical_step": expected_step}
+    return {"status": "metadata_valid", "case_id": expected_case_id,
+            "checkpoint_id": checkpoint_id, "logical_step": expected_step}
+
+
+def _checkpoint_file_inventory(directory: Path) -> dict[str, str]:
+    """Hash all state files without loading arbitrary torch pickle payloads."""
+    result: dict[str, str] = {}
+    for item in directory.iterdir():
+        _check_ordinary_dataset_entry(item, is_directory=False)
+        result[item.name] = _sha256_file(item)
+    if not any(name.startswith("optimizer") and name.endswith(".bin") for name in result):
+        _fail("Checkpoint is missing actual Accelerate optimizer state files")
+    if not any(name.startswith("scheduler") and name.endswith(".bin") for name in result):
+        _fail("Checkpoint is missing actual Accelerate scheduler state files")
+    required_sidecars = {
+        "dts_parameter_policy_manifest.json", "dts_parameter_policy_progress.json",
+        "dts_sd3_resume_progress.json", "dts_sd3_forward_semantics.json",
+        "train_state.json",
+    }
+    if not required_sidecars.issubset(result):
+        _fail("Full-BF16 SD3 checkpoint is missing required sidecars")
+    return result
+
+
+def verify_adapter_checkpoint_binding(
+    *, case_manifest: dict[str, Any], phase: str,
+    worker_snapshot: Mapping[str, Any], binding: Mapping[str, Any],
+    expected_phase_id: str | None = None,
+) -> dict[str, Any]:
+    """Physical Host file/lineage binding, NOT a CUDA qualification decision.
+
+    The future Runner must independently supply expected_phase_id from its
+    already-claimed phase ticket and verify the Worker event stream/exit.
+    """
+    if phase not in ("fresh", "resume") or not expected_phase_id:
+        _fail("Physical binding requires a trusted phase and phase-ticket ID")
+    if not isinstance(worker_snapshot, Mapping) or not isinstance(binding, Mapping):
+        _fail("Missing actual Worker phase snapshot/binding")
+    # Fresh Step-1 completion is Resume preflight; resumed Step-2 is complete.
+    boundary = "resume" if phase == "fresh" else "complete"
+    inputs = verify_case_inputs(case_manifest, phase=boundary)
+    case_id = inputs["case_id"]
+    expected_step = 1 if phase == "fresh" else 2
+    manifest_view = validate_case_manifest(case_manifest, phase=boundary)
+    checkpoint = _real_path(
+        case_manifest["fresh_checkpoint_dir" if phase == "fresh" else "resume_checkpoint_dir"],
+        name="expected state directory", must_exist=True,
+    )
+    expected_adapter_path = _real_path(
+        case_manifest["fresh_adapter_path" if phase == "fresh" else "resume_adapter_path"],
+        name="expected adapter", must_exist=True,
+    )
+    if (not checkpoint.is_dir() or not expected_adapter_path.is_file()
+            or worker_snapshot.get("case_id") != case_id
+            or worker_snapshot.get("phase_id") != expected_phase_id
+            or worker_snapshot.get("logical_step") != expected_step
+            or worker_snapshot.get("source_commit") != case_manifest["source_commit"]
+            or worker_snapshot.get("input_identity_sha256") != inputs["input_identity_sha256"]):
+        _fail("Physical Worker snapshot is not bound to the expected source/case/phase")
+    pmanifest = _read_json(checkpoint / "dts_parameter_policy_manifest.json")
+    progress = _read_json(checkpoint / "dts_parameter_policy_progress.json")
+    sd3_progress = _read_json(checkpoint / "dts_sd3_resume_progress.json")
+    train_state = _read_json(checkpoint / "train_state.json")
+    semantics = _read_json(checkpoint / "dts_sd3_forward_semantics.json")
+    validate_adapter_checkpoint_metadata(
+        dict(binding), progress, expected_case_id=case_id,
+        expected_phase_id=expected_phase_id, expected_step=expected_step,
+        expected_adapter_path=expected_adapter_path,
+    )
+    try:
+        from tools.parameter_policy_backend_feature_gpu_support import (
+            validate_full_bf16_checkpoint_manifest,
+            validate_checkpoint_progress,
+        )
+        validate_full_bf16_checkpoint_manifest(
+            pmanifest, train_type="sd3-lora", manifest_version=2,
+        )
+        validate_checkpoint_progress(progress, checkpoint_manifest=pmanifest)
+    except FullBF16EvidenceError:
+        raise
+    except (ValueError, RuntimeError, TypeError, KeyError) as exc:
+        raise FullBF16EvidenceError(f"Full-BF16 Manifest/Progress contract failed: {exc}") from exc
+
+    canonical_policy = manifest_view["policy"]
+    expected_train = sorted(
+        name for name, entry in canonical_policy["components"].items() if entry["train"]
+    )
+    expected_frozen = sorted(
+        name for name, entry in canonical_policy["components"].items() if not entry["train"]
+    )
+    expected_profiles = {
+        name: record["type"] for name, record in canonical_policy["optimizer_profiles"].items()
+    }
+    if (pmanifest.get("policy_hash") != manifest_view["policy_hash"]
+            or pmanifest.get("trainable_components") != expected_train
+            or pmanifest.get("frozen_components") != expected_frozen
+            or pmanifest.get("optimizer_profiles") != expected_profiles
+            or pmanifest.get("runtime_topology_fingerprint") != worker_snapshot.get("runtime_topology_fingerprint")):
+        _fail("Physical checkpoint ownership/Policy/runtime topology does not match reference")
+    actual_optimizers = pmanifest.get("optimizers")
+    actual_schedulers = pmanifest.get("schedulers")
+    if (not isinstance(actual_optimizers, list) or not isinstance(actual_schedulers, list)
+            or {o.get("profile_name") for o in actual_optimizers if isinstance(o, dict)} != set(expected_profiles)
+            or {o.get("profile_name") for o in actual_schedulers if isinstance(o, dict)} != set(expected_profiles)
+            or len(actual_optimizers) != len(expected_profiles)
+            or len(actual_schedulers) != len(expected_profiles)):
+        _fail("Physical checkpoint Optimizer/Scheduler child Profile topology mismatch")
+
+    expected_parent = worker_snapshot.get("expected_parent_checkpoint_id")
+    if phase == "fresh":
+        if expected_parent is not None or progress.get("resume_source_checkpoint_id") is not None:
+            _fail("Fresh checkpoint must not claim a resume parent")
+    elif (not isinstance(expected_parent, str) or not expected_parent
+          or progress.get("resume_source_checkpoint_id") != expected_parent):
+        _fail("Resumed checkpoint did not link to exact Fresh checkpoint ID")
+    if progress.get("checkpoint_id") != worker_snapshot.get("checkpoint_id"):
+        _fail("Worker checkpoint ID differs from actual on-disk Progress sidecar")
+    spec = manifest_view["case_spec"]
+    expected_sd3 = {
+        "schema": "dts.sd3.resume-progress",
+        "version": 1, "completed_optimizer_steps": expected_step,
+        "current_epoch": expected_step,
+        "dataloader_batches": spec["effective_batches_per_epoch"],
+        "gradient_accumulation_steps": spec["gradient_accumulation_steps"],
+        "num_processes": 1,
+    }
+    if (sd3_progress != expected_sd3
+            or type(train_state.get("current_step")) is not int
+            or type(train_state.get("current_epoch")) is not int
+            or train_state["current_step"] != expected_step
+            or train_state["current_epoch"] != expected_step):
+        _fail("Actual SD3 Resume cursor does not match physical reference geometry")
+    if (semantics.get("attention_contract") != "extra-attention-head-dim-v1"
+            or semantics.get("depth") != 24
+            or semantics.get("hidden_size") != 1536
+            or semantics.get("num_heads") != 24
+            or semantics.get("head_dim") != 64
+            or semantics.get("extra_attention_layers") != list(range(13))):
+        _fail("Checkpoint SD3.5 Medium forward semantics are not the audited reference")
+
+    all_files = _checkpoint_file_inventory(checkpoint)
+    if (not isinstance(worker_snapshot.get("state_file_sha256"), dict)
+            or all_files != worker_snapshot["state_file_sha256"]):
+        _fail("Real checkpoint state-file digest inventory differs from Worker snapshot")
+    expected_tensors = worker_snapshot.get("adapter_tensors")
+    if not isinstance(expected_tensors, Mapping) or not expected_tensors:
+        _fail("Missing real prepared-network adapter Tensor snapshot")
+    if _json_sha256(expected_tensors) != binding.get("adapter_tensor_inventory_sha256"):
+        _fail("Adapter Tensor inventory hash differs from real Worker snapshot")
+    if binding.get("adapter_file_sha256") != _sha256_file(expected_adapter_path):
+        _fail("Actual Step adapter file bytes differ from bound evidence")
+    adapter_check = verify_adapter_file(
+        expected_adapter_path, expected_file_sha256=binding["adapter_file_sha256"],
+        expected_tensors=expected_tensors,
+    )
+    return {
+        "status": "physical_binding_valid",
+        "case_id": case_id, "phase_id": expected_phase_id,
+        "logical_step": expected_step, "checkpoint_id": progress["checkpoint_id"],
+        "adapter_file_sha256": adapter_check["file_sha256"],
+        "adapter_tensor_inventory_sha256": adapter_check["tensor_inventory_sha256"],
+        "checkpoint_file_sha256": all_files,
+    }
 
 
 __all__ = [
@@ -853,5 +1018,6 @@ __all__ = [
     "decoded_rgb_pixel_sha256", "validate_qualification_preconditions",
     "validate_qualification_lease_records", "issue_phase_ticket",
     "claim_phase_ticket", "publish_phase_result", "verify_adapter_file",
-    "validate_adapter_checkpoint_binding",
+    "validate_adapter_checkpoint_metadata",
+    "verify_adapter_checkpoint_binding",
 ]
