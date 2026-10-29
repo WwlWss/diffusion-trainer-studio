@@ -1208,6 +1208,112 @@ class B0FinalStrictReviewR2RED(unittest.TestCase):
             with self.assertRaises(api.FullBF16EvidenceError):
                 self._bind(api, case, snapshot, binding)
 
+    def test_parameter_ownership_rejects_wrong_optimizer_child_and_frozen_trick(self):
+        api = _support()
+        mutations = ("all_frozen", "empty_component", "duplicate_child",
+                     "wrong_profile", "split_qkv", "wrong_saved_name")
+        for mutation in mutations:
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td), R2)
+                snap, bind = _write_host_checkpoint(case)
+                owner = snap["parameter_ownership"]
+                rows = owner["parameter_rows"]
+                if mutation == "all_frozen":
+                    for key, row in rows.items():
+                        row["requires_grad"] = False
+                        row["route_kind"] = "frozen"
+                        row["optimizer_profile"] = None
+                        snap["adapter_tensors"][key]["role"] = "frozen_weight"
+                    bind["adapter_tensor_inventory_sha256"] = api._json_sha256(snap["adapter_tensors"])
+                elif mutation == "empty_component":
+                    for row in rows.values():
+                        if row["component_id"] == "mmdit.mlp.adapter":
+                            row["component_id"] = "mmdit.attention.adapter"
+                elif mutation == "duplicate_child":
+                    k = next(iter(owner["optimizer_child_parameter_names"]))
+                    names = owner["optimizer_child_parameter_names"][k]
+                    names.append(names[0])
+                elif mutation == "wrong_profile":
+                    first = next(iter(rows.values()))
+                    first["optimizer_profile"] = "forged_optimizer"
+                elif mutation == "split_qkv":
+                    owner["network_split_qkv"] = True
+                elif mutation == "wrong_saved_name":
+                    first = next(iter(rows.values()))
+                    first["canonical_name"] = "network.another_module.weight"
+                with self.subTest(mutation=mutation), self.assertRaises(api.FullBF16EvidenceError):
+                    self._bind(api, case, snap, bind)
+
+    def test_resume_checks_fresh_digest_parent_identity_and_same_id(self):
+        api = _support()
+        mutations = ("fresh_file_changed", "coupled_wrong_parent", "same_checkpoint_id")
+        for mutation in mutations:
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td), R2)
+                fresh_snap, fresh_bind = _write_host_checkpoint(
+                    case, phase="fresh", phase_id="host-fresh-r2",
+                )
+                accepted = api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=fresh_snap,
+                    binding=fresh_bind, expected_phase_id="host-fresh-r2",
+                )
+                resume_snap, resume_bind = _write_host_checkpoint(
+                    case, phase="resume", phase_id="host-resume-r2",
+                    parent_id=accepted["checkpoint_id"],
+                )
+                if mutation == "fresh_file_changed":
+                    path = Path(case["fresh_checkpoint_dir"]) / "random_states_0.pkl"
+                    path.write_bytes(b"changed-after-fresh-accepted")
+                elif mutation == "coupled_wrong_parent":
+                    bogus = "c" * 32
+                    path = Path(case["resume_checkpoint_dir"]) / "dts_parameter_policy_progress.json"
+                    progress = json.loads(path.read_text(encoding="utf-8"))
+                    progress["resume_source_checkpoint_id"] = bogus
+                    path.write_text(json.dumps(progress), encoding="utf-8")
+                    resume_snap["state_file_sha256"][path.name] = _digest(path.read_bytes())
+                    resume_snap["expected_parent_checkpoint_id"] = bogus
+                elif mutation == "same_checkpoint_id":
+                    path = Path(case["resume_checkpoint_dir"]) / "dts_parameter_policy_progress.json"
+                    progress = json.loads(path.read_text(encoding="utf-8"))
+                    progress["checkpoint_id"] = accepted["checkpoint_id"]
+                    path.write_text(json.dumps(progress), encoding="utf-8")
+                    resume_snap["state_file_sha256"][path.name] = _digest(path.read_bytes())
+                    resume_snap["checkpoint_id"] = accepted["checkpoint_id"]
+                    resume_bind["checkpoint_id"] = accepted["checkpoint_id"]
+                with self.subTest(mutation=mutation), self.assertRaises(api.FullBF16EvidenceError):
+                    api.verify_adapter_checkpoint_binding(
+                        case_manifest=case, phase="resume", worker_snapshot=resume_snap,
+                        binding=resume_bind, expected_phase_id="host-resume-r2",
+                        accepted_fresh_evidence=accepted,
+                    )
+
+    def test_forward_and_scheduler_self_consistent_forgery_still_rejected(self):
+        api = _support()
+        for scenario in ("forged_forward", "forged_scheduler", "wrong_child_mode"):
+            with tempfile.TemporaryDirectory() as td:
+                case = self._case(Path(td))
+                snap, bind = _write_host_checkpoint(case)
+                checkpoint = Path(case["fresh_checkpoint_dir"])
+                if scenario == "forged_forward":
+                    path = checkpoint / "dts_sd3_forward_semantics.json"
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    payload["model_type_hint"] = "incorrect-but-internally-agreed"
+                    snap["forward_semantics"] = payload
+                else:
+                    path = checkpoint / "dts_parameter_policy_manifest.json"
+                    payload = json.loads(path.read_text(encoding="utf-8"))
+                    if scenario == "forged_scheduler":
+                        payload["scheduler_identity"]["lr_scheduler"] = "cosine"
+                        payload["scheduler_signature"] = api._json_sha256(payload["scheduler_identity"])
+                        snap["scheduler_identity"] = payload["scheduler_identity"]
+                        snap["scheduler_signature"] = payload["scheduler_signature"]
+                    else:
+                        payload["schedulers"][0]["mode"] = "optimizer_managed"
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                snap["state_file_sha256"][path.name] = _digest(path.read_bytes())
+                with self.subTest(scenario=scenario), self.assertRaises(api.FullBF16EvidenceError):
+                    self._bind(api, case, snap, bind)
+
     def test_red_step_zero_progress_cannot_prove_completed_step(self):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
