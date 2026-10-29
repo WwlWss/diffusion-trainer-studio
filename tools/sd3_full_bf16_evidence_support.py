@@ -691,70 +691,132 @@ def _safetensors_header(path: Path) -> tuple[dict[str, Any], int]:
         raise FullBF16EvidenceError(f"Invalid Safetensors header: {exc}") from exc
 
 
+_ADAPTER_DTYPE_BYTES = {
+    "BF16": 2, "F16": 2, "F32": 4, "F64": 8,
+    "I32": 4, "I64": 8,
+}
+
+
+def _adapter_key_role(key: str) -> tuple[str, str]:
+    for suffix, kind in (
+        (".lora_down.weight", "down"),
+        (".lora_up.weight", "up"),
+        (".alpha", "alpha"),
+    ):
+        if key.endswith(suffix):
+            name = key[:-len(suffix)]
+            if name.startswith("lora_") and "." not in name:
+                return name, kind
+    _fail(f"Unrecognized production SD3 LoRA state_dict key: {key}")
+
+
 def verify_adapter_file(
     path: Path, *, expected_file_sha256: str,
     expected_tensors: Mapping[str, Mapping[str, Any]],
 ) -> dict[str, Any]:
-    """Check *all* raw BF16 tensor bytes without importing Torch on Host."""
+    """Verify real SD3 LoRA down/up/alpha triplets, with BF16 trainable weights.
+
+    Alpha is a 0-dimensional nontrainable registered buffer whose *actual*
+    dtype/bytes must agree with the Worker snapshot. Never cast on Host.
+    """
     path = _real_path(str(path), name="adapter", must_exist=True)
     _require_sha(expected_file_sha256, name="adapter file sha256")
     if not path.is_file() or _sha256_file(path) != expected_file_sha256:
-        _fail("Adapter file bytes differ from the same-step snapshot")
+        _fail("Adapter file SHA256 does not match saved phase identity")
     if not isinstance(expected_tensors, Mapping) or not expected_tensors:
-        _fail("Adapter reference tensor inventory must be nonempty")
+        _fail("Expected live adapter inventory must be nonempty")
     try:
         from safetensors import safe_open
 
-        with safe_open(path, framework="np", device="cpu") as handle:
-            keys = set(handle.keys())
+        with safe_open(path, framework="np", device="cpu") as opened:
+            keys = set(opened.keys())
             if keys != set(expected_tensors):
-                _fail("Saved adapter full tensor-key set differs from live state")
-            for key in keys:
-                part = handle.get_slice(key)
-                if part.get_dtype() != "BF16":
-                    _fail(f"Adapter parameter must be BF16: {key}")
+                _fail("Full saved adapter tensor key set differs from live state")
+            modules: dict[str, set[str]] = {}
+            for key in sorted(keys):
                 ref = expected_tensors[key]
-                if (ref.get("dtype") != "BF16" or list(ref.get("shape", ())) != part.get_shape()):
-                    _fail(f"Adapter dtype/shape differs from live state: {key}")
+                if not isinstance(ref, Mapping):
+                    _fail(f"Missing reference tensor descriptor for {key}")
+                module, kind = _adapter_key_role(key)
+                modules.setdefault(module, set()).add(kind)
+                slice_ = opened.get_slice(key)
+                shape, dtype = slice_.get_shape(), slice_.get_dtype()
+                if shape != ref.get("shape") or dtype != ref.get("dtype"):
+                    _fail(f"Saved tensor shape/dtype differ from live snapshot: {key}")
+                role = ref.get("role")
+                if kind == "alpha":
+                    if (role != "alpha_buffer" or shape != []
+                            or dtype not in _ADAPTER_DTYPE_BYTES):
+                        _fail(f"Unsupported SD3 scalar alpha buffer: {key}")
+                else:
+                    if (role not in ("trainable_weight", "frozen_weight")
+                            or len(shape) not in (2, 4)
+                            or any(type(x) is not int or x <= 0 for x in shape)):
+                        _fail(f"Unreviewed SD3 LoRA weight role/dimensions: {key}")
+                    if role == "trainable_weight" and dtype != "BF16":
+                        _fail(f"Trainable LoRA weight is not BF16: {key}")
+                    if dtype not in ("BF16", "F32"):
+                        _fail(f"Unreviewed LoRA weight dtype: {key}")
+            if not modules or any(v != {"down", "up", "alpha"} for v in modules.values()):
+                _fail("Incomplete saved SD3 LoRA down/up/alpha module triplet")
+
         header, data_start = _safetensors_header(path)
         if set(header) - {"__metadata__"} != keys:
-            _fail("Safetensors header keys differ from payload keys")
-        with path.open("rb") as file:
+            _fail("Raw Safetensors tensor keys disagree with checked keys")
+        byte_ranges: list[tuple[int, int]] = []
+        with path.open("rb") as stream:
             for key in sorted(keys):
-                entry = header[key]
-                offsets = entry.get("data_offsets")
-                shape = entry.get("shape")
-                if (entry.get("dtype") != "BF16" or not isinstance(offsets, list)
-                        or len(offsets) != 2 or any(type(o) is not int for o in offsets)
+                ref, entry = expected_tensors[key], header[key]
+                offsets, shape, dtype = entry.get("data_offsets"), entry.get("shape"), entry.get("dtype")
+                if (not isinstance(offsets, list) or len(offsets) != 2
+                        or any(type(x) is not int for x in offsets)
                         or offsets[0] < 0 or offsets[1] <= offsets[0]
-                        or type(shape) is not list or any(type(o) is not int or o < 1 for o in shape)):
-                    _fail(f"Malformed BF16 tensor header: {key}")
-                if len(shape) != 2 and len(shape) != 1 and len(shape) != 3 and len(shape) != 4:
-                    _fail(f"Unreviewed Adapter tensor rank: {key}")
-                n = 1
+                        or not isinstance(shape, list)
+                        or any(type(x) is not int or x <= 0 for x in shape)
+                        or dtype != ref.get("dtype") or shape != ref.get("shape")
+                        or dtype not in _ADAPTER_DTYPE_BYTES):
+                    _fail(f"Malformed or mismatched Safetensors header: {key}")
+                _module, kind = _adapter_key_role(key)
+                if kind == "alpha" and shape != []:
+                    _fail(f"Alpha must be scalar: {key}")
+                if kind != "alpha" and len(shape) not in (2, 4):
+                    _fail(f"Unsupported weight rank: {key}")
+                elements = 1
                 for axis in shape:
-                    n *= axis
-                if offsets[1] - offsets[0] != n * 2:
-                    _fail(f"BF16 tensor byte size mismatch: {key}")
-                file.seek(data_start + offsets[0])
-                left = offsets[1] - offsets[0]
-                h = hashlib.sha256()
+                    elements *= axis
+                length = elements * _ADAPTER_DTYPE_BYTES[dtype]
+                if offsets[1] - offsets[0] != length:
+                    _fail(f"Invalid dtype-aware tensor byte count: {key}")
+                byte_ranges.append((offsets[0], offsets[1]))
+                stream.seek(data_start + offsets[0])
+                digest = hashlib.sha256()
+                left = length
                 while left:
-                    part = file.read(min(1024 * 1024, left))
-                    if not part:
-                        _fail(f"Truncated Adapter tensor data: {key}")
-                    h.update(part)
-                    left -= len(part)
-                _require_sha(expected_tensors[key].get("sha256"), name=f"live {key} fingerprint")
-                if h.hexdigest() != expected_tensors[key]["sha256"]:
-                    _fail(f"Adapter saved tensor differs from live BF16 state: {key}")
+                    piece = stream.read(min(left, 1024 * 1024))
+                    if not piece:
+                        _fail(f"Truncated tensor data: {key}")
+                    digest.update(piece)
+                    left -= len(piece)
+                _require_sha(ref.get("sha256"), name=f"{key} live tensor hash")
+                if digest.hexdigest() != ref["sha256"]:
+                    _fail(f"Tensor data does not equal live snapshot: {key}")
+        end = 0
+        for start, stop in sorted(byte_ranges):
+            if start != end:
+                _fail("Safetensors contains unaccounted or overlapping data")
+            end = stop
+        if data_start + end != path.stat().st_size:
+            _fail("Safetensors trailing data is not in the live inventory")
     except FullBF16EvidenceError:
         raise
     except (OSError, RuntimeError, ImportError, ValueError, KeyError, TypeError) as exc:
-        raise FullBF16EvidenceError(f"Cannot verify real BF16 Adapter file: {exc}") from exc
-    return {"status": "pass", "file_sha256": expected_file_sha256,
-            "tensor_inventory_sha256": _json_sha256(expected_tensors),
-            "tensor_count": len(expected_tensors)}
+        raise FullBF16EvidenceError(f"Cannot verify SD3 adapter file: {exc}") from exc
+    return {
+        "status": "file_verified",
+        "file_sha256": expected_file_sha256,
+        "tensor_inventory_sha256": _json_sha256(expected_tensors),
+        "tensor_count": len(expected_tensors),
+    }
 
 
 def validate_adapter_checkpoint_binding(
