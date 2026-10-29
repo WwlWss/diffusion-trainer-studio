@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** Fix A-2 contract reviewed; B0 Fix B GREEN-1 Host Support, R1/R2 Generator and RED/GREEN tests implemented. Focused Windows/Linux Host CI applies, but Fix C Worker, Fix D production Runner/complete CI, B1/B2 CUDA and release qualification are **not** complete.
+> **Status:** Fix B GREEN-1R strict-review repairs implemented for the Host Support/Generator; focused Windows/Linux CI and a new independent implementation Strict Review are required on the final candidate SHA. Fix C Worker, Fix D Runner/full CI, B1/B2 CUDA and release qualification are **not** complete.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
@@ -51,7 +51,7 @@ The B0 implementation PR may initially add helpers/tests alongside this plan, bu
 
 Sequence: **B0 Contract Review → B0 RED tests → B0 implementation → B0 independent Strict Host Review and CI → B1 R1 CUDA → B2 R2 CUDA → B3 same-HEAD regression and conditional release review.**
 
-Implementation slicing: **Fix A** contract closure and review (complete); **Fix B** pure Host support, isolated Generator, RED tests and focused cross-platform Host CI (implemented; implementation Strict Review remains); **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests (pending); **Fix D** Runner, end-to-end evidence negatives and integration with the existing comprehensive CI workflow (pending). Do not use Host fake events as CUDA qualification.
+Implementation slicing: **Fix A** contract closure and review (complete); **Fix B** pure Host support, isolated Generator, RED tests and GREEN-1R Host corrections (in implementation review); **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests (pending); **Fix D** Runner, end-to-end evidence negatives and integration with comprehensive CI (pending). Do not use Host fake events as CUDA qualification.
 
 ## 3. Exact candidate cases
 
@@ -140,6 +140,17 @@ All events include `case_id`, `source_commit`, unique `phase_id`, monotone `even
 ### 4.4 Additional observer source contract
 
 Production `Sd3NetworkTrainer.on_step_start` currently modifies only cached conditioning outputs and does not provide image keys. The ordinary Dataset returns `captions` even with Text Encoder cache. `CompositeLRScheduler` is returned from `session.build_scheduler` and, on Accelerate 1.6.0, is owned by `AcceleratedScheduler.scheduler`. Actual Scheduler state must be captured, not inferred from `scheduler_signature`. The Worker is **not** permitted to change these ownership or behavior contracts.
+
+### 4.4.1 Fix B GREEN-1R: Host data/file evidence is not CUDA execution
+
+This implementation closes the following *code review* gaps without changing production trainers:
+
+- **Real SD3 Adapter roles:** `lora_sd3.LoRANetwork.state_dict()` saves each normalized `<lora-module>.lora_down.weight`, `.lora_up.weight` and **0D `.alpha` buffer**. In particular split-QKV modules are merged back to canonical down/up names before saving. `verify_adapter_file()` requires the complete triplet and full key set, verified file SHA256, exact per-Tensor saved-versus-live dtype/shape/byte SHA256 and no unaccounted data. `trainable_weight` must be BF16; `frozen_weight` and `alpha_buffer` are verified against their actual saved live dtype instead of falsely requiring every buffer to be BF16. **Role assignment itself must be derived by the Fix C Worker from real prepared parameter ownership**, not trusted as proof merely because the Host fixture declares it.
+- **Complete DreamBooth entrypoint:** `verify_case_inputs()` checks `--train_data_dir`'s **parent**, requiring exactly one ordinary `1_dts_sd3c2b` child directory, with no unexpected files/subsets, symlinks or Windows reparse points. It continues verifying every expected PNG's full-file + decoded RGB SHA256 and each Caption SHA256. This is specific to C2-B0; the shared production DreamBooth parser remains unchanged.
+- **Two-tier Checkpoint validation:** `validate_adapter_checkpoint_metadata()` returns only `metadata_valid` for case/phase/step/path/ID fields. The distinct `verify_adapter_checkpoint_binding()` reads real state files and adapter content and checks Full-BF16 Manifest v2/Execution Identity v1, Progress v1, expected optimizer/scheduler child topology, SD3 Resume Cursor and actual file hashes. Its `physical_binding_valid` means **file and lineage coherence only**, never actual optimizer state restoration, CUDA Backward or qualification. The Fix C Worker must prove actual restored/advanced physical state; the Fix D Runner must validate ticket, events and subprocess outcomes before an aggregate `pass`.
+- **Clean source identity:** Generator checks HEAD, porcelain dirty tracked/untracked status and mismatched/conflicted initialized Git submodules. Uninitialized `-` entries (not used by this Host generator) still require exact in-use checkout validation by Runner/Worker. Pure Host fixtures explicitly mock source identity rather than weakening production command flags.
+- **Asset fixture distinction:** mock shape readers prove only **host_fixture** integration with the existing C2-A architecture blocker. Even if a stub returns a header-accepted branch, this is not a physical `preflight_pass` and never contributes to CUDA qualification. Real `validate_case_assets()` must run with unmocked readers for its actual asset-preflight claim.
+- **Worker Result boundary:** `publish_phase_result()` supports atomic no-overwrite publication of `incomplete`, `fail` or `worker_complete`, **not** `pass`/`qualified`; ticket IDs/nonces have bounded safe syntax. The future Host aggregate validator alone may produce a final evidence PASS after independently verifying all physical predicates.
 
 ### 4.5 Mandatory observation Host negatives
 
@@ -291,7 +302,7 @@ Strict Host Review checklist:
 2. Prove the exact observational seam is non-invasive: no extra Backward, optimizer/scheduler Step, or lost save/load hook; observation survives `Accelerator.prepare` and Resume.
 3. Check each claimed physical predicate is sourced from a real runtime object or checkpoint, not solely policy metadata or hardcoded/duplicated results.
 4. Run focused tests, `test_sd3_full_bf16_scope.py`, `test_sd3_component_gpu_evidence.py`, SD3 forward/resume tests and existing Parameter Policy runtime/boolean tests on the B0 commit.
-5. **Fix B focused CI / Fix D integration (P2-03):** `.github/workflows/sd3-c2b0-host.yml` runs the 25 B0 Host tests plus C2-A/R0 Host regressions on Windows and Linux; this is **not CUDA qualification**. In Fix D, also extend (do not replace) `.github/workflows/anima-qwen3-review.yml` changed-file triggers and existing `validate` / `Parameter Policy runtime smoke` test invocations. Exact-head full CI is still required before B0 acceptance.
+5. **Fix B focused CI / Fix D integration (P2-03):** `.github/workflows/sd3-c2b0-host.yml` runs the evolving B0 Host test suite plus C2-A/R0 Host regressions on Windows and Linux; this is **not CUDA qualification**. In Fix D, also extend (do not replace) `.github/workflows/anima-qwen3-review.yml` changed-file triggers and existing `validate` / `Parameter Policy runtime smoke` test invocations. Exact-head full CI is still required before B0 acceptance.
 6. No GPU PASS, no release-status change, no file written inside repository by the generator/runner, no quiet lowering of requirements to accommodate 16-GB memory.
 
 B0 is **ready for B1**, not `qualified`, only after independent Strict Host Review, complete negative cases and green exact-head CI.
