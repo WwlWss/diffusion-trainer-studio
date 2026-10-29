@@ -82,13 +82,13 @@ def _lease_records(case_id: str) -> list[dict]:
     ]
 
 
-def _source_dataset(root: Path, *, identical_pixels: bool = False) -> Path:
+def _source_dataset(root: Path, *, identical_pixels: bool = False, count: int = 2) -> Path:
     """Create real 512x512 RGB PNGs with captions, no model/network imports."""
     from PIL import Image, PngImagePlugin
 
     source = root / "source"
     source.mkdir()
-    for n in (1, 2):
+    for n in range(1, count + 1):
         rgb = (17, 29, 41) if identical_pixels else (n * 17, n * 29, n * 41)
         image = Image.new("RGB", (512, 512), rgb)
         metadata = PngImagePlugin.PngInfo()
@@ -101,7 +101,7 @@ def _source_dataset(root: Path, *, identical_pixels: bool = False) -> Path:
 
 
 def _generate(root: Path, case_id: str, *, identical_pixels: bool = False) -> dict:
-    src = _source_dataset(root, identical_pixels=identical_pixels)
+    src = _source_dataset(root, identical_pixels=identical_pixels, count=1 if case_id == R1 else 2)
     model = root / "model.safetensors"
     # Host fixture is deliberately NOT a real SD3 checkpoint. A separate
     # asset preflight must reject its header; generation only binds bytes.
