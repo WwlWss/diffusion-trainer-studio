@@ -13,7 +13,6 @@ import json
 import os
 from pathlib import Path
 import re
-import secrets
 import struct
 import tempfile
 from typing import Any
