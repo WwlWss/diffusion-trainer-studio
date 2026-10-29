@@ -396,23 +396,28 @@ class ParameterPolicyCompatibilityTests(unittest.TestCase):
     def test_invalid_global_runtime_field_values_fail_closed(self):
         cases = (
             ("fused_backward_pass", "maybe"),
-            ("fused_optimizer_groups", True),
-            ("fused_optimizer_groups", 1.5),
-            ("fused_optimizer_groups", float("inf")),
             ("blockwise_fused_optimizers", 2),
             ("deepspeed", []),
             ("full_fp16", "maybe"),
             ("fp8_base", []),
-            ("fp8_base_unet", "maybe"),
+            ("fp8_base_unet", "false"),
         )
         for field, value in cases:
-            with self.subTest(field=field), self.assertRaisesRegex(
-                ValueError,
-                field,
+            with self.subTest(field=field):
+                blockers = parameter_policy_v1_semantic_blockers(
+                    {field: value}, "flux-finetune",
+                )
+                self.assertEqual(len(blockers), 1, blockers)
+                self.assertIn(field, blockers[0])
+
+        # Non-Boolean integer/count fields retain their independent
+        # fail-closed numeric rules; do not reclassify these as booleans.
+        for bad in (True, 1.5, float("inf")):
+            with self.subTest(fused_optimizer_groups=bad), self.assertRaisesRegex(
+                ValueError, "fused_optimizer_groups",
             ):
                 parameter_policy_v1_semantic_blockers(
-                    {field: value},
-                    "flux-finetune",
+                    {"fused_optimizer_groups": bad}, "flux-finetune",
                 )
 
     def test_noncanonical_explicit_network_module_is_blocked(self):
