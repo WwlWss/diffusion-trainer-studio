@@ -330,6 +330,20 @@ class B0CrossPhaseInputIdentityRED(unittest.TestCase):
                 "complete",
             )
 
+    def test_host_fixture_identity_pass_is_not_real_model_preflight_pass(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            manifest = json.loads(
+                Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8")
+            )
+            self.assertEqual(
+                api.verify_case_inputs(manifest)["status"], "identity_pass"
+            )
+            # The generator intentionally accepts fake bytes as a Host
+            # fixture; the real SD3 asset/architecture gate must reject them.
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.validate_case_assets(manifest)
+
     def test_resume_rehash_rejects_mutated_caption_after_fresh(self):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
