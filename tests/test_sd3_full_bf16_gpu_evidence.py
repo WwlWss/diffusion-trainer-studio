@@ -959,12 +959,24 @@ class B0StrictReviewRegressionRED(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             payload = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
             with patch.object(scope, "_read_safetensors_shape_index", return_value=shape_fixture()):
-                result = api.validate_case_assets(payload)
-                self.assertEqual(result["status"], "preflight_pass")
-            with patch.object(scope, "_read_safetensors_shape_index",
-                              return_value=shape_fixture(variant="sd3-medium")):
-                with self.assertRaises(api.FullBF16EvidenceError):
-                    api.validate_case_assets(payload)
+                # This intentionally stubs the real model header. Its result
+                # is only a Host integration fixture, never physical asset
+                # preflight evidence or CUDA qualification.
+                integrated = api.validate_case_assets(payload)
+                host_fixture = {
+                    "status": "host_fixture",
+                    "tested_validator_branch": integrated["status"],
+                }
+                self.assertEqual(host_fixture["status"], "host_fixture")
+                self.assertEqual(host_fixture["tested_validator_branch"], "preflight_pass")
+            for variant in ("sd3-medium", "sd35-large-topology"):
+                with self.subTest(variant=variant):
+                    with patch.object(
+                        scope, "_read_safetensors_shape_index",
+                        return_value=shape_fixture(variant=variant),
+                    ):
+                        with self.assertRaises(api.FullBF16EvidenceError):
+                            api.validate_case_assets(payload)
 
 
 if __name__ == "__main__":
