@@ -65,9 +65,11 @@ Covered entrypoints:
 - Dev SD3/Flux/Chroma LoRA inherited `NetworkTrainer.train()`.
 - Dev Flux finetune `train()`.
 - Staged Anima LoRA inherits the patched NetworkTrainer entry.
-- Staged Anima full patch adds early checks immediately before the
-  first Component policy-file read; both Anima paths preserve staging
-  isolation and source pinning.
+- Staged Anima Full performs its early check as the **first action in
+  `train(args)`**, before `verify_training_args`, dataset creation, Qwen3
+  text encoder loading, embedding/latent caching and DiT loading; Anima
+  LoRA inherits the patched NetworkTrainer check before its dataset/model
+  work. Both paths preserve source-pinned isolated staging.
 
 Other direct standalone scripts without Component Policy integration have
 no new checks. This hotfix does not change Standard training semantics.
