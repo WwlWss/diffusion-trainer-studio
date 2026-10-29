@@ -444,6 +444,8 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                 for field, value in (
                     ("enable_bucket", True),
                     ("enable_bucket", "maybe"),
+                    ("no_half_vae", True),
+                    ("no_half_vae", "false"),
                     ("network_dropout", 0.1),
                     ("network_dropout", float("nan")),
                 ):
