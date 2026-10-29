@@ -13,6 +13,10 @@ from pathlib import Path
 from typing import Any
 
 from mikazuki.model_component_profiles import get_model_component_profile
+from mikazuki.parameter_policy_runtime_bools import (
+    component_runtime_boolean_type_blockers,
+    strict_component_runtime_bool,
+)
 from mikazuki.sd3_architecture_contract import (
     validate_sd3_mmdit_checkpoint,
 )
@@ -35,8 +39,6 @@ _EMBEDDED_SOURCE_KEYS = {
     "clip_g": "text_encoders.clip_g.transformer.text_model.embeddings.position_embedding.weight",
     "t5xxl": "text_encoders.t5xxl.transformer.encoder.block.0.layer.0.SelfAttention.k.weight",
 }
-_FALSE_VALUES = frozenset({"", "0", "false", "off", "no"})
-_TRUE_VALUES = frozenset({"1", "true", "on", "yes"})
 # Alternative Dataset Blueprint/custom loaders can override CLI batch/resolution.
 # Keep C2-B CUDA admission on the reference single-DreamBooth dataset path.
 _UNQUALIFIED_DATA_SOURCES = (
@@ -93,25 +95,6 @@ _UNQUALIFIED_SWITCHES = (
     "masked_loss",
     "resume_from_huggingface",
 )
-
-
-def _is_true(value: object) -> bool:
-    """Unparseable switch values are treated as active and therefore blocked."""
-    if value is None or value is False:
-        return False
-    if value is True:
-        return True
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        return value != 0
-    if isinstance(value, str):
-        return value.strip().lower() not in _FALSE_VALUES
-    return True
-
-
-def _is_explicit_true(value: object) -> bool:
-    if value is True or value == 1:
-        return True
-    return isinstance(value, str) and value.strip().lower() in _TRUE_VALUES
 
 
 def _is_exact_number(value: object, expected: int | float) -> bool:
@@ -301,6 +284,15 @@ def sd3_full_bf16_config_blockers(
     if not isinstance(canonical_policy, Mapping) or not isinstance(effective_config, Mapping):
         return ["SD3 Full-BF16 needs canonical policy and effective-config mappings."]
 
+    # Type compatibility is an independent safety condition. A quoted TOML
+    # "false" is True to the legacy Trainer, so no such string may be treated
+    # as an off-switch in this candidate Full-BF16 scope.
+    problems = component_runtime_boolean_type_blockers(
+        effective_config, train_type="sd3-lora",
+    )
+    if problems:
+        return problems
+
     case, problems = _optimizer_case(canonical_policy)
     if problems:
         return problems
@@ -319,10 +311,13 @@ def sd3_full_bf16_config_blockers(
         if value != expected:
             problems.append(f"SD3 Full-BF16 requires {field}={expected!r}.")
 
-    if not _is_explicit_true(effective_config.get("network_train_unet_only")):
+    if not strict_component_runtime_bool(
+        effective_config.get("network_train_unet_only"),
+        field="network_train_unet_only",
+    ):
         problems.append("SD3 Full-BF16 requires network_train_unet_only=true.")
     for flag in _UNQUALIFIED_SWITCHES:
-        if _is_true(effective_config.get(flag)):
+        if strict_component_runtime_bool(effective_config.get(flag), field=flag):
             problems.append(f"SD3 Full-BF16 does not qualify {flag}=true.")
     for flag in (
         "network_args", "network_weights", "base_weights", "optimizer_args",
@@ -351,7 +346,7 @@ def sd3_full_bf16_config_blockers(
     if not _is_reference_resolution(effective_config.get("resolution")):
         problems.append("SD3 Full-BF16 requires fixed resolution=512x512.")
     for flag in ("cache_latents", "cache_text_encoder_outputs"):
-        if not _is_explicit_true(effective_config.get(flag)):
+        if not strict_component_runtime_bool(effective_config.get(flag), field=flag):
             problems.append(f"SD3 Full-BF16 {case} requires {flag}=true.")
 
     return problems
