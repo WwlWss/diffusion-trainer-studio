@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** DESIGN v2.1 — Fix A-2 contract closure applied; targeted independent re-review pending. No B0 code or physical CUDA acceptance yet.
+> **Status:** Fix A-2 contract reviewed; B0 Fix B GREEN-1 Host Support, R1/R2 Generator and RED/GREEN tests implemented. Focused Windows/Linux Host CI applies, but Fix C Worker, Fix D production Runner/complete CI, B1/B2 CUDA and release qualification are **not** complete.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
@@ -51,7 +51,7 @@ The B0 implementation PR may initially add helpers/tests alongside this plan, bu
 
 Sequence: **B0 Contract Review → B0 RED tests → B0 implementation → B0 independent Strict Host Review and CI → B1 R1 CUDA → B2 R2 CUDA → B3 same-HEAD regression and conditional release review.**
 
-Implementation slicing: **Fix A** this documentation-only repair and independent contract review; **Fix B** pure Host support, Generator and RED tests; **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests; **Fix D** Runner, negative cases and workflow triggers. Do not use Host fake events as CUDA qualification.
+Implementation slicing: **Fix A** contract closure and review (complete); **Fix B** pure Host support, isolated Generator, RED tests and focused cross-platform Host CI (implemented; implementation Strict Review remains); **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests (pending); **Fix D** Runner, end-to-end evidence negatives and integration with the existing comprehensive CI workflow (pending). Do not use Host fake events as CUDA qualification.
 
 ## 3. Exact candidate cases
 
@@ -291,7 +291,7 @@ Strict Host Review checklist:
 2. Prove the exact observational seam is non-invasive: no extra Backward, optimizer/scheduler Step, or lost save/load hook; observation survives `Accelerator.prepare` and Resume.
 3. Check each claimed physical predicate is sourced from a real runtime object or checkpoint, not solely policy metadata or hardcoded/duplicated results.
 4. Run focused tests, `test_sd3_full_bf16_scope.py`, `test_sd3_component_gpu_evidence.py`, SD3 forward/resume tests and existing Parameter Policy runtime/boolean tests on the B0 commit.
-5. **Fix D / P2-03:** extend (do not replace) `.github/workflows/anima-qwen3-review.yml` triggers for this document, all new B0 tools and focused Host tests; add those tests to existing validation jobs. The **docs-only Fix A SHA currently has no triggered B0 workflow**, so no CI success is claimed. Later require green exact-head `validate` and `Parameter Policy runtime smoke` before B0 implementation acceptance.
+5. **Fix B focused CI / Fix D integration (P2-03):** `.github/workflows/sd3-c2b0-host.yml` runs the 25 B0 Host tests plus C2-A/R0 Host regressions on Windows and Linux; this is **not CUDA qualification**. In Fix D, also extend (do not replace) `.github/workflows/anima-qwen3-review.yml` changed-file triggers and existing `validate` / `Parameter Policy runtime smoke` test invocations. Exact-head full CI is still required before B0 acceptance.
 6. No GPU PASS, no release-status change, no file written inside repository by the generator/runner, no quiet lowering of requirements to accommodate 16-GB memory.
 
 B0 is **ready for B1**, not `qualified`, only after independent Strict Host Review, complete negative cases and green exact-head CI.
