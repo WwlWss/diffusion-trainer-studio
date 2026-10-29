@@ -77,6 +77,8 @@ _COMMON_VALUES = frozenset({
 _CASE_FLAGS = _BOOLEAN_FLAGS | _COMMON_VALUES | {"--output_dir", "--resume"}
 _HEX64 = re.compile(r"[0-9a-f]{64}\Z")
 _HEX40 = re.compile(r"[0-9a-f]{40}\Z")
+_PHASE_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{7,127}\Z")
+_CHECKPOINT_IDENTIFIER = re.compile(r"[0-9a-f]{32}\Z")
 
 
 class FullBF16EvidenceError(ValueError):
@@ -582,9 +584,11 @@ def _validate_ticket(ticket: object) -> dict[str, Any]:
         _fail("Unknown Worker phase ticket schema")
     if ticket.get("case_id") not in _CASES or ticket.get("phase") not in ("fresh", "resume"):
         _fail("Invalid Worker case/phase")
-    for k in ("run_id", "phase_id", "nonce"):
-        if not isinstance(ticket.get(k), str) or not ticket[k]:
-            _fail(f"Missing ticket {k}")
+    for k in ("run_id", "phase_id"):
+        if (not isinstance(ticket.get(k), str)
+                or not _PHASE_IDENTIFIER.fullmatch(ticket[k])):
+            _fail(f"Ticket {k} must be a safe bounded identifier")
+    _require_sha(ticket.get("nonce"), name="one-shot ticket nonce")
     for k in ("manifest_sha256", "input_identity_sha256", "effective_argv_sha256"):
         _require_sha(ticket.get(k), name=k)
     _require_sha(ticket.get("source_commit"), name="source_commit", commit=True)
@@ -592,8 +596,11 @@ def _validate_ticket(ticket: object) -> dict[str, Any]:
         _fail("Ticket cannot choose arbitrary Worker entrypoint")
     if ticket["phase"] == "fresh" and ticket.get("expected_resume_checkpoint_id") is not None:
         _fail("Fresh ticket cannot inherit a Checkpoint")
-    if ticket["phase"] == "resume" and not isinstance(ticket.get("expected_resume_checkpoint_id"), str):
-        _fail("Resume ticket must bind a real Fresh checkpoint ID")
+    if ticket["phase"] == "resume" and (
+        not isinstance(ticket.get("expected_resume_checkpoint_id"), str)
+        or not _CHECKPOINT_IDENTIFIER.fullmatch(ticket["expected_resume_checkpoint_id"])
+    ):
+        _fail("Resume ticket must bind the exact Fresh 32-hex checkpoint ID")
     _external_work_path(ticket.get("output_dir"), name="ticket output")
     _canonical_json_bytes(ticket)
     return ticket
