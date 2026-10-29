@@ -297,6 +297,84 @@ class B0GeneratorAndInputIdentityRED(unittest.TestCase):
 
 
 
+class B0CrossPhaseInputIdentityRED(unittest.TestCase):
+    def _fresh_step_artifacts(self, manifest: dict) -> None:
+        ckpt = Path(manifest["fresh_checkpoint_dir"])
+        ckpt.mkdir(parents=True, exist_ok=False)
+        Path(manifest["fresh_adapter_path"]).write_bytes(b"checkpoint-file-fixture")
+
+    def test_resume_preflight_accepts_finished_fresh_but_not_stale_resume(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            manifest = json.loads(
+                Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8")
+            )
+            self._fresh_step_artifacts(manifest)
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.validate_case_manifest(manifest)
+            self.assertEqual(
+                api.validate_case_manifest(manifest, phase="resume")["phase"],
+                "resume",
+            )
+            self.assertEqual(
+                api.verify_case_inputs(manifest, phase="resume")["status"],
+                "identity_pass",
+            )
+            resume = Path(manifest["resume_checkpoint_dir"])
+            resume.mkdir(parents=True, exist_ok=False)
+            Path(manifest["resume_adapter_path"]).write_bytes(
+                b"checkpoint-file-fixture"
+            )
+            self.assertEqual(
+                api.validate_case_manifest(manifest, phase="complete")["phase"],
+                "complete",
+            )
+
+    def test_resume_rehash_rejects_mutated_caption_after_fresh(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = json.loads(
+                Path(_generate(root, R1)["manifest"]).read_text(encoding="utf-8")
+            )
+            self._fresh_step_artifacts(manifest)
+            api.verify_case_inputs(manifest, phase="resume")
+            caption = root / "work" / "data" / "1_dts_sd3c2b" / "sample_0001.caption"
+            caption.write_text("tampered input after Fresh\n", encoding="utf-8")
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_case_inputs(manifest, phase="resume")
+
+    def test_resume_rehash_rejects_unrecorded_dataset_file(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = json.loads(
+                Path(_generate(root, R1)["manifest"]).read_text(encoding="utf-8")
+            )
+            self._fresh_step_artifacts(manifest)
+            (root / "work" / "data" / "1_dts_sd3c2b" / "surprise.npz").write_bytes(
+                b"unapproved cache"
+            )
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_case_inputs(manifest, phase="resume")
+
+    def test_manifest_rejects_boolean_used_as_integer_reference(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            manifest = json.loads(
+                Path(_generate(root, R1)["manifest"]).read_text(encoding="utf-8")
+            )
+            for field in ("train_batch_size", "gradient_accumulation_steps",
+                          "effective_batches_per_epoch"):
+                bad = copy.deepcopy(manifest)
+                bad["reference"][field] = True
+                with self.subTest(field=field), self.assertRaises(
+                    api.FullBF16EvidenceError
+                ):
+                    api.validate_case_manifest(bad)
+
+
 class B0OptimizerQualificationRED(unittest.TestCase):
     def test_only_pending_backend_may_receive_qualification_lease(self):
         api = _support()
