@@ -83,7 +83,8 @@ def _source_submodule_inventory() -> dict[str, dict[str, str]]:
         if match is None:
             raise support.FullBF16EvidenceError(f"Invalid git submodule status row: {line!r}")
         status, commit, name = match.groups()
-        if name in result or name not in _SOURCE_SUBMODULES:
+        if (name in result or not (name in _SOURCE_SUBMODULES
+                or any(name.startswith(parent + "/") for parent in _SOURCE_SUBMODULES))):
             raise support.FullBF16EvidenceError(f"Unreviewed or duplicate source submodule: {name!r}")
         if status in ("+", "U"):
             raise support.FullBF16EvidenceError(f"Submodule mismatches Gitlink: {line!r}")
@@ -91,7 +92,7 @@ def _source_submodule_inventory() -> dict[str, dict[str, str]]:
             "gitlink_sha": support._require_sha(commit, name=f"{name} Gitlink", commit=True),
             "checkout": "uninitialized" if status == "-" else "initialized",
         }
-    if set(result) != _SOURCE_SUBMODULES:
+    if not _SOURCE_SUBMODULES.issubset(result):
         raise support.FullBF16EvidenceError("Missing expected source submodule Gitlinks")
     return dict(sorted(result.items()))
 
