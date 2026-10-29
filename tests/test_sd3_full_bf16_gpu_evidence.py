@@ -257,7 +257,7 @@ class B0GeneratorAndInputIdentityRED(unittest.TestCase):
             with self.assertRaises(api.FullBF16EvidenceError):
                 _generate(Path(td), R2, identical_pixels=True)
 
-    def test_generator_fails_closed_on_existing_root_or_missing_caption(self):
+    def test_generator_fails_closed_on_existing_root(self):
         api = _support()
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)
@@ -271,6 +271,30 @@ class B0GeneratorAndInputIdentityRED(unittest.TestCase):
                         for name in ("--clip_l", "--clip_g", "--t5xxl", "--vae")
                     },
                 )
+
+
+    def test_generator_rejects_missing_source_caption(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            src = _source_dataset(root)
+            (src / "original_0002.caption").unlink()
+            model = root / "model.safetensors"
+            model.write_bytes(b"host-only-header-fixture")
+            assets = {}
+            for key in ("--clip_l", "--clip_g", "--t5xxl", "--vae"):
+                asset = root / (key[2:] + ".safetensors")
+                asset.write_bytes(b"host-only-asset")
+                assets[key] = asset
+            with self.assertRaises(api.FullBF16EvidenceError):
+                _generator().generate(
+                    case_id=R2,
+                    model=model,
+                    data_dir=src,
+                    work_dir=root / "work",
+                    external_models=assets,
+                )
+
 
 
 class B0OptimizerQualificationRED(unittest.TestCase):
