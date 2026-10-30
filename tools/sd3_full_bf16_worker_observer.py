@@ -211,18 +211,32 @@ def observe_prepared_ownership(
     for runtime_spec, entry in zip(session.runtime_spec.optimizers, optimizer.entries):
         if runtime_spec.profile_name != entry.profile_name:
             _fail("Runtime Profile differs from physical Child ordering")
+        if len(runtime_spec.groups) != len(entry.optimizer.param_groups):
+            _fail("Physical Child has extra/missing RuntimeSpec Parameter Groups")
         spec_names = []
-        for group_spec in runtime_spec.groups:
-            for p in group_spec.parameters:
-                if p.parameter_id != id(p.parameter):
-                    _fail("RuntimeSpec contains stale Parameter ID")
-                spec_names.append(p.canonical_name)
         group_names = []
-        for group in entry.optimizer.param_groups:
-            for p in group["params"]:
-                if id(p) not in by_id:
+        for group_spec, group in zip(runtime_spec.groups, entry.optimizer.param_groups):
+            expected_ids = tuple(p.parameter_id for p in group_spec.parameters)
+            actual_ids = tuple(id(p) for p in group["params"])
+            if expected_ids != actual_ids:
+                _fail("Physical Child Parameter Group/order differs from RuntimeSpec")
+            if group.get("lr") != group_spec.learning_rate:
+                _fail("Physical Child learning-rate group differs from reviewed RuntimeSpec")
+            for p in group_spec.parameters:
+                if p.parameter_id != id(p.parameter) or p.canonical_name not in assignments:
+                    _fail("RuntimeSpec contains stale or unknown physical Parameter")
+                route = assignments[p.canonical_name]
+                if (p.parameter is not route.parameter or
+                        p.component_id != route.component_id or
+                        p.route_kind != route.route_kind or
+                        p.parameter_class != route.parameter_class or
+                        tuple(p.shape) != tuple(p.parameter.shape)):
+                    _fail("RuntimeSpec and physical RoutingPlan disagree on Component/Route")
+                spec_names.append(p.canonical_name)
+            for param in group["params"]:
+                if id(param) not in by_id:
                     _fail("Physical Child owns unknown or frozen Parameter")
-                group_names.append(by_id[id(p)])
+                group_names.append(by_id[id(param)])
         if len(spec_names) != len(set(spec_names)) or set(spec_names) != set(group_names):
             _fail("Runtime/physical Child Parameter mismatch")
         if len(group_names) != len(set(group_names)):
