@@ -50,7 +50,7 @@ def fixture(root: Path, case_id: str = R1):
     return manifest, ticket, manifest_file, ticket_path
 
 
-class C2TicketAndAssetGateRED(unittest.TestCase):
+class C2TicketAndAssetGateContract(unittest.TestCase):
     def test_resolve_rejects_invalid_model_before_ticket_claim(self):
         """Generator accepts synthetic Host model; Worker MUST reject it."""
         with tempfile.TemporaryDirectory() as td:
@@ -106,7 +106,7 @@ class C2TicketAndAssetGateRED(unittest.TestCase):
             self.assertFalse(alias.with_name(alias.name + ".consumed").exists())
 
 
-class C2LeaseRED(unittest.TestCase):
+class C2LeaseContract(unittest.TestCase):
     def setUp(self):
         from mikazuki import parameter_policy_execution as execution
         self.execution = execution
@@ -192,7 +192,7 @@ class C2LeaseRED(unittest.TestCase):
             self.execution.FULL_BF16_BACKEND_QUALIFICATIONS["sdxl-lora"] = original
 
 
-class C2FailurePublicationRED(unittest.TestCase):
+class C2FailurePublicationContract(unittest.TestCase):
     def test_failure_payload_never_claims_qualification(self):
         with tempfile.TemporaryDirectory() as td:
             result = Path(td) / "result.json"
@@ -213,7 +213,7 @@ class C2FailurePublicationRED(unittest.TestCase):
                 )
 
 
-class C2ClaimAndFailureRED(unittest.TestCase):
+class C2ClaimAndFailureContract(unittest.TestCase):
     def test_post_claim_runtime_failure_is_recorded_and_ticket_cannot_replay(self):
         with tempfile.TemporaryDirectory() as td:
             manifest, ticket, _mf, path = fixture(Path(td))
