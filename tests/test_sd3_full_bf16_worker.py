@@ -130,7 +130,7 @@ class TimelineContractRED(unittest.TestCase):
         stream = [
             event("batch_started", 1, batch=1, sample="dts_c2b_sample_0001", sync=True),
             event("backward_completed", 2, batch=1, sample="dts_c2b_sample_0001", sync=True),
-            event("physical_child_stepped", 3, profile="adamw_main"),
+            event("physical_child_stepped", 3, profile="baseline"),
             event("physical_scheduler_stepped", 4),
             event("checkpoint_saved", 5),
             event("train_completed", 6),

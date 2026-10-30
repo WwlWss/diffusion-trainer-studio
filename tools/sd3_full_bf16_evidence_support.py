@@ -1446,9 +1446,174 @@ def verify_adapter_checkpoint_binding(
     }
 
 
+
+def validate_worker_event_stream(
+    *, case_id: str, phase: str, events: object,
+) -> dict[str, Any]:
+    """Pure Host metadata/order validator, NEVER physical CUDA proof.
+
+    A Fresh one-step prefix may pass this metadata check; Fix D must require
+    full two-step physical Fresh/Resume evidence and authenticated processes.
+    """
+    spec = get_case_spec(case_id)
+    if phase not in ("fresh", "resume") or not isinstance(events, (list, tuple)):
+        _fail("Worker timeline requires a known phase and event array")
+    if not 1 <= len(events) <= 256:
+        _fail("Worker timeline has an invalid event count")
+    expected_profiles = set(build_reference_policy(case_id)["optimizer_profiles"])
+    basic = {
+        "run_id", "phase_id", "case_id", "source_commit",
+        "event_seq", "event_type", "logical_step",
+    }
+    allowed = {
+        "checkpoint_loaded", "batch_started", "backward_completed",
+        "physical_child_stepped", "physical_scheduler_stepped",
+        "checkpoint_saved", "train_completed",
+    }
+    identity = None
+    loaded = False
+    finished = False
+    active_step: int | None = None
+    completed_step = None
+    batches_in_step = 0
+    backward_for_batch = False
+    current_sample = None
+    samples_in_step: set[str] = set()
+    children_in_step: set[str] = set()
+    scheduler_stepped = False
+    save_seen = False
+    saved_steps: list[int] = []
+    for index, event in enumerate(events, 1):
+        if not isinstance(event, Mapping) or not basic.issubset(event):
+            _fail("Worker timeline event is missing required metadata")
+        if (type(event.get("event_seq")) is not int
+                or event["event_seq"] != index):
+            _fail("Worker timeline has duplicate/missing/out-of-order event sequence")
+        if event.get("event_type") not in allowed:
+            _fail("Worker timeline contains unknown or nonphysical event type")
+        if event["case_id"] != case_id or not isinstance(event["source_commit"], str):
+            _fail("Worker timeline case/source identity mismatch")
+        _require_sha(event["source_commit"], name="timeline source_commit", commit=True)
+        if (not isinstance(event["run_id"], str) or not _PHASE_IDENTIFIER.fullmatch(event["run_id"])
+                or not isinstance(event["phase_id"], str)
+                or not _PHASE_IDENTIFIER.fullmatch(event["phase_id"])):
+            _fail("Worker timeline run/phase identity malformed")
+        event_identity = (event["run_id"],event["phase_id"],event["source_commit"])
+        if identity is None:
+            identity = event_identity
+        elif identity != event_identity:
+            _fail("Worker timeline mixed identities or source commits")
+        step = event["logical_step"]
+        if type(step) is not int or step not in (1, 2):
+            _fail("Worker timeline logical Step outside fixed two-step case")
+        kind = event["event_type"]
+        if finished:
+            _fail("Worker timeline contains events after train_completed")
+        if kind == "checkpoint_loaded":
+            if phase != "resume" or index != 1 or loaded or step != 1:
+                _fail("Resume must first load exactly one Fresh Step-1 Checkpoint")
+            if not isinstance(event.get("checkpoint_id"), str) or not _CHECKPOINT_IDENTIFIER.fullmatch(event["checkpoint_id"]):
+                _fail("Invalid real Resume checkpoint ID metadata")
+            loaded = True
+            continue
+        if kind == "batch_started":
+            if phase == "resume" and not loaded:
+                _fail("Resume cannot begin training before Checkpoint load")
+            if (phase == "fresh" and step == 2 and completed_step != 1
+                    or phase == "resume" and step != 2):
+                _fail("Unapproved Fresh/Resume logical Step transition")
+            if active_step is None or step != active_step:
+                if active_step is not None and not save_seen:
+                    _fail("Previous physical Step did not save before next Step")
+                if active_step is not None and step != active_step + 1:
+                    _fail("Worker timeline skipped a logical Step")
+                active_step = step
+                batches_in_step = 0
+                children_in_step = set()
+                samples_in_step = set()
+                scheduler_stepped = False
+                save_seen = False
+            if save_seen or (batches_in_step > 0 and not backward_for_batch):
+                _fail("Batch started before the prior Backward/Step completed")
+            batches_in_step += 1
+            if batches_in_step > spec["gradient_accumulation_steps"]:
+                _fail("Worker timeline has too many physical Microbatches")
+            micro = event.get("microbatch_index")
+            sync = event.get("sync_gradients")
+            if (type(micro) is not int or micro != batches_in_step
+                    or type(sync) is not bool
+                    or sync != (micro == spec["gradient_accumulation_steps"])):
+                _fail("Worker timeline uses incorrect real accumulation geometry")
+            marker = event.get("sample_identity")
+            if (not isinstance(marker, str)
+                    or re.fullmatch(r"dts_c2b_sample_[0-9]{4}", marker) is None
+                    or marker in samples_in_step):
+                _fail("Worker timeline has invalid/repeated physical Caption marker")
+            samples_in_step.add(marker)
+            current_sample = marker
+            backward_for_batch = False
+            continue
+        if kind == "backward_completed":
+            if (step != active_step or backward_for_batch
+                    or type(event.get("microbatch_index")) is not int
+                    or event["microbatch_index"] != batches_in_step
+                    or event.get("sample_identity") != current_sample
+                    or event.get("sync_gradients") is not
+                    (batches_in_step == spec["gradient_accumulation_steps"])):
+                _fail("Worker Backward did not match its real observed Batch")
+            backward_for_batch = True
+            continue
+        if kind in ("physical_child_stepped", "physical_scheduler_stepped"):
+            if (step != active_step or not backward_for_batch
+                    or batches_in_step != spec["gradient_accumulation_steps"]
+                    or save_seen):
+                _fail("Physical optimizer/scheduler step occurred before sync Backward")
+            if kind == "physical_child_stepped":
+                profile = event.get("optimizer_profile")
+                if (profile not in expected_profiles or profile in children_in_step
+                        or scheduler_stepped):
+                    _fail("Unknown/duplicate/late physical Optimizer Child step")
+                children_in_step.add(profile)
+            else:
+                if scheduler_stepped or children_in_step != expected_profiles:
+                    _fail("Physical Scheduler stepped before exactly all Child optimizers")
+                scheduler_stepped = True
+            continue
+        if kind == "checkpoint_saved":
+            if (step != active_step or save_seen
+                    or not backward_for_batch or not scheduler_stepped
+                    or children_in_step != expected_profiles
+                    or not isinstance(event.get("checkpoint_id"), str)
+                    or not _CHECKPOINT_IDENTIFIER.fullmatch(event["checkpoint_id"])):
+                _fail("Worker saved Checkpoint without completed physical Step")
+            save_seen = True
+            completed_step = step
+            saved_steps.append(step)
+            continue
+        if kind == "train_completed":
+            if (index != len(events) or not saved_steps or not save_seen
+                    or completed_step != step):
+                _fail("Worker train_completed without complete Step/Checkpoint metadata")
+            finished = True
+    if not finished or (phase == "resume" and not loaded):
+        _fail("Worker timeline lacks final completion or Resume load evidence")
+    if phase == "fresh" and (not saved_steps or saved_steps[0] != 1):
+        _fail("Fresh Step-1 handoff metadata is missing")
+    if phase == "resume" and saved_steps != [2]:
+        _fail("Resume must save exactly Step-2")
+    return {
+        "status": "timeline_metadata_valid",
+        "case_id": case_id, "phase": phase,
+        "run_id": identity[0], "phase_id": identity[1],
+        "observed_saved_steps": saved_steps,
+        "events": len(events), "physical_cuda_qualified": False,
+    }
+
+
 __all__ = [
     "FullBF16EvidenceError", "get_case_spec", "build_reference_policy",
     "validate_case_manifest", "validate_case_assets", "verify_case_inputs",
+    "validate_worker_event_stream",
     "decoded_rgb_pixel_sha256", "validate_qualification_preconditions",
     "validate_qualification_lease_records", "issue_phase_ticket",
     "claim_phase_ticket", "publish_phase_result", "verify_adapter_file",
