@@ -1699,5 +1699,43 @@ class B0FinalStrictReviewR3RED(unittest.TestCase):
                 )
 
 
+class B0FinalStrictReviewR4RED(unittest.TestCase):
+    def test_resume_rejects_changed_external_fresh_adapter_after_acceptance(self):
+        """Only Fresh external adapter bytes change: all state/IDs stay valid."""
+        api = _support()
+        for case_id in (R1, R2):
+            with self.subTest(case_id=case_id):
+                with tempfile.TemporaryDirectory() as td:
+                    case = json.loads(
+                        Path(_generate(Path(td), case_id)["manifest"])
+                        .read_text(encoding="utf-8")
+                    )
+                    fresh_snapshot, fresh_binding = _write_host_checkpoint(
+                        case, phase="fresh", phase_id="r4-accepted-fresh",
+                    )
+                    accepted_fresh = api.verify_adapter_checkpoint_binding(
+                        case_manifest=case, phase="fresh",
+                        worker_snapshot=fresh_snapshot, binding=fresh_binding,
+                        expected_phase_id="r4-accepted-fresh",
+                    )
+                    resume_snapshot, resume_binding = _write_host_checkpoint(
+                        case, phase="resume", phase_id="r4-valid-resume",
+                        parent_id=accepted_fresh["checkpoint_id"],
+                    )
+                    fresh_adapter = Path(case["fresh_adapter_path"])
+                    edited = bytearray(fresh_adapter.read_bytes())
+                    edited[-1] ^= 0x01  # Same-length valid Safetensors, different tensor byte.
+                    fresh_adapter.write_bytes(edited)
+                    # Crucially DO NOT change the accepted Fresh result or
+                    # any of the 9 actual Fresh Checkpoint state files.
+                    with self.assertRaises(api.FullBF16EvidenceError):
+                        api.verify_adapter_checkpoint_binding(
+                            case_manifest=case, phase="resume",
+                            worker_snapshot=resume_snapshot, binding=resume_binding,
+                            expected_phase_id="r4-valid-resume",
+                            accepted_fresh_evidence=accepted_fresh,
+                        )
+
+
 if __name__ == "__main__":
     unittest.main()
