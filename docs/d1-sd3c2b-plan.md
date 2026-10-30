@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** Fix B GREEN-1R4 focused Host/CPU repair gates implemented and passing on the repaired candidate (Fresh Step-1 external Adapter re-hash at Resume, real-Torch C2-A zero-skip suite, production LoRA save_weights smoke and dependency-trigger closure). An exact-final-HEAD CI verification and independent Final Strict Code Review remain required before proceeding to Fix C. Fix D Runner/full CI, B1/B2 physical CUDA and Full-BF16 release are **not** complete.
+> **Status:** Fix B GREEN-1R4 Host/CPU completed and independently Final Strict Reviewed at `b5ff9f95802b60e636d86799c5160073bf9b5ec0` (PASS; GitHub Actions #41076829841, 232 PASS / 6 intentional Host SKIP / 0 FAIL). Fix C C0 frozen Worker contract: `docs/d1-sd3c2b-fix-c-worker-contract.md`; C1 RED/Worker GREEN, Fix D Runner, real B1/B2 CUDA and Full-BF16 release are **not** complete.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
@@ -14,7 +14,7 @@
 | D1-SD3C1, PR #62 | `docs/parameter-policy-sd3-component-baseline.md`; R0 production Component mixed-BF16 AdamW CUDA | merged |
 | D1-SD3C2-A, PR #63 | `docs/parameter-policy-sd3-full-bf16-scope.md`; pure R1/R2 host admission and asset gate | merged; backend pending |
 | Shared safety, PR #64 | `mikazuki/parameter_policy_runtime_bools.py` and early direct-trainer preflight | merged |
-| **D1-SD3C2-B0** | This plan, generator, runner, worker, tests | planning; no CUDA claim |
+| **D1-SD3C2-B0** | This plan, C0 Worker contract, generator, runner, worker, tests | Fix B reviewed; Fix C/D pending; no CUDA claim |
 
 The following are **sources of truth**, rather than a second runtime implementation:
 
@@ -51,7 +51,7 @@ The B0 implementation PR may initially add helpers/tests alongside this plan, bu
 
 Sequence: **B0 Contract Review → B0 RED tests → B0 implementation → B0 independent Strict Host Review and CI → B1 R1 CUDA → B2 R2 CUDA → B3 same-HEAD regression and conditional release review.**
 
-Implementation slicing: **Fix A** contract closure and review (complete); **Fix B** pure Host support, isolated Generator, RED tests and GREEN-1R Host corrections (in implementation review); **Fix C** scoped Worker/observer with small real CPU optimizer/scheduler behavior tests (pending); **Fix D** Runner, end-to-end evidence negatives and integration with comprehensive CI (pending). Do not use Host fake events as CUDA qualification.
+Implementation slicing: **Fix A** reviewed contract (complete); **Fix B** Host/Generator and pinned CPU GREEN-1R4 (Final Strict Review PASS); **Fix C** separately frozen C0 Worker contract in `docs/d1-sd3c2b-fix-c-worker-contract.md` (C1 RED next); **Fix D** Runner, end-to-end evidence negatives and comprehensive CI (pending). Do not use Host fake events as CUDA qualification.
 
 ## 3. Exact candidate cases
 
