@@ -32,8 +32,8 @@ def observer():
     return importlib.import_module("tools.sd3_full_bf16_worker_observer")
 
 
-def build_two_child_cpu():
-    """Real BF16 2-Child facade, actual Accelerate prepare, zero synthetic Step."""
+def build_two_child_cpu(*, production_default_accumulator: bool = False):
+    """Real BF16 two-Child facade with explicit or production-default accumulation."""
     torch.manual_seed(123456)
     model = torch.nn.ModuleDict({
         "left": torch.nn.Linear(4, 4, bias=False, dtype=torch.bfloat16),
@@ -72,13 +72,22 @@ def build_two_child_cpu():
             scheduler_type="torch.optim.lr_scheduler.LambdaLR",
         ),
     ))
-    acc = Accelerator(
-        cpu=True, mixed_precision="no",
-        gradient_accumulation_plugin=GradientAccumulationPlugin(
-            num_steps=2, adjust_scheduler=False,
-        ),
-        step_scheduler_with_optimizer=True,
-    )
+    if production_default_accumulator:
+        # Mirrors production train_util.prepare_accelerator(args): it passes
+        # gradient_accumulation_steps, not a custom GradientAccumulationPlugin.
+        acc = Accelerator(
+            cpu=True, mixed_precision="no",
+            gradient_accumulation_steps=2,
+            step_scheduler_with_optimizer=True,
+        )
+    else:
+        acc = Accelerator(
+            cpu=True, mixed_precision="no",
+            gradient_accumulation_plugin=GradientAccumulationPlugin(
+                num_steps=2, adjust_scheduler=False,
+            ),
+            step_scheduler_with_optimizer=True,
+        )
     model, prepared_optimizer, prepared_scheduler = acc.prepare(
         model, optimizer, scheduler,
     )
@@ -195,6 +204,53 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         ))
         self.assertFalse("step" in vars(optim), "method wrapper leaked")
         self.assertFalse("backward" in vars(acc), "Accelerator patch leaked")
+
+    def test_unmodified_production_accelerator_default_is_fail_closed(self):
+        """The stock production Accelerator currently violates C3 R2 contract.
+
+        This test documents the actual v1.6.0 default without papering over
+        production behavior via a Worker-only state mutation.
+        """
+        acc, model, optimizer, scheduler, prepared_opt, prepared_sched = (
+            build_two_child_cpu(production_default_accumulator=True)
+        )
+        self.assertEqual(acc.gradient_accumulation_steps, 2)
+        self.assertTrue(
+            acc.gradient_state.adjust_scheduler,
+            "Pinned Accelerate default changed; re-review stock Trainer behavior",
+        )
+        state_before = observer().fingerprint_state_tree(
+            {entry.profile_name: entry.optimizer.state_dict()
+             for entry in optimizer.entries}
+        )
+        scheduler_before = scheduler.state_dict()
+        x = torch.tensor([[0.25, -0.5, 1., -1.5]], dtype=torch.bfloat16)
+        with acc.accumulate(model):
+            self.assertFalse(acc.sync_gradients)
+            loss = (
+                model["left"](x).square().float().sum()
+                + model["right"](x).square().float().sum()
+            )
+            acc.backward(loss)
+            prepared_opt.step()
+            prepared_sched.step()
+            prepared_opt.zero_grad(set_to_none=True)
+        state_after = observer().fingerprint_state_tree(
+            {entry.profile_name: entry.optimizer.state_dict()
+             for entry in optimizer.entries}
+        )
+        self.assertEqual(state_before, state_after)
+        scheduler_after = scheduler.state_dict()
+        self.assertEqual(scheduler_after["last_epoch"], scheduler_before["last_epoch"])
+        self.assertEqual(
+            scheduler_after["step_count"], scheduler_before["step_count"] + 1,
+            "Stock unsynced AcceleratedScheduler did not advance the internal count",
+        )
+        with self.assertRaisesRegex(ValueError, "adjust_scheduler"):
+            observer().verify_prepared_identity(
+                session=SimpleNamespace(optimizer=optimizer),
+                accelerator=acc, scheduler=scheduler,
+            )
 
     def test_non_sync_parameter_mutation_is_rejected(self):
         acc, model, optim, sched, po, ps, probe = make_probe()
