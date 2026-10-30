@@ -1,0 +1,220 @@
+"""C3 RED first: real Accelerate CPU microbatch/child-step observer contracts.
+
+These tests are intentionally RED before C3 implementation. They use the
+actual torch 2.7.0, Accelerate 1.6.0 and pytorch-optimizer 3.10.0; CPU evidence
+must never be misreported as candidate CUDA qualification.
+"""
+from __future__ import annotations
+
+from types import SimpleNamespace
+import math
+import unittest
+
+import accelerate
+from accelerate import Accelerator
+from accelerate.utils import GradientAccumulationPlugin
+import torch
+from pytorch_optimizer import Muon
+
+from mikazuki.parameter_policy_torch import (
+    CompositeOptimizer, CompositeLRScheduler,
+    OptimizerRuntimeEntry, SchedulerRuntimeEntry,
+)
+
+
+R2 = "r2-muon-adamw-fallback-accum2"
+
+
+def observer():
+    from tools import sd3_full_bf16_worker_observer
+    return sd3_full_bf16_worker_observer
+
+
+def build_two_child_cpu():
+    """Real BF16 2-Child facade, actual Accelerate prepare, zero synthetic Step."""
+    torch.manual_seed(123456)
+    model = torch.nn.ModuleDict({
+        "left": torch.nn.Linear(4, 4, bias=False, dtype=torch.bfloat16),
+        "right": torch.nn.Linear(4, 4, bias=False, dtype=torch.bfloat16),
+    })
+    muon = Muon([{
+        "params": [model["left"].weight], "lr": 1e-4, "use_muon": True,
+    }])
+    adamw = torch.optim.AdamW(
+        [model["right"].weight], lr=1e-4, weight_decay=0.01,
+    )
+    topology = SimpleNamespace(topology_fingerprint="c3-physical-cpu-v1")
+    optimizer = CompositeOptimizer(topology, (
+        OptimizerRuntimeEntry(
+            profile_name="muon_primary", optimizer_type="Muon",
+            topology_fingerprint="c3-muon", optimizer=muon,
+        ),
+        OptimizerRuntimeEntry(
+            profile_name="adamw_fallback", optimizer_type="AdamW",
+            topology_fingerprint="c3-adamw", optimizer=adamw,
+        ),
+    ))
+    muon_scheduler = torch.optim.lr_scheduler.LambdaLR(muon, lambda _: 1.0)
+    adamw_scheduler = torch.optim.lr_scheduler.LambdaLR(adamw, lambda _: 1.0)
+    scheduler = CompositeLRScheduler(optimizer, (
+        SchedulerRuntimeEntry(
+            profile_name="muon_primary", optimizer_type="Muon",
+            topology_fingerprint="c3-muon", mode="external",
+            optimizer=muon, scheduler=muon_scheduler,
+            scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+        ),
+        SchedulerRuntimeEntry(
+            profile_name="adamw_fallback", optimizer_type="AdamW",
+            topology_fingerprint="c3-adamw", mode="external",
+            optimizer=adamw, scheduler=adamw_scheduler,
+            scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+        ),
+    ))
+    acc = Accelerator(
+        cpu=True, mixed_precision="no",
+        gradient_accumulation_plugin=GradientAccumulationPlugin(
+            num_steps=2, adjust_scheduler=False,
+        ),
+        step_scheduler_with_optimizer=True,
+    )
+    model, prepared_optimizer, prepared_scheduler = acc.prepare(
+        model, optimizer, scheduler,
+    )
+    return acc, model, optimizer, scheduler, prepared_optimizer, prepared_scheduler
+
+
+def make_probe():
+    acc, model, optimizer, scheduler, prepared_optimizer, prepared_scheduler = build_two_child_cpu()
+    probe = observer().PhysicalStepProbe(
+        accelerator=acc, composite_optimizer=optimizer,
+        composite_scheduler=scheduler,
+        parameter_names={
+            "network.left.weight": model["left"].weight,
+            "network.right.weight": model["right"].weight,
+        },
+        case_id=R2, run_id="run-c3cpu-0001",
+        phase_id="fresh-c3cpu-0001",
+        source_commit="a" * 40, phase="fresh",
+    )
+    return acc, model, optimizer, scheduler, prepared_optimizer, prepared_scheduler, probe
+
+
+def actual_accumulated_two_batches(
+    acc, model, optimizer, scheduler, prepared_optimizer, prepared_scheduler, probe,
+    *, mutate_after_first: bool = False,
+):
+    probe.install()
+    try:
+        for i in (1, 2):
+            x = torch.tensor([[0.25, -0.5, 1.0, -1.5]], dtype=torch.bfloat16)
+            with acc.accumulate(model):
+                probe.begin_batch(f"dts_c2b_sample_{i:04d}")
+                loss = (
+                    model["left"](x).square().float().sum()
+                    + model["right"](x).square().float().sum()
+                )
+                acc.backward(loss)
+                if acc.sync_gradients:
+                    acc.clip_grad_norm_(model.parameters(), 1.0)
+                prepared_optimizer.step()
+                prepared_scheduler.step()
+                prepared_optimizer.zero_grad(set_to_none=True)
+            if i == 1 and mutate_after_first:
+                with torch.no_grad():
+                    model["left"].weight.add_(torch.ones_like(model["left"].weight))
+        probe.assert_step_complete()
+        return probe.events
+    finally:
+        probe.close()
+
+
+class C3PhysicalObserverCPU(unittest.TestCase):
+    def test_exact_tensor_state_and_rng_fingerprints(self):
+        api = observer()
+        x = torch.tensor([1.0, 1.5], dtype=torch.bfloat16)
+        a = api.fingerprint_tensor(x)
+        self.assertEqual(a["dtype"], "torch.bfloat16")
+        self.assertEqual(a["shape"], [2])
+        self.assertEqual(a, api.fingerprint_tensor(x.clone()))
+        self.assertNotEqual(a["sha256"], api.fingerprint_tensor(x.float())["sha256"])
+        p = {1: {"momentum_buffer": x}, "flags": (1, 2)}
+        q = {"flags": (1, 2), 1: {"momentum_buffer": x.clone()}}
+        self.assertEqual(api.fingerprint_state_tree(p), api.fingerprint_state_tree(q))
+        q[1]["momentum_buffer"][0] = 0
+        self.assertNotEqual(api.fingerprint_state_tree(p), api.fingerprint_state_tree(q))
+        with self.assertRaises(ValueError):
+            api.fingerprint_state_tree({"broken": float("nan")})
+        first = api.snapshot_rng_fingerprint()
+        second = api.snapshot_rng_fingerprint()
+        self.assertEqual(first, second)
+        self.assertIn("numpy", first)
+        self.assertIn("torch_cpu", first)
+
+    def test_physical_muon_and_adamw_only_step_on_second_microbatch(self):
+        acc, model, optim, sched, po, ps, probe = make_probe()
+        self.assertFalse(acc.gradient_state.adjust_scheduler)
+        self.assertIs(acc._optimizers[0].optimizer, optim)
+        self.assertIs(acc._schedulers[0].scheduler, sched)
+        self.assertTrue(optim.entries[0].optimizer.param_groups[0]["use_muon"])
+        events = actual_accumulated_two_batches(
+            acc, model, optim, sched, po, ps, probe,
+        )
+        types = [row["event_type"] for row in events]
+        self.assertEqual(types.count("batch_started"), 2)
+        self.assertEqual(types.count("backward_completed"), 2)
+        self.assertEqual(types.count("physical_child_stepped"), 2)
+        self.assertEqual(types.count("physical_scheduler_stepped"), 1)
+        self.assertEqual(
+            [row["sync_gradients"] for row in events if row["event_type"] == "backward_completed"],
+            [False, True],
+        )
+        self.assertEqual(
+            {row["optimizer_profile"] for row in events if row["event_type"] == "physical_child_stepped"},
+            {"muon_primary", "adamw_fallback"},
+        )
+        self.assertEqual(sched.state_dict()["step_count"], 2)
+        self.assertEqual(sched.state_dict()["last_epoch"], 1)
+        self.assertEqual(int(optim.entries[0].optimizer.param_groups[0]["step"]), 1)
+        self.assertTrue(bool(optim.entries[0].optimizer.state))
+        self.assertTrue(bool(optim.entries[1].optimizer.state))
+        self.assertEqual(probe.sync_sequence, (False, True))
+        self.assertFalse("step" in vars(optim), "method wrapper leaked")
+        self.assertFalse("backward" in vars(acc), "Accelerator patch leaked")
+
+    def test_non_sync_parameter_mutation_is_rejected(self):
+        acc, model, optim, sched, po, ps, probe = make_probe()
+        with self.assertRaisesRegex(ValueError, "non-sync|accumulation|premature"):
+            actual_accumulated_two_batches(
+                acc, model, optim, sched, po, ps, probe,
+                mutate_after_first=True,
+            )
+        self.assertFalse("step" in vars(optim))
+        self.assertFalse("backward" in vars(acc))
+
+    def test_prepared_identity_wrong_session_optimizer_rejected(self):
+        acc, model, optim, sched, po, ps = build_two_child_cpu()
+        wrong = SimpleNamespace(optimizer=torch.optim.AdamW(model.parameters(), lr=1e-4))
+        with self.assertRaises((ValueError, RuntimeError)):
+            observer().verify_prepared_identity(
+                session=wrong, accelerator=acc, scheduler=sched,
+            )
+        actual = SimpleNamespace(optimizer=optim)
+        res = observer().verify_prepared_identity(
+            session=actual, accelerator=acc, scheduler=sched,
+        )
+        self.assertEqual(res["optimizer_children"], 2)
+        self.assertEqual(res["scheduler_children"], 2)
+        self.assertEqual(res["device_type"], "cpu")
+
+    def test_observe_prepared_ownership_cannot_certify_cpu(self):
+        acc, model, optim, sched, po, ps = build_two_child_cpu()
+        with self.assertRaises((ValueError, RuntimeError)):
+            observer().observe_prepared_ownership(
+                session=SimpleNamespace(optimizer=optim),
+                accelerator=acc, network=model,
+                train_dataloader=[1, 2], case_id=R2,
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()
