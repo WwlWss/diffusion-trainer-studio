@@ -188,38 +188,138 @@ def _write_reference_adapter(
     path.write_bytes(struct.pack("<Q", len(header_bytes)) + header_bytes + payload)
     return _digest(path.read_bytes()), expected
 
-def _write_three_component_reference_adapter(path: Path) -> tuple[str, dict, dict]:
-    """Pure Host serialization of 3 real SD3 LoRA triplets, NOT live CUDA."""
-    modules = (
-        ("lora_unet_joint_blocks_0_attn_proj", "mmdit.attention.adapter"),
-        ("lora_unet_joint_blocks_0_mlp_fc1", "mmdit.mlp.adapter"),
-        ("lora_unet_joint_blocks_0_adaLN_modulation", "mmdit.modulation_norm.adapter"),
-    )
-    arrays = {}
-    inventory = {}
-    components = {}
-    payload = b""
-    for prefix, component in modules:
-        for suffix, dtype, shape, raw, role in (
-            (".lora_down.weight", "BF16", [2, 2],
-             b"\x00\x3f\x00\x40\x80\x40\x00\x41", "trainable_weight"),
-            (".lora_up.weight", "BF16", [2, 2],
-             b"\x00\x40\x00\x3f\x00\x41\x80\x40", "trainable_weight"),
-            (".alpha", "F32", [], struct.pack("<f", 4.0), "alpha_buffer"),
-        ):
-            key = prefix + suffix
-            start = len(payload)
-            payload += raw
-            arrays[key] = {"dtype": dtype, "shape": shape,
-                           "data_offsets": [start, len(payload)]}
-            inventory[key] = {"dtype": dtype, "shape": shape, "role": role,
-                              "sha256": _digest(raw)}
-            if key.endswith(".weight"):
-                components[key] = component
-    header = json.dumps(arrays, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    path.write_bytes(struct.pack("<Q", len(header)) + header + payload)
-    return _digest(path.read_bytes()), inventory, components
+_B0_REFERENCE_TEMPLATE: tuple[bytes, dict, dict] | None = None
 
+
+def _write_full_b0_reference_adapter(path: Path) -> tuple[str, dict, dict]:
+    """All 263 Rank-4 production-target modules, 789 BF16 saved tensors.
+
+    The immutable byte template is shared within the test process, but every
+    mutated checkpoint gets its own independent on-disk copy and snapshot.
+    """
+    global _B0_REFERENCE_TEMPLATE
+    if _B0_REFERENCE_TEMPLATE is None:
+        spec = _support().build_sd35_medium_lora_target_spec()
+        header, pieces, inventory, components = {}, [], {}, {}
+        offset = 0
+        for module, desc in spec.items():
+            for suffix, shape, value, role in (
+                (".lora_down.weight", [4, desc["input_features"]],
+                 b"\x00\x3f", "trainable_weight"),
+                (".lora_up.weight", [desc["output_features"], 4],
+                 b"\x80\x3f", "trainable_weight"),
+                (".alpha", [], b"\x80\x40", "alpha_buffer"),
+            ):
+                key = module + suffix
+                size = 1
+                for dim in shape:
+                    size *= dim
+                raw = value * size
+                pieces.append(raw)
+                header[key] = {
+                    "dtype": "BF16", "shape": shape,
+                    "data_offsets": [offset, offset + len(raw)],
+                }
+                offset += len(raw)
+                inventory[key] = {
+                    "dtype": "BF16", "shape": shape, "role": role,
+                    "sha256": _digest(raw),
+                }
+                if suffix.endswith(".weight"):
+                    components[key] = desc["component_id"]
+        header_bytes = json.dumps(
+            header, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+        blob = struct.pack("<Q", len(header_bytes)) + header_bytes + b"".join(pieces)
+        _B0_REFERENCE_TEMPLATE = (blob, inventory, components)
+    blob, inventory, components = _B0_REFERENCE_TEMPLATE
+    path.write_bytes(blob)
+    return _digest(blob), copy.deepcopy(inventory), dict(components)
+
+
+def _rewrite_b0_checkpoint_tensors(
+    case: dict, snapshot: dict, binding: dict,
+    replacements: dict[str, tuple[str, list[int], bytes]],
+    *,
+    remove: tuple[str, ...] = (),
+    additional: dict[str, tuple[str, list[int], bytes, str]] | None = None,
+) -> None:
+    """Change the actual file AND all cooperating self-consistent hashes.
+
+    These mutations must be rejected by the independent frozen target spec,
+    not by a stale SHA or invalid Safetensors container.
+    """
+    api = _support()
+    path = Path(case["fresh_adapter_path"])
+    raw = path.read_bytes()
+    header_len = struct.unpack("<Q", raw[:8])[0]
+    entries = json.loads(raw[8:8 + header_len])
+    old_data = raw[8 + header_len:]
+    new_parts, new_header = [], {}
+    all_specs = dict(replacements)
+    if additional:
+        all_specs.update({k: (v[0], v[1], v[2]) for k, v in additional.items()})
+    for key in sorted((set(entries) - set(remove)) | set(all_specs)):
+        if key in all_specs:
+            dtype, shape, tensor = all_specs[key]
+        else:
+            previous = entries[key]
+            dtype, shape = previous["dtype"], previous["shape"]
+            start, end = previous["data_offsets"]
+            tensor = old_data[start:end]
+        offset = sum(len(t) for t in new_parts)
+        new_parts.append(tensor)
+        new_header[key] = {
+            "dtype": dtype, "shape": shape,
+            "data_offsets": [offset, offset + len(tensor)],
+        }
+        ref = snapshot["adapter_tensors"].get(key, {})
+        ref.update({
+            "dtype": dtype, "shape": shape, "sha256": _digest(tensor),
+            "role": additional[key][3] if additional and key in additional
+            else ref.get("role", "trainable_weight"),
+        })
+        snapshot["adapter_tensors"][key] = ref
+        if key in snapshot["parameter_ownership"]["parameter_rows"]:
+            row = snapshot["parameter_ownership"]["parameter_rows"][key]
+            row["dtype"] = dtype
+            row["shape"] = shape
+    for key in remove:
+        snapshot["adapter_tensors"].pop(key, None)
+        owner = snapshot["parameter_ownership"]
+        row = owner["parameter_rows"].pop(key, None)
+        if row is not None:
+            child = row["optimizer_profile"]
+            if child is not None:
+                owner["optimizer_child_parameter_names"][child].remove(row["canonical_name"])
+    header_bytes = json.dumps(
+        new_header, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")
+    blob = struct.pack("<Q", len(header_bytes)) + header_bytes + b"".join(new_parts)
+    path.write_bytes(blob)
+    network_path = Path(case["fresh_checkpoint_dir"]) / "model.safetensors"
+    network_path.write_bytes(blob)
+    snapshot["state_file_sha256"][network_path.name] = _digest(blob)
+    binding["adapter_file_sha256"] = _digest(blob)
+    binding["adapter_tensor_inventory_sha256"] = api._json_sha256(snapshot["adapter_tensors"])
+    # If raw weight dimensions change, update the forged checkpoint's
+    # aggregate element count too, so it is no longer a trivial stale count.
+    manifest_path = Path(case["fresh_checkpoint_dir"]) / "dts_parameter_policy_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    weight_shapes = [
+        item["shape"] for key, item in snapshot["adapter_tensors"].items()
+        if key.endswith(".weight") and item["role"] == "trainable_weight"
+    ]
+    manifest["trainable_parameter_tensors"] = len(weight_shapes)
+    count = 0
+    for shape in weight_shapes:
+        n = 1
+        for d in shape:
+            n *= d
+        count += n
+    manifest["trainable_parameter_elements"] = count
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+    snapshot["state_file_sha256"][manifest_path.name] = _digest(manifest_path.read_bytes())
 
 def _host_parameter_ownership(case: dict, inventory: dict, components: dict,
                               *, topology: str) -> dict:
@@ -703,7 +803,7 @@ def _write_host_checkpoint(
     adapter = Path(case["fresh_adapter_path" if phase == "fresh" else "resume_adapter_path"])
     checkpoint.mkdir(parents=True, exist_ok=False)
     adapter.parent.mkdir(parents=True, exist_ok=True)
-    file_sha, live_tensors, components = _write_three_component_reference_adapter(adapter)
+    file_sha, live_tensors, components = _write_full_b0_reference_adapter(adapter)
     # The pinned Accelerate save_state produces a separately serialized
     # Network state, not merely the externally saved Step Adapter.
     (checkpoint / "model.safetensors").write_bytes(adapter.read_bytes())
@@ -726,7 +826,9 @@ def _write_host_checkpoint(
         "trainable_components": sorted(k for k, v in policy["components"].items() if v["train"]),
         "frozen_components": sorted(k for k, v in policy["components"].items() if not v["train"]),
         "trainable_parameter_tensors": len(components),
-        "trainable_parameter_elements": len(components) * 4,
+        "trainable_parameter_elements": sum(
+            __import__("math").prod(live_tensors[key]["shape"]) for key in components
+        ),
         "optimizer_profiles": profiles,
         "optimizers": [{"profile_name": k, "optimizer_type": v,
                         "topology_fingerprint": "host-child"}
