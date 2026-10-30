@@ -1,9 +1,9 @@
-"""Execute Fix C C1 RED as a strict expected-failure qualification.
+"""Strict fixed-test discovery and exact outcome verifier for C1/C3 phases.
 
-C1 is intentionally RED: this executable runs the actual unittest suites and
-asserts every failure is EXACTLY a known missing Worker/Observer interface.
-Unexpected failures, skips, changes in test discovery or unexpectedly passing
-missing-interface tests invalidate RED. This is NOT Fix C GREEN or CUDA PASS.
+Historical C1 expected-RED cases use exact missing-interface errors.
+After C3 implementation, all C1 Host and pinned CPU cases must ACTUALLY pass,
+with no skip or unexpected failures; the verifier does not claim C4,
+full-worker completion, GPU training, or Full-BF16 release qualification.
 """
 from __future__ import annotations
 
@@ -136,23 +136,28 @@ def check_expected_red(stage: str) -> int:
         print("C1 RED REJECTED: " + "; ".join(problems), flush=True)
         return 1
 
+    outcome = (
+        f"C1 {stage.upper()} EXPECTED RED VERIFIED"
+        if expected_errors else f"C1/C3 {stage.upper()} REAL GREEN VERIFIED"
+    )
     print(
-        f"C1 {stage.upper()} EXPECTED RED VERIFIED: "
-        f"tests={result.testsRun}; intended_missing_interfaces={len(expected_errors)}; "
-        f"baseline_success={len(expected_successes)}; assertions_failed=0; skipped=0. "
-        "This does NOT claim Worker GREEN, CUDA or release qualification.",
+        f"{outcome}: tests={result.testsRun}; "
+        f"expected_missing_interfaces={len(expected_errors)}; "
+        f"actual_pass={len(expected_successes)}; "
+        "unexpected_failures=0; skipped=0. "
+        "C4, real CUDA and release qualification remain unverified.",
         flush=True,
     )
     summary = os.getenv("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
             stream.write(
-                f"### C1 {stage.upper()} expected RED verified\n\n"
-                f"- Actual unittest executions: {result.testsRun}\n"
-                f"- Intended missing-interface errors: {len(expected_errors)}\n"
-                f"- Baseline passing tests: {len(expected_successes)}\n"
-                "- Unexpected errors / skips / assertion failures: 0\n"
-                "- **No real CUDA, no Worker GREEN, no release qualification.**\n\n"
+                f"### {outcome}\\n\\n"
+                f"- Actual unittest executions: {result.testsRun}\\n"
+                f"- Expected missing-interface errors: {len(expected_errors)}\\n"
+                f"- Actual passing tests: {len(expected_successes)}\\n"
+                "- Unexpected errors, skipped tests or assertion failures: 0\\n"
+                "- **No C4 worker_complete, real CUDA or release qualification.**\\n\\n"
             )
     return 0
 
