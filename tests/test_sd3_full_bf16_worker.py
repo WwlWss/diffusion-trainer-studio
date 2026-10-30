@@ -150,14 +150,20 @@ class TimelineContractRED(unittest.TestCase):
             event("checkpoint_saved", 5),
             event("train_completed", 6),
         ]
-        for broken in (
-            [dict(good[0]), dict(good[1]), *good[2:]],
-            [good[2], good[0], good[1], *good[3:]],
-            [good[0], good[2], good[1], *good[3:]],
+        duplicate = [dict(item) for item in good]
+        duplicate[1]["event_seq"] = duplicate[0]["event_seq"]
+        step_first = [dict(item) for item in good]
+        step_first = [step_first[2], step_first[0], step_first[1], *step_first[3:]]
+        wrong_order = [dict(item) for item in good]
+        wrong_order = [wrong_order[0], wrong_order[2], wrong_order[1], *wrong_order[3:]]
+        for label, broken in (
+            ("duplicate_seq", duplicate),
+            ("step_before_batch", step_first),
+            ("step_before_backward", wrong_order),
         ):
-            broken[1]["event_seq"] = broken[0]["event_seq"]
-            with self.assertRaises(ValueError):
-                api.validate_worker_event_stream(case_id=R1, phase="fresh", events=broken)
+            with self.subTest(label=label):
+                with self.assertRaises(ValueError):
+                    api.validate_worker_event_stream(case_id=R1, phase="fresh", events=broken)
 
     def test_r2_first_microbatch_must_not_have_physical_step(self):
         api = support()
