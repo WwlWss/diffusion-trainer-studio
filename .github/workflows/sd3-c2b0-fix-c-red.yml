@@ -49,7 +49,7 @@ jobs:
       - name: Compile C1 RED tests and strict verifier
         run: python -m py_compile tests/test_sd3_full_bf16_worker.py tools/check_sd3_full_bf16_c1_red.py
       - name: Execute Host C1 RED; require exact missing Worker/Timeline errors
-        run: python tools/check_sd3_full_bf16_c1_red.py --stage host
+        run: python -m tools.check_sd3_full_bf16_c1_red --stage host
 
   pinned-accelerate-c1-red:
     name: Pinned real CPU C1 RED expected errors (NO CUDA)
@@ -71,4 +71,4 @@ jobs:
       - name: Compile C1 RED tests and strict verifier
         run: python -m py_compile tests/test_sd3_full_bf16_worker_cpu.py tools/check_sd3_full_bf16_c1_red.py
       - name: Execute pinned CPU C1 RED; require exact missing Observer errors
-        run: python tools/check_sd3_full_bf16_c1_red.py --stage cpu
+        run: python -m tools.check_sd3_full_bf16_c1_red --stage cpu
