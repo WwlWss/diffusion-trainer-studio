@@ -31,6 +31,19 @@ on:
       - "scripts/dev/library/config_util.py"
       - "scripts/dev/library/dts_parameter_policy_bridge.py"
       - "mikazuki/optimizer_profiles.py"
+      # B0 reference policy, qualification registry, SD3 configuration
+      - "tools/prepare_sd3_component_baseline.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "scripts/dev/library/sd3_train_utils.py"
+      - "mikazuki/sd3_architecture_contract.py"
+      # Actual C2-A/R0 tests and their shared fixtures
+      - "tests/test_sd3_full_bf16_scope.py"
+      - "tests/test_sd3_component_gpu_evidence.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      # Gitlink SHA changes are changes to the path itself, not submodule/**
+      - "sd-scripts"
+      - "frontend"
+      - "mikazuki/dataset-tag-editor"
 
 permissions:
   contents: read
@@ -94,3 +107,21 @@ jobs:
 
       - name: Execute real CPU save/load and Scheduler identity tests
         run: python -m unittest tests.test_sd3_full_bf16_accelerate_cpu -v
+
+      - name: Run full C2-A scope suite under real Torch (ZERO skipped)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_scope"
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.skipped:
+              raise SystemExit(
+                  "Strict CPU C2-A failure: "
+                  f"run={result.testsRun} errors={len(result.errors)} "
+                  f"failures={len(result.failures)} skipped={len(result.skipped)}"
+              )
+          print(f"Strict CPU C2-A: {result.testsRun} PASS, 0 SKIPPED")
+          PY
