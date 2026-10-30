@@ -64,7 +64,12 @@ def parse_worker_cli(argv: list[str] | None) -> Path:
         allow_abbrev=False,
     )
     parser.add_argument("--ticket", required=True)
-    args = parser.parse_args(argv)
+    # argparse normally accepts a repeated --ticket and silently uses the
+    # final value; that would break the single-use identity contract.
+    tokens = list(sys.argv[1:] if argv is None else argv)
+    if len(tokens) != 2 or tokens[0] != "--ticket":
+        _reject("Worker CLI requires exactly one --ticket and one path")
+    args = parser.parse_args(tokens)
     if not Path(args.ticket).is_absolute():
         _reject("C2 Worker requires an absolute --ticket path")
     return host._external_work_path(args.ticket, name="Worker ticket")
