@@ -87,16 +87,20 @@ def check_expected_red(stage: str) -> int:
     # tracebacks. A green marker here means expected RED was proven, not GREEN.
     print(f"Executing actual {stage.upper()} C1 RED tests", flush=True)
     result = unittest.TextTestRunner(verbosity=2, stream=sys.stdout).run(suite)
-    errors = {
-        test.id().removeprefix(module + "."): traceback
-        for test, traceback in result.errors
-    }
-    failed = {
-        test.id().removeprefix(module + "."): traceback
-        for test, traceback in result.failures
-    }
+    # unittest reports each failing subTest as a distinct _SubTest with an
+    # id suffixed by its parameters. Normalize to the parent method, but keep
+    # *every* individual error: a partly executing negative test is not RED.
+    def parent_id(test):
+        return getattr(test, "test_case", test).id().removeprefix(module + ".")
+
+    errors = {}
+    for test, traceback in result.errors:
+        errors.setdefault(parent_id(test), []).append(traceback)
+    failed = {}
+    for test, traceback in result.failures:
+        failed.setdefault(parent_id(test), []).append(traceback)
     successes = discovered - set(errors) - set(failed) - {
-        test.id().removeprefix(module + ".") for test, _ in result.skipped
+        parent_id(test) for test, _ in result.skipped
     }
     problems = []
     if result.testsRun != len(discovered):
@@ -114,12 +118,19 @@ def check_expected_red(stage: str) -> int:
             f"error set={sorted(errors)} expected={sorted(expected_errors)}"
         )
     for name, exact_tail in expected_errors.items():
-        traceback = errors.get(name, "")
-        if traceback and exact_tail not in traceback:
-            problems.append(
-                f"{name}: wrong RED failure (expected {exact_tail!r}): "
-                + traceback[-900:]
-            )
+        tracebacks = errors.get(name, [])
+        count = 3 if (
+            stage == "host"
+            and name == "TimelineContractRED.test_duplicate_sequence_and_step_before_backward_rejected"
+        ) else 1
+        if len(tracebacks) != count:
+            problems.append(f"{name}: {len(tracebacks)} error events; expected {count}")
+        for traceback in tracebacks:
+            if exact_tail not in traceback:
+                problems.append(
+                    f"{name}: wrong RED failure (expected {exact_tail!r}): "
+                    + traceback[-900:]
+                )
     if problems:
         print("C1 RED REJECTED: " + "; ".join(problems), flush=True)
         return 1
