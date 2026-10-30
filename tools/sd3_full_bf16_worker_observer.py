@@ -201,6 +201,99 @@ def audit_physical_optimizer_groups(
     return children
 
 
+
+def validate_reference_ownership_rows(
+    *, case_id: str, rows: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, int]]:
+    """Reference-anchored 526-parameter geometry, route and Child mapping.
+
+    Device-neutral so real CPU tests can reject a self-consistent *wrong*
+    RuntimeSpec/RoutingPlan without pretending to establish CUDA ownership.
+    """
+    spec = host.build_sd35_medium_lora_target_spec()
+    policy = host.build_reference_policy(case_id)
+    expected = {module + suffix for module in spec
+                for suffix in (".lora_down.weight", ".lora_up.weight")}
+    if not isinstance(rows, Mapping) or set(rows) != expected:
+        _fail("Actual parameter row set differs from exact 526 reference weights")
+    component_counts: dict[str, int] = {}
+    child_counts: dict[str, int] = {
+        profile: 0 for profile in policy["optimizer_profiles"]
+    }
+    for module, target in spec.items():
+        component = target["component_id"]
+        route = policy["components"].get(component)
+        if not isinstance(route, Mapping) or route.get("train") is not True:
+            _fail("Reference Component must be explicitly trainable")
+        fallback = case_id == "r2-muon-adamw-fallback-accum2" and (
+            component == "mmdit.modulation_norm.adapter"
+        )
+        expected_kind = "fallback" if fallback else "primary"
+        expected_profile = (
+            route.get("fallback_optimizer_profile") if fallback
+            else route.get("optimizer_profile")
+        )
+        if expected_profile not in child_counts:
+            _fail("Reference optimizer Profile is absent")
+        for suffix, dims in (
+            (".lora_down.weight", [target["rank"], target["input_features"]]),
+            (".lora_up.weight", [target["output_features"], target["rank"]]),
+        ):
+            name = module + suffix
+            row = rows[name]
+            if not isinstance(row, Mapping):
+                _fail("Missing physical ownership row")
+            if (row.get("canonical_name") != "network." + name
+                    or row.get("component_id") != component
+                    or row.get("route_kind") != expected_kind
+                    or row.get("optimizer_profile") != expected_profile
+                    or row.get("shape") != dims
+                    or row.get("dtype") != "BF16"
+                    or row.get("parameter_class") != "matrix_weight"
+                    or row.get("requires_grad") is not True):
+                _fail("Reference LoRA shape/rank/route/Component ownership mismatch: " + name)
+            component_counts[component] = component_counts.get(component, 0) + 1
+            child_counts[expected_profile] += 1
+    expected_components = {
+        "mmdit.attention.adapter": 242,
+        "mmdit.mlp.adapter": 188,
+        "mmdit.modulation_norm.adapter": 96,
+    }
+    if component_counts != expected_components:
+        _fail("Physical Component reference tensor totals drifted")
+    expected_children = (
+        {"baseline": 526} if case_id == "r1-adamw-accum1"
+        else {"muon_primary": 430, "adamw_fallback": 96}
+    )
+    if child_counts != expected_children:
+        _fail("Physical optimizer Child reference totals drifted")
+    return {
+        "component_tensor_counts": component_counts,
+        "child_tensor_counts": child_counts,
+    }
+
+
+def validate_reference_alpha_buffers(
+    buffers: Mapping[str, torch.Tensor],
+    target_spec: Mapping[str, Any],
+    *, expected_device: torch.device,
+) -> int:
+    """Exact scalar BF16 alpha=4 reference, distinct from trainable weights."""
+    expected = {module + ".alpha" for module in target_spec}
+    if not isinstance(buffers, Mapping) or set(buffers) != expected:
+        _fail("Reference Alpha Buffer names are incomplete/extra")
+    for name, value in buffers.items():
+        if (not isinstance(value, torch.Tensor) or value.is_meta
+                or value.layout != torch.strided
+                or value.dtype != torch.bfloat16 or value.device != expected_device
+                or value.ndim != 0 or value.requires_grad
+                or not bool(torch.isfinite(value).item())
+                or float(value.item()) != 4.0):
+            _fail("Reference Alpha must be a frozen BF16 scalar alpha=4: " + name)
+    return len(expected)
+
+
+
 def observe_prepared_ownership(
     *, session: Any, accelerator: Any, network: torch.nn.Module,
     train_dataloader: Any, case_id: str,
@@ -300,10 +393,12 @@ def observe_prepared_ownership(
             "parameter_class": "matrix_weight", "dtype": "BF16",
             "shape": list(param.shape), "requires_grad": True,
         }
-    for name, tensor in buffers.items():
-        if (name not in alpha_keys or tensor.dtype != torch.bfloat16
-                or tensor.device != expected_device or tensor.numel() != 1):
-            _fail("Missing/invalid physical BF16 LoRA Alpha Buffer")
+    alpha_count = validate_reference_alpha_buffers(
+        buffers, target_spec, expected_device=expected_device,
+    )
+    reference = validate_reference_ownership_rows(case_id=case_id, rows=rows)
+    if {profile: len(members) for profile, members in children.items()} != reference["child_tensor_counts"]:
+        _fail("Physical Child Group ownership differs from frozen 430/96 or 526 reference")
     component_counts = {}
     for row in rows.values():
         component_counts[row["component_id"]] = component_counts.get(row["component_id"], 0) + 1
@@ -319,7 +414,9 @@ def observe_prepared_ownership(
         "optimizer_child_parameter_names": children,
         "trainable_parameter_tensors": len(rows),
         "trained_component_counts": component_counts,
-        "alpha_buffer_count": len(buffers),
+        "alpha_buffer_count": alpha_count,
+        "reference_component_tensor_counts": reference["component_tensor_counts"],
+        "reference_child_tensor_counts": reference["child_tensor_counts"],
     }
 
 
@@ -669,5 +766,6 @@ __all__ = [
     "fingerprint_tensor", "fingerprint_state_tree", "snapshot_rng_fingerprint",
     "verify_prepared_identity", "observe_prepared_ownership",
     "audit_physical_optimizer_groups",
+    "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]
