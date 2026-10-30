@@ -434,7 +434,9 @@ class C3PhysicalObserverCPU(unittest.TestCase):
             probe.close()
         self.assertFalse("backward" in vars(acc))
         self.assertIs(adamw.step, original_adamw_step)
-        self.assertIs(facade.step, original_composite_step)
+        self.assertIs(facade.step.__func__, original_composite_step.__func__)
+        self.assertIs(facade.step.__self__, facade)
+        self.assertNotIn("step", vars(facade), "C3 leaked instance-level CompositeOptimizer wrapper")
 
     def test_probe_rejects_unknown_optimizer_parameter(self):
         acc, model, optim, sched, po, ps = build_two_child_cpu()
