@@ -10,6 +10,7 @@ import importlib
 from types import SimpleNamespace
 import math
 import unittest
+from unittest.mock import patch
 
 import accelerate
 from accelerate import Accelerator
@@ -178,6 +179,19 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         self.assertTrue(bool(optim.entries[0].optimizer.state))
         self.assertTrue(bool(optim.entries[1].optimizer.state))
         self.assertEqual(probe.sync_sequence, (False, True))
+        self.assertTrue(all(
+            len(entry["child_gradients"]) == 2
+            and all(len(x["gradient_sha256"]) == 64
+                    for x in entry["child_gradients"].values())
+            for entry in events
+            if entry["event_type"] == "backward_completed"
+        ))
+        self.assertTrue(all(
+            event["physical_step"] == 1
+            and event["optimizer_state_before"] != event["optimizer_state_after"]
+            for event in events
+            if event["event_type"] == "physical_child_stepped"
+        ))
         self.assertFalse("step" in vars(optim), "method wrapper leaked")
         self.assertFalse("backward" in vars(acc), "Accelerator patch leaked")
 
@@ -214,6 +228,84 @@ class C3PhysicalObserverCPU(unittest.TestCase):
                 accelerator=acc, network=model,
                 train_dataloader=[1, 2], case_id=R2,
             )
+
+
+    def test_observed_trainer_is_actual_production_subclass_and_fail_closed_c4(self):
+        import sd3_train_network
+        cls = observer().ObservedSd3NetworkTrainer
+        self.assertTrue(issubclass(cls, sd3_train_network.Sd3NetworkTrainer))
+        trainer = cls(
+            invocation=SimpleNamespace(case_id=R2),
+            cuda_environment={"cuda_available": False},
+            qualification_lease={"backend_lease_only": True},
+        )
+        self.assertIsNone(trainer.observer)
+        self.assertIsNone(trainer._c3_session)
+        base = sd3_train_network.Sd3NetworkTrainer
+
+        # No production Trainer replacement: the existing method is called
+        # exactly once before the C3 Scheduler instance capture.
+        acc, network, facade, scheduler, _, _ = build_two_child_cpu()
+        session = SimpleNamespace(build_scheduler=lambda factory: scheduler)
+        original_build = session.build_scheduler
+        with patch.object(base, "configure_parameter_policy_training",
+                          return_value=(True, False)) as parent:
+            result = trainer.configure_parameter_policy_training(
+                SimpleNamespace(), session, [],
+            )
+            parent.assert_called_once()
+        self.assertEqual(result, (True, False))
+        self.assertIs(session.build_scheduler(None), scheduler)
+        self.assertIs(trainer._c3_scheduler, scheduler)
+        with self.assertRaises(ValueError):
+            session.build_scheduler(None)
+
+        # Abort before real training; the original failure must propagate
+        # unmodified and Session's method must be restored in finally.
+        with patch.object(base, "train",
+                          side_effect=RuntimeError("intentional production failure")) as parent:
+            with self.assertRaisesRegex(RuntimeError, "intentional production failure"):
+                trainer.train(SimpleNamespace())
+            parent.assert_called_once()
+        self.assertIs(session.build_scheduler, original_build)
+
+    def test_original_sd3_hook_and_step_start_delegate_first(self):
+        import sd3_train_network
+        cls = observer().ObservedSd3NetworkTrainer
+        trainer = cls(
+            invocation=SimpleNamespace(case_id=R2),
+            cuda_environment={}, qualification_lease={},
+        )
+        base = sd3_train_network.Sd3NetworkTrainer
+        with patch.object(
+            base, "register_additional_state_hooks",
+            side_effect=RuntimeError("real sd3 state hook invoked"),
+        ) as parent:
+            with self.assertRaisesRegex(RuntimeError, "real sd3 state hook invoked"):
+                trainer.register_additional_state_hooks(
+                    accelerator=None, args=None, unet=None,
+                    train_dataloader=None, current_epoch=None, current_step=None,
+                )
+            parent.assert_called_once()
+        with patch.object(
+            base, "on_step_start",
+            side_effect=RuntimeError("real sd3 step-start invoked"),
+        ) as parent:
+            with self.assertRaisesRegex(RuntimeError, "real sd3 step-start invoked"):
+                trainer.on_step_start(
+                    None,None,None,None,None,{},torch.bfloat16,True,
+                )
+            parent.assert_called_once()
+
+    def test_fingerprint_rejects_meta_and_sparse_tensors(self):
+        api = observer()
+        with self.assertRaises(ValueError):
+            api.fingerprint_tensor(torch.empty(3, device="meta"))
+        sparse = torch.sparse_coo_tensor(
+            torch.tensor([[0],[0]]), torch.tensor([1.0]), (2,2),
+        )
+        with self.assertRaises(ValueError):
+            api.fingerprint_tensor(sparse)
 
 
 if __name__ == "__main__":
