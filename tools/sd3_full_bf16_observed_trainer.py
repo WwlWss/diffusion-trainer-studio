@@ -190,6 +190,15 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             if self._c3_probe is None or self.observer is None:
                 raise host.FullBF16EvidenceError("C3 physical Probe was never installed")
             self._c3_probe.assert_step_complete()
+            expected_steps = (
+                (1, 2) if self._c3_invocation.phase == "fresh" else (2,)
+            )
+            actual_steps = tuple(sorted(self._c3_probe._step_children))
+            if actual_steps != expected_steps:
+                raise host.FullBF16EvidenceError(
+                    "C3 physical Trainer executed the wrong exact logical Steps: "
+                    f"{actual_steps!r} != {expected_steps!r}"
+                )
             self.observer.training_completed = True
             return result
         finally:
