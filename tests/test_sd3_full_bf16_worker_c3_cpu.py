@@ -308,5 +308,78 @@ class C3PhysicalObserverCPU(unittest.TestCase):
             api.fingerprint_tensor(sparse)
 
 
+    def test_r1_real_adamw_one_child_sync_each_batch(self):
+        torch.manual_seed(123456)
+        net = torch.nn.Linear(4, 4, bias=False, dtype=torch.bfloat16)
+        adamw = torch.optim.AdamW(net.parameters(), lr=0.01)
+        facade = CompositeOptimizer(
+            SimpleNamespace(topology_fingerprint="r1-c3-cpu"),
+            (OptimizerRuntimeEntry(
+                profile_name="baseline", optimizer_type="AdamW",
+                topology_fingerprint="r1-c3-adamw", optimizer=adamw,
+            ),),
+        )
+        child_sched = torch.optim.lr_scheduler.LambdaLR(adamw, lambda _: 1.0)
+        sched = CompositeLRScheduler(
+            facade, (SchedulerRuntimeEntry(
+                profile_name="baseline", optimizer_type="AdamW",
+                topology_fingerprint="r1-c3-adamw",
+                mode="external", optimizer=adamw,
+                scheduler=child_sched,
+                scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+            ),),
+        )
+        acc = Accelerator(
+            cpu=True, mixed_precision="no",
+            gradient_accumulation_plugin=GradientAccumulationPlugin(
+                num_steps=1, adjust_scheduler=False,
+            ),
+        )
+        net, prepared_opt, prepared_sch = acc.prepare(net, facade, sched)
+        probe = observer().PhysicalStepProbe(
+            accelerator=acc, composite_optimizer=facade,
+            composite_scheduler=sched,
+            parameter_names={"network.adamw.weight":net.weight},
+            case_id="r1-adamw-accum1", run_id="run-c3r1-0001",
+            phase_id="fresh-c3r1-0001", phase="fresh",
+            source_commit="a"*40,
+        )
+        probe.install()
+        try:
+            with acc.accumulate(net):
+                probe.begin_batch("dts_c2b_sample_0001")
+                x = torch.tensor([[1.0,-2.0,3.0,-4.0]], dtype=torch.bfloat16)
+                acc.backward(net(x).square().float().sum())
+                self.assertTrue(acc.sync_gradients)
+                acc.clip_grad_norm_(net.parameters(),1.0)
+                prepared_opt.step()
+                prepared_sch.step()
+                prepared_opt.zero_grad(set_to_none=True)
+            probe.assert_step_complete()
+            kinds = [e["event_type"] for e in probe.events]
+            self.assertEqual(kinds, [
+                "batch_started","backward_completed","physical_child_stepped",
+                "physical_scheduler_stepped",
+            ])
+            self.assertEqual(probe.sync_sequence,(True,))
+            self.assertEqual(int(adamw.state[net.weight]["step"].item()),1)
+        finally:
+            probe.close()
+        self.assertFalse("backward" in vars(acc))
+        self.assertFalse("step" in vars(adamw))
+
+    def test_probe_rejects_unknown_optimizer_parameter(self):
+        acc, model, optim, sched, po, ps = build_two_child_cpu()
+        with self.assertRaisesRegex(ValueError, "unregistered|misses|unknown"):
+            observer().PhysicalStepProbe(
+                accelerator=acc, composite_optimizer=optim,
+                composite_scheduler=sched,
+                parameter_names={"network.left.weight":model["left"].weight},
+                case_id=R2, run_id="run-c3cpu-0002",
+                phase_id="fresh-c3cpu-0002",
+                phase="fresh", source_commit="a"*40,
+            )
+
+
 if __name__ == "__main__":
     unittest.main()
