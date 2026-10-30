@@ -66,6 +66,48 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
         self._c3_expected_samples = set()
         self.observer: C3PhaseEvidence | None = None
 
+    def assert_extra_args(self, args, train_dataset_group, val_dataset_group):
+        """Audit the *effective*, post-production-SD3 mutation C2-A scope.
+
+        Production's SD3 assert_extra_args is deliberately invoked first,
+        once. This Worker only inspects the resulting Namespace; it never
+        rewrites Dataset, batch geometry or training flags to pass validation.
+        """
+        result = super().assert_extra_args(
+            args, train_dataset_group, val_dataset_group,
+        )
+        if val_dataset_group is not None:
+            raise host.FullBF16EvidenceError(
+                "C3 evidence does not qualify a separate validation Dataset"
+            )
+        from mikazuki.sd3_full_bf16_scope import sd3_full_bf16_config_blockers
+
+        problems = sd3_full_bf16_config_blockers(
+            host.build_reference_policy(self._c3_invocation.case_id),
+            vars(args),
+        )
+        if problems:
+            raise host.FullBF16EvidenceError(
+                "C3 post-Dataset effective Trainer config differs from "
+                "reviewed R1/R2 reference: " + "; ".join(problems)
+            )
+        for name, expected in (
+            ("full_bf16", True),
+            ("mixed_precision", "bf16"),
+            ("max_train_steps", 2),
+            ("seed", host.REFERENCE_SEED),
+            ("max_grad_norm", 1.0),
+            ("scale_weight_norms", None),
+            ("save_precision", None),
+            ("config_file", None),
+        ):
+            if (type(getattr(args, name, None)) is not type(expected)
+                    or getattr(args, name, None) != expected):
+                raise host.FullBF16EvidenceError(
+                    f"C3 post-Dataset Trainer {name} differs from exact reference"
+                )
+        return result
+
     def configure_parameter_policy_training(self, args, session, text_encoders):
         if self._c3_session is not None:
             raise host.FullBF16EvidenceError("C3 Session configured more than once")
