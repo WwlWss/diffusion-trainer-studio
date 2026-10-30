@@ -1490,12 +1490,12 @@ def _inject_complete_frozen_text_encoder_triplet(
     for suffix, shape, raw, role in (
         (".lora_down.weight", [2, 2], b"\x00\x3f\x00\x40\x80\x40\x00\x41", "frozen_weight"),
         (".lora_up.weight", [2, 2], b"\x00\x40\x00\x3f\x00\x41\x80\x40", "frozen_weight"),
-        (".alpha", [], struct.pack("<f", 4.0), "alpha_buffer"),
+        (".alpha", [], b"\x80\x40", "alpha_buffer"),
     ):
         key = prefix + suffix
         offset = len(payload)
         payload += raw
-        header[key] = {"dtype": "F32" if suffix == ".alpha" else "BF16",
+        header[key] = {"dtype": "BF16",
                        "shape": shape, "data_offsets": [offset, len(payload)]}
         snapshot["adapter_tensors"][key] = {
             "dtype": header[key]["dtype"], "shape": shape, "role": role,
@@ -1613,6 +1613,76 @@ class B0FinalStrictReviewR3RED(unittest.TestCase):
         self.assertNotIn("lora_unet_joint_blocks_23_context_block_mlp_fc1", targets)
         self.assertNotIn("lora_unet_joint_blocks_13_x_block_attn2_qkv", targets)
         self.assertIn("lora_unet_joint_blocks_12_x_block_attn2_qkv", targets)
+
+    def test_rejects_coherent_extra_unet_module_and_invalid_saved_shape(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            snap, binding = _write_host_checkpoint(case)
+            extra = "lora_unet_joint_blocks_0_x_block_attn_unreviewed"
+            additions = {
+                extra + ".lora_down.weight": (
+                    "BF16", [4, 1536], b"\x00\x3f" * (4 * 1536), "trainable_weight",
+                ),
+                extra + ".lora_up.weight": (
+                    "BF16", [1536, 4], b"\x80\x3f" * (4 * 1536), "trainable_weight",
+                ),
+                extra + ".alpha": ("BF16", [], b"\x80\x40", "alpha_buffer"),
+            }
+            child = next(iter(snap["parameter_ownership"]["optimizer_child_parameter_names"]))
+            for key, (dtype, shape, raw, role) in additions.items():
+                if not key.endswith(".weight"):
+                    continue
+                canonical = "network." + key
+                snap["parameter_ownership"]["parameter_rows"][key] = {
+                    "canonical_name": canonical, "component_id": "mmdit.attention.adapter",
+                    "optimizer_profile": child, "route_kind": "primary",
+                    "requires_grad": True, "parameter_class": "matrix_weight",
+                    "dtype": dtype, "shape": shape,
+                }
+                snap["parameter_ownership"]["optimizer_child_parameter_names"][child].append(canonical)
+            _rewrite_b0_checkpoint_tensors(
+                case, snap, binding, {}, additional=additions,
+            )
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=snap,
+                    binding=binding, expected_phase_id="host-phase-1",
+                )
+
+    def test_resume_rejects_forged_source_input_and_target_spec_identity(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R2)["manifest"]).read_text(encoding="utf-8"))
+            fresh_snap, fresh_binding = _write_host_checkpoint(
+                case, phase="fresh", phase_id="r3-fresh-phase",
+            )
+            first = api.verify_adapter_checkpoint_binding(
+                case_manifest=case, phase="fresh", worker_snapshot=fresh_snap,
+                binding=fresh_binding, expected_phase_id="r3-fresh-phase",
+            )
+            resume_snap, resume_binding = _write_host_checkpoint(
+                case, phase="resume", phase_id="r3-resume-phase",
+                parent_id=first["checkpoint_id"],
+            )
+            accepted = api.verify_adapter_checkpoint_binding(
+                case_manifest=case, phase="resume", worker_snapshot=resume_snap,
+                binding=resume_binding, expected_phase_id="r3-resume-phase",
+                accepted_fresh_evidence=first,
+            )
+            self.assertEqual(accepted["status"], "physical_binding_valid")
+            for field in (
+                "source_commit", "input_identity_sha256", "case_manifest_sha256",
+                "policy_hash", "reference_target_spec_sha256",
+            ):
+                forged = dict(first)
+                forged[field] = "0" * (40 if field == "source_commit" else 64)
+                with self.subTest(field=field), self.assertRaises(api.FullBF16EvidenceError):
+                    api.verify_adapter_checkpoint_binding(
+                        case_manifest=case, phase="resume", worker_snapshot=resume_snap,
+                        binding=resume_binding, expected_phase_id="r3-resume-phase",
+                        accepted_fresh_evidence=forged,
+                    )
 
     def test_rejects_coherently_rehashed_frozen_text_encoder_lora(self):
         api = _support()
