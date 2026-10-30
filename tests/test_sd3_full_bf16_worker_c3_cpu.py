@@ -345,6 +345,8 @@ class C3PhysicalObserverCPU(unittest.TestCase):
             phase_id="fresh-c3r1-0001", phase="fresh",
             source_commit="a"*40,
         )
+        original_adamw_step = adamw.step  # LambdaLR already installed its own instance wrapper
+        original_composite_step = facade.step
         probe.install()
         try:
             with acc.accumulate(net):
@@ -367,7 +369,8 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         finally:
             probe.close()
         self.assertFalse("backward" in vars(acc))
-        self.assertFalse("step" in vars(adamw))
+        self.assertIs(adamw.step, original_adamw_step)
+        self.assertIs(facade.step, original_composite_step)
 
     def test_probe_rejects_unknown_optimizer_parameter(self):
         acc, model, optim, sched, po, ps = build_two_child_cpu()
