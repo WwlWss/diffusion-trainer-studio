@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import replace
+from pathlib import Path
+import tempfile
 from types import SimpleNamespace
 import math
 import unittest
@@ -446,6 +448,58 @@ class C3PhysicalObserverCPU(unittest.TestCase):
                 phase="fresh", source_commit="a"*40,
             )
 
+
+    def test_post_dataset_real_sd3_effective_args_are_checked_without_mutation(self):
+        """Original SD3 assert_extra_args runs, then Worker read-only scope gate."""
+        from tools import sd3_full_bf16_evidence_worker as worker
+        from tests.test_sd3_full_bf16_gpu_evidence import _generate, R1, R2
+        from tools import sd3_full_bf16_evidence_support as support
+
+        cls = observer().ObservedSd3NetworkTrainer
+        dataset = SimpleNamespace(
+            is_text_encoder_output_cacheable=lambda: True,
+            verify_bucket_reso_steps=lambda steps: None,
+            get_resolutions=lambda: [(512, 512)],
+        )
+        for case_id in (R1, R2):
+            with self.subTest(case=case_id), tempfile.TemporaryDirectory() as td:
+                record = _generate(Path(td), case_id)
+                manifest = support._read_json(Path(record["manifest"]))
+                args = worker._production_namespace(SimpleNamespace(
+                    case_id=case_id, trainer_argv=manifest["fresh_command"],
+                ))
+                trainer = cls(
+                    invocation=SimpleNamespace(case_id=case_id),
+                    cuda_environment={}, qualification_lease={},
+                )
+                before = vars(args).copy()
+                result = trainer.assert_extra_args(args, dataset, None)
+                self.assertIsNone(result)
+                self.assertEqual(vars(args), before)
+                self.assertEqual(trainer.resolutions, [(512, 512)])
+                args.max_train_steps = 3
+                with self.assertRaisesRegex(ValueError, "max_train_steps"):
+                    trainer.assert_extra_args(args, dataset, None)
+                args.max_train_steps = 2
+                args.resolution = (768, 768)
+                with self.assertRaisesRegex(ValueError, "resolution"):
+                    trainer.assert_extra_args(args, dataset, None)
+
+    def test_post_dataset_parent_sd3_hook_runs_first_even_on_error(self):
+        cls = observer().ObservedSd3NetworkTrainer
+        import sd3_train_network
+        trainer = cls(
+            invocation=SimpleNamespace(case_id=R2),
+            cuda_environment={}, qualification_lease={},
+        )
+        with patch.object(
+            sd3_train_network.Sd3NetworkTrainer,
+            "assert_extra_args",
+            side_effect=RuntimeError("real SD3 parent invoked first"),
+        ) as parent:
+            with self.assertRaisesRegex(RuntimeError, "real SD3 parent invoked first"):
+                trainer.assert_extra_args(SimpleNamespace(), object(), None)
+            parent.assert_called_once()
 
     def test_real_runtime_spec_group_and_route_ownership_binding(self):
         from mikazuki.parameter_policy_runtime import (
