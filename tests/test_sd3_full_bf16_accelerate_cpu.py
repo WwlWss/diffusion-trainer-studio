@@ -229,7 +229,7 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
                 model_type="5-medium",
             )
             network = LoRANetwork(
-                [], mmdit, lora_dim=4, alpha=4,
+                [], mmdit, lora_dim=4, alpha=4.0,
                 split_qkv=False, train_t5xxl=False,
             )
         actual = {}
@@ -257,7 +257,9 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
             name + suffix for name in expected
             for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha")
         })
-        self.assertTrue(all(t.dtype == torch.bfloat16 for t in tensors.values()))
+        self.assertTrue(all(t.dtype == torch.bfloat16 for t in tensors.values()),
+                        [(key, str(value.dtype)) for key, value in tensors.items()
+                         if value.dtype != torch.bfloat16][:8])
 
     def test_r2_two_real_optimizer_children_have_disjoint_cpu_state(self):
         """Actual Muon + AdamW child topology; no BF16 CUDA assertion."""
