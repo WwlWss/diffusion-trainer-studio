@@ -219,7 +219,7 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
             header = json.loads(file_data[8:8 + header_size])
             begin, end = header["alpha"]["data_offsets"]
             self.assertEqual(file_data[8 + header_size + begin:8 + header_size + end],
-                             b"\\x80\\x40")
+                             b"\x80\x40")
 
     def test_real_sd35_medium_lora_target_enumeration_matches_host_spec(self):
         """Use production MMDiT and LoRANetwork; no checkpoint weights/GPU."""
