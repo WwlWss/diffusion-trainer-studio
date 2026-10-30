@@ -1219,6 +1219,27 @@ def _verify_resume_fresh_parent(
     files = _checkpoint_file_inventory(root)
     if files != accepted_fresh_evidence.get("checkpoint_file_sha256"):
         _fail("Fresh Step-1 files changed since Host acceptance")
+    # The production Trainer writes the external Step-1 LoRA adapter via
+    # save_model(), separately from accelerator.save_state(). Both were
+    # accepted together at Fresh; both must still be the same artifacts
+    # when verifying Resume lineage. Do not trust a Resume Worker hash.
+    fresh_adapter = _real_path(
+        case_manifest.get("fresh_adapter_path"),
+        name="Accepted Fresh Step-1 Adapter", must_exist=True,
+    )
+    _assert_ordinary_dataset_entry(fresh_adapter, is_directory=False)
+    accepted_adapter_sha = _require_sha(
+        accepted_fresh_evidence.get("adapter_file_sha256"),
+        name="accepted Fresh Step-1 Adapter SHA256",
+    )
+    try:
+        actual_adapter_sha = _sha256_file(fresh_adapter)
+    except OSError as exc:
+        raise FullBF16EvidenceError(
+            f"Cannot read accepted Fresh Step-1 Adapter: {exc}"
+        ) from exc
+    if actual_adapter_sha != accepted_adapter_sha:
+        _fail("Fresh Step-1 external Adapter changed since Host acceptance")
     progress = _read_json(root / "dts_parameter_policy_progress.json")
     manifest = _read_json(root / "dts_parameter_policy_manifest.json")
     try:
