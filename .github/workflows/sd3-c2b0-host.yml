@@ -9,6 +9,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c2.py"
       - "tests/test_sd3_full_bf16_worker_c2_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
       - "tools/sd3_full_bf16_evidence_worker.py"
@@ -90,6 +91,9 @@ jobs:
       - name: Run B0 Host GREEN-1 contracts
         run: python -m unittest tests.test_sd3_full_bf16_gpu_evidence -v
 
+      - name: Run C1-C3 Host timeline validation (metadata, NO CUDA)
+        run: python -m unittest tests.test_sd3_full_bf16_worker tests.test_sd3_full_bf16_worker_c3 -v
+
       - name: Run C2 Worker admission/lease GREEN (pure Host, NO CUDA)
         run: python -m unittest tests.test_sd3_full_bf16_worker_c2 -v
 
@@ -123,6 +127,9 @@ jobs:
 
       - name: Run C2 Worker pinned CPU parser and CUDA fail-closed tests
         run: python -m unittest tests.test_sd3_full_bf16_worker_c2_cpu -v
+
+      - name: Run C1 prepared Observer interfaces (pinned CPU only)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_cpu -v
 
       - name: Run C3 real BF16 Muon/AdamW Step Probe and fingerprint tests (CPU diagnostic only)
         run: python -m unittest tests.test_sd3_full_bf16_worker_c3_cpu -v

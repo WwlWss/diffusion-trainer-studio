@@ -20,23 +20,24 @@ _HOST_TIMELINE_ERROR = (
 )
 _CPU_OBSERVER_ERROR = "ModuleNotFoundError: No module named 'tools.sd3_full_bf16_worker_observer'"
 
-_HOST = {
-    **{
-        "TimelineContractRED." + name: _HOST_TIMELINE_ERROR
-        for name in (
-            "test_r1_minimal_complete_step_accepted_as_metadata_only",
-            "test_duplicate_sequence_and_step_before_backward_rejected",
-            "test_r2_first_microbatch_must_not_have_physical_step",
-            "test_r2_reused_caption_identity_rejected",
-        )
-    },
-}
+_HOST = {}
 
 _CPU = {}
 _HOST_SUCCESS = {
-    "WorkerEntryContractRED.test_entrypoint_has_no_torch_import_at_module_import",
-    "WorkerEntryContractRED.test_worker_cli_accepts_one_absolute_ticket_only",
-    "WorkerEntryContractRED.test_ticket_manifest_recomputed_digests_and_output",
+    "WorkerEntryContractRED." + name
+    for name in (
+        "test_entrypoint_has_no_torch_import_at_module_import",
+        "test_worker_cli_accepts_one_absolute_ticket_only",
+        "test_ticket_manifest_recomputed_digests_and_output",
+    )
+} | {
+    "TimelineContractRED." + name
+    for name in (
+        "test_r1_minimal_complete_step_accepted_as_metadata_only",
+        "test_duplicate_sequence_and_step_before_backward_rejected",
+        "test_r2_first_microbatch_must_not_have_physical_step",
+        "test_r2_reused_caption_identity_rejected",
+    )
 }
 _CPU_SUCCESS = {
     "WorkerPhysicalObserverRED." + name
@@ -105,6 +106,8 @@ def check_expected_red(stage: str) -> int:
         problems.append(f"unexpected executed count {result.testsRun}/{len(discovered)}")
     if failed:
         problems.append("unanticipated assertion failures: " + repr(sorted(failed)))
+    # A subTest can contain several independent negative cases that are
+    # expected to PASS on C3. They are counted as one parent unittest method.
     if result.skipped:
         problems.append("tests unexpectedly skipped: " + repr(result.skipped))
     if successes != expected_successes:

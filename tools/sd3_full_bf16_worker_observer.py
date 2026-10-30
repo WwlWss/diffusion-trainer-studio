@@ -414,6 +414,12 @@ class PhysicalStepProbe:
     def _patch(self, obj: Any, name: str, wrapped: Callable) -> None:
         had_instance = name in vars(obj)
         original_instance = vars(obj).get(name)
+        previous = getattr(obj, name)
+        # torch LRScheduler checks this marker to detect overwritten optimizer
+        # steps. The underlying scheduler-wrapped original still executes
+        # exactly once; retaining its marker avoids a false scheduling warning.
+        if name == "step" and getattr(previous, "_wrapped_by_lr_sched", False):
+            wrapped._wrapped_by_lr_sched = True
         self._patched.append((obj,name,had_instance,original_instance))
         setattr(obj, name, wrapped)
 

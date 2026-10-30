@@ -6,6 +6,7 @@ must never be misreported as candidate CUDA qualification.
 """
 from __future__ import annotations
 
+import importlib
 from types import SimpleNamespace
 import math
 import unittest
@@ -26,8 +27,7 @@ R2 = "r2-muon-adamw-fallback-accum2"
 
 
 def observer():
-    from tools import sd3_full_bf16_worker_observer
-    return sd3_full_bf16_worker_observer
+    return importlib.import_module("tools.sd3_full_bf16_worker_observer")
 
 
 def build_two_child_cpu():
