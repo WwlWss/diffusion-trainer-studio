@@ -297,7 +297,10 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
         """Actual Muon + AdamW child topology; no BF16 CUDA assertion."""
         from types import SimpleNamespace
         from pytorch_optimizer import Muon
-        from mikazuki.parameter_policy_torch import CompositeOptimizer, OptimizerRuntimeEntry
+        from mikazuki.parameter_policy_torch import (
+            CompositeOptimizer, CompositeLRScheduler,
+            OptimizerRuntimeEntry, SchedulerRuntimeEntry,
+        )
 
         muon_param = torch.nn.Parameter(torch.randn(8, 8))
         adamw_param = torch.nn.Parameter(torch.randn(8, 8))
@@ -318,10 +321,41 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
         )
         self.assertEqual(len(outer.child_optimizers), 2)
         self.assertNotEqual(id(muon_param), id(adamw_param))
-        muon_param.grad = torch.ones_like(muon_param)
-        adamw_param.grad = torch.ones_like(adamw_param)
+        muon_scheduler = torch.optim.lr_scheduler.LambdaLR(muon, lambda _: 1.0)
+        adamw_scheduler = torch.optim.lr_scheduler.LambdaLR(adamw, lambda _: 1.0)
+        scheduler = CompositeLRScheduler(
+            outer,
+            (
+                SchedulerRuntimeEntry(
+                    profile_name="muon_primary", optimizer_type="Muon",
+                    topology_fingerprint="muon-child-cpu", mode="external",
+                    optimizer=muon, scheduler=muon_scheduler,
+                    scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+                ),
+                SchedulerRuntimeEntry(
+                    profile_name="adamw_fallback", optimizer_type="AdamW",
+                    topology_fingerprint="adamw-child-cpu", mode="external",
+                    optimizer=adamw, scheduler=adamw_scheduler,
+                    scheduler_type="torch.optim.lr_scheduler.LambdaLR",
+                ),
+            ),
+        )
+        self.assertEqual(scheduler.state_dict()["step_count"], 1)
+        # Two actual Backwards, but exactly one optimizer/scheduler update.
+        outer.zero_grad(set_to_none=True)
+        for _microbatch in range(2):
+            (muon_param.square().sum() + adamw_param.square().sum()).backward()
+        self.assertIsNotNone(muon_param.grad)
+        self.assertIsNotNone(adamw_param.grad)
+        self.assertFalse(muon.state)
+        self.assertFalse(adamw.state)
         outer.step()
+        scheduler.step()
+        outer.zero_grad(set_to_none=True)
+        self.assertEqual(scheduler.state_dict()["step_count"], 2)
+        self.assertEqual(scheduler.state_dict()["last_epoch"], 1)
         state = outer.state_dict()
+        scheduler_state = scheduler.state_dict()
         self.assertEqual(set(state["children"]), {"muon_primary", "adamw_fallback"})
         self.assertEqual(
             state["children"]["adamw_fallback"]["optimizer_type"], "AdamW",
@@ -329,7 +363,10 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
         # Validate exact Profile and topology roundtrip of the two actual
         # child optimizers; not a GPU or full-BF16 qualification claim.
         outer.load_state_dict(state)
+        scheduler.load_state_dict(scheduler_state)
         self.assertEqual(set(outer.state_dict()["children"]), set(state["children"]))
+        self.assertEqual(set(scheduler.state_dict()["children"]), {"muon_primary", "adamw_fallback"})
+        self.assertEqual(scheduler.state_dict()["step_count"], 2)
 
     def test_host_reference_scheduler_identity_matches_production_factory(self):
         from mikazuki.parameter_policy_trainer import _scheduler_identity_from_args
