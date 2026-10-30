@@ -7,6 +7,7 @@ must never be misreported as candidate CUDA qualification.
 from __future__ import annotations
 
 import importlib
+from dataclasses import replace
 from types import SimpleNamespace
 import math
 import unittest
@@ -379,6 +380,95 @@ class C3PhysicalObserverCPU(unittest.TestCase):
                 phase_id="fresh-c3cpu-0002",
                 phase="fresh", source_commit="a"*40,
             )
+
+
+    def test_real_runtime_spec_group_and_route_ownership_binding(self):
+        from mikazuki.parameter_policy_runtime import (
+            RuntimeParameterSpec, OptimizerGroupSpec,
+            OptimizerInstanceSpec, ParameterPolicyRuntimeSpec,
+        )
+        from mikazuki.parameter_routing import RoutingAssignment
+        acc, model, optimizer, scheduler, _, _ = build_two_child_cpu()
+        param_by_profile = {
+            "muon_primary": model["left"].weight,
+            "adamw_fallback": model["right"].weight,
+        }
+        names = {
+            "muon_primary": "network.left.weight",
+            "adamw_fallback": "network.right.weight",
+        }
+        component = {
+            "muon_primary": "mmdit.attention.adapter",
+            "adamw_fallback": "mmdit.modulation_norm.adapter",
+        }
+        route_kind = {"muon_primary": "primary", "adamw_fallback": "fallback"}
+        specs, assignments = [], {}
+        for child in optimizer.entries:
+            profile = child.profile_name
+            param = param_by_profile[profile]
+            row = RuntimeParameterSpec(
+                parameter=param, parameter_id=id(param),
+                canonical_name=names[profile], shape=tuple(param.shape),
+                numel=param.numel(), component_id=component[profile],
+                route_kind=route_kind[profile], parameter_class="matrix_weight",
+            )
+            specs.append(OptimizerInstanceSpec(
+                profile_name=profile, optimizer_type=child.optimizer_type,
+                optimizer_arguments_json="{}", supports_group_lr=True,
+                uses_external_scheduler=True, lr_semantics="fixed",
+                groups=(OptimizerGroupSpec(
+                    learning_rate=child.optimizer.param_groups[0]["lr"],
+                    parameters=(row,),
+                ),),
+                topology_fingerprint=child.topology_fingerprint,
+            ))
+            assignments[names[profile]] = RoutingAssignment(
+                parameter=param, parameter_id=id(param),
+                canonical_name=names[profile], parameter_class="matrix_weight",
+                component_id=component[profile], route_kind=route_kind[profile],
+                optimizer_profile=profile, learning_rate=1e-4,
+                reason="real CPU identity fixture",
+            )
+        session = SimpleNamespace(
+            optimizer=optimizer,
+            runtime_spec=ParameterPolicyRuntimeSpec(
+                version=1, optimizers=tuple(specs),
+                topology_fingerprint="c3-physical-cpu-v1",
+            ),
+        )
+        by_id = {id(p): names[profile] for profile,p in param_by_profile.items()}
+        auditor = observer().audit_physical_optimizer_groups
+        children = auditor(session=session, canonical_names_by_id=by_id,
+                           routing_assignments=assignments)
+        self.assertEqual(children, {
+            "muon_primary": ["network.left.weight"],
+            "adamw_fallback": ["network.right.weight"],
+        })
+        bad_route = dict(assignments)
+        bad_route["network.right.weight"] = replace(
+            assignments["network.right.weight"],
+            component_id="clip_l.adapter",
+        )
+        with self.assertRaisesRegex(ValueError, "disagree"):
+            auditor(session=session, canonical_names_by_id=by_id,
+                    routing_assignments=bad_route)
+        adamw = optimizer.entries[1].optimizer
+        saved_lr = adamw.param_groups[0]["lr"]
+        try:
+            adamw.param_groups[0]["lr"] = 0.025
+            with self.assertRaisesRegex(ValueError, "learning-rate"):
+                auditor(session=session, canonical_names_by_id=by_id,
+                        routing_assignments=assignments)
+        finally:
+            adamw.param_groups[0]["lr"] = saved_lr
+        alien = torch.nn.Parameter(torch.ones(4, 4))
+        adamw.param_groups[0]["params"].append(alien)
+        try:
+            with self.assertRaisesRegex(ValueError, "order|Parameter"):
+                auditor(session=session, canonical_names_by_id=by_id,
+                        routing_assignments=assignments)
+        finally:
+            adamw.param_groups[0]["params"].pop()
 
 
 if __name__ == "__main__":
