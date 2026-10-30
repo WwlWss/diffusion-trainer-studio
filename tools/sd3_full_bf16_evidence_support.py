@@ -840,6 +840,106 @@ def verify_adapter_file(
     }
 
 
+
+def build_sd35_medium_lora_target_spec() -> dict[str, dict[str, Any]]:
+    """Pure Host, fixed SD3.5 Medium reference target geometry.
+
+    24 joint blocks, pre_only context at block 23, x.attn2 in 0..12,
+    hidden 1536, MLP expansion 4, rank 4. Independently check every
+    target name/shape against the *real* LoRANetwork in the CPU test.
+    """
+    hidden, mlp, rank = 1536, 6144, 4
+    targets: dict[str, dict[str, Any]] = {}
+
+    def put(block: int, side: str, subpath: str, component: str,
+            inputs: int, outputs: int) -> None:
+        name = f"lora_unet_joint_blocks_{block}_{side}_{subpath}"
+        if name in targets:
+            _fail(f"Duplicate LoRA reference module: {name}")
+        targets[name] = {
+            "component_id": component, "input_features": inputs,
+            "output_features": outputs, "rank": rank,
+        }
+
+    for block in range(24):
+        for side in ("context_block", "x_block"):
+            context_last = side == "context_block" and block == 23
+            extra = side == "x_block" and block <= 12
+            put(block, side, "attn_qkv", "mmdit.attention.adapter", hidden, 3 * hidden)
+            if not context_last:
+                put(block, side, "attn_proj", "mmdit.attention.adapter", hidden, hidden)
+            if extra:
+                put(block, side, "attn2_qkv", "mmdit.attention.adapter", hidden, 3 * hidden)
+                put(block, side, "attn2_proj", "mmdit.attention.adapter", hidden, hidden)
+            if not context_last:
+                put(block, side, "mlp_fc1", "mmdit.mlp.adapter", hidden, mlp)
+                put(block, side, "mlp_fc2", "mmdit.mlp.adapter", mlp, hidden)
+            n_mods = 2 if context_last else 9 if extra else 6
+            put(block, side, "adaLN_modulation_1", "mmdit.modulation_norm.adapter",
+                hidden, n_mods * hidden)
+    counts: dict[str, int] = {}
+    for entry in targets.values():
+        key = entry["component_id"]
+        counts[key] = counts.get(key, 0) + 1
+    if (len(targets) != 263 or counts != {
+        "mmdit.attention.adapter": 121,
+        "mmdit.mlp.adapter": 94,
+        "mmdit.modulation_norm.adapter": 48,
+    }):
+        _fail("SD3.5 Medium production target enumeration has drifted")
+    return dict(sorted(targets.items()))
+
+
+def verify_b0_reference_adapter(
+    path: Path, *, expected_file_sha256: str,
+    expected_tensors: Mapping[str, Mapping[str, Any]],
+    expected_targets: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Strict B0-only rank 4 / alpha 4 / full BF16 / Unet-only file gate."""
+    file_result = verify_adapter_file(
+        path, expected_file_sha256=expected_file_sha256,
+        expected_tensors=expected_tensors,
+    )
+    canonical = build_sd35_medium_lora_target_spec()
+    if expected_targets != canonical:
+        _fail("Reference target spec differs from frozen audited SD3.5 Medium")
+    expected_keys = {
+        name + suffix for name in canonical
+        for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha")
+    }
+    if set(expected_tensors) != expected_keys:
+        _fail(f"B0 complete target tensor set differs: "
+              f"missing={len(expected_keys-set(expected_tensors))}; "
+              f"extra={len(set(expected_tensors)-expected_keys)}")
+    bf16_four_digest = _sha256(b"\x80\x40")
+    for module, target in canonical.items():
+        if not module.startswith("lora_unet_"):
+            _fail(f"Non-Unet LoRA target is not allowed: {module}")
+        rank = target["rank"]
+        for suffix, shape, role in (
+            (".lora_down.weight", [rank, target["input_features"]], "trainable_weight"),
+            (".lora_up.weight", [target["output_features"], rank], "trainable_weight"),
+            (".alpha", [], "alpha_buffer"),
+        ):
+            key = module + suffix
+            ref = expected_tensors[key]
+            if (not isinstance(ref, Mapping)
+                    or ref.get("dtype") != "BF16"
+                    or ref.get("shape") != shape
+                    or ref.get("role") != role):
+                _fail(f"Full BF16/R4/reference geometry mismatch: {key}")
+            if suffix == ".alpha" and ref.get("sha256") != bf16_four_digest:
+                _fail(f"Noncanonical BF16 alpha=4 scalar: {key}")
+    # verify_adapter_file has already hashed the actual raw saved Tensor
+    # bytes for every key. Matching BF16(4) sha means actual scalar=4.
+    return {
+        **file_result,
+        "status": "b0_reference_file_verified",
+        "reference_target_spec_sha256": _json_sha256(canonical),
+        "module_count": len(canonical),
+        "target_tensor_count": len(expected_keys),
+    }
+
 def validate_adapter_checkpoint_metadata(
     binding: object, progress: object, *,
     expected_case_id: str, expected_phase_id: str,
