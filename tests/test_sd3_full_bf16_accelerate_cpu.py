@@ -184,6 +184,119 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
             self.assertTrue(torch.equal(network.weight.detach().cpu(), saved["weight"]))
             self.assertTrue(torch.equal(base[0].weight.detach(), base_after))
 
+    def test_real_lora_module_alpha_cast_and_safetensors_save_roundtrip(self):
+        # Import the real DTS LoRAModule; do not replace it with a toy class.
+        import sys
+        from safetensors.torch import load_file, save_file
+        from tools import sd3_full_bf16_evidence_support as host
+
+        sys.path.insert(0, str(host.ROOT / "scripts" / "dev"))
+        from networks.lora_flux import LoRAModule
+        lora = LoRAModule(
+            "lora_unet_reference_test", torch.nn.Linear(8, 16),
+            lora_dim=4, alpha=4.0,
+        )
+        self.assertEqual(lora.alpha.dtype, torch.float32)
+        lora.to(torch.bfloat16)
+        self.assertEqual(lora.alpha.dtype, torch.bfloat16)
+        self.assertEqual(tuple(lora.lora_down.weight.shape), (4, 8))
+        self.assertEqual(tuple(lora.lora_up.weight.shape), (16, 4))
+        self.assertEqual(lora.alpha.item(), 4.0)
+        state = {k: t.detach().cpu().contiguous()
+                 for k, t in lora.state_dict().items()}
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "lora.safetensors"
+            save_file(state, str(path))
+            saved = load_file(str(path), device="cpu")
+            self.assertEqual(set(saved), set(state))
+            for key in state:
+                self.assertTrue(torch.equal(saved[key], state[key]), key)
+            self.assertEqual(saved["alpha"].dtype, torch.bfloat16)
+
+    def test_real_sd35_medium_lora_target_enumeration_matches_host_spec(self):
+        """Use production MMDiT and LoRANetwork; no checkpoint weights/GPU."""
+        import sys
+        from tools import sd3_full_bf16_evidence_support as host
+
+        sys.path.insert(0, str(host.ROOT / "scripts" / "dev"))
+        from library.sd3_models import MMDiT
+        from networks.lora_sd3 import LoRANetwork
+        expected = host.build_sd35_medium_lora_target_spec()
+        with torch.device("meta"):
+            mmdit = MMDiT(
+                depth=24, qk_norm="rms",
+                x_block_self_attn_layers=list(range(13)),
+                model_type="5-medium",
+            )
+            network = LoRANetwork(
+                [], mmdit, lora_dim=4, alpha=4,
+                split_qkv=False, train_t5xxl=False,
+            )
+        actual = {}
+        for lora in network.unet_loras:
+            name = lora.lora_name
+            self.assertEqual(lora.split_dims, None)
+            self.assertIsInstance(lora.org_module, torch.nn.Linear)
+            actual[name] = {
+                "input_features": lora.org_module.in_features,
+                "output_features": lora.org_module.out_features,
+                "rank": lora.lora_dim,
+            }
+        self.assertEqual(len(actual), 263)
+        self.assertEqual(set(actual), set(expected))
+        for name, real in actual.items():
+            ref = expected[name]
+            self.assertEqual(real["input_features"], ref["input_features"], name)
+            self.assertEqual(real["output_features"], ref["output_features"], name)
+            self.assertEqual(real["rank"], ref["rank"], name)
+        network.apply_to([], mmdit, apply_text_encoder=False, apply_unet=True)
+        network.to(torch.bfloat16)
+        tensors = network.state_dict()
+        self.assertEqual(len(tensors), 3 * 263)
+        self.assertEqual(set(tensors), {
+            name + suffix for name in expected
+            for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha")
+        })
+        self.assertTrue(all(t.dtype == torch.bfloat16 for t in tensors.values()))
+
+    def test_r2_two_real_optimizer_children_have_disjoint_cpu_state(self):
+        """Actual Muon + AdamW child topology; no BF16 CUDA assertion."""
+        from types import SimpleNamespace
+        from pytorch_optimizer import Muon
+        from mikazuki.parameter_policy_torch import CompositeOptimizer, OptimizerRuntimeEntry
+
+        muon_param = torch.nn.Parameter(torch.randn(8, 8))
+        adamw_param = torch.nn.Parameter(torch.randn(8, 8))
+        muon = Muon([{"params": [muon_param], "use_muon": True}], lr=0.0001)
+        adamw = torch.optim.AdamW([adamw_param], lr=0.0001)
+        outer = CompositeOptimizer(
+            SimpleNamespace(topology_fingerprint="cpu-r2-two-child"),
+            (
+                OptimizerRuntimeEntry(
+                    profile_name="muon_primary", optimizer_type="Muon",
+                    topology_fingerprint="muon-child-cpu", optimizer=muon,
+                ),
+                OptimizerRuntimeEntry(
+                    profile_name="adamw_fallback", optimizer_type="AdamW",
+                    topology_fingerprint="adamw-child-cpu", optimizer=adamw,
+                ),
+            ),
+        )
+        self.assertEqual(len(outer.child_optimizers), 2)
+        self.assertNotEqual(id(muon_param), id(adamw_param))
+        muon_param.grad = torch.ones_like(muon_param)
+        adamw_param.grad = torch.ones_like(adamw_param)
+        outer.step()
+        state = outer.state_dict()
+        self.assertEqual(set(state["children"]), {"muon_primary", "adamw_fallback"})
+        self.assertEqual(
+            state["children"]["adamw_fallback"]["optimizer_type"], "AdamW",
+        )
+        # Validate exact Profile and topology roundtrip of the two actual
+        # child optimizers; not a GPU or full-BF16 qualification claim.
+        outer.load_state_dict(state)
+        self.assertEqual(set(outer.state_dict()["children"]), set(state["children"]))
+
     def test_host_reference_scheduler_identity_matches_production_factory(self):
         from mikazuki.parameter_policy_trainer import _scheduler_identity_from_args
         from tools import sd3_full_bf16_evidence_support as host
