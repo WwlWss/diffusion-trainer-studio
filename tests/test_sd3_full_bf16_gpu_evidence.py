@@ -1525,7 +1525,31 @@ class B0FinalStrictReviewR3RED(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
             snap, binding = _write_host_checkpoint(case)
-            # Old Host fixture has only 3 modules, rank=2 and is accepted.
+            targets = api.build_sd35_medium_lora_target_spec()
+            self.assertEqual(len(targets), 263)
+            self.assertEqual(len(snap["adapter_tensors"]), 789)
+            self.assertEqual(
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=snap,
+                    binding=binding, expected_phase_id="host-phase-1",
+                )["status"],
+                "physical_binding_valid",
+            )
+            # Fully rehash a pair whose true target rank is 4 as rank 2.
+            module = next(iter(targets))
+            entry = targets[module]
+            _rewrite_b0_checkpoint_tensors(
+                case, snap, binding, {
+                    module + ".lora_down.weight": (
+                        "BF16", [2, entry["input_features"]],
+                        b"\x00\x3f" * (2 * entry["input_features"]),
+                    ),
+                    module + ".lora_up.weight": (
+                        "BF16", [entry["output_features"], 2],
+                        b"\x80\x3f" * (entry["output_features"] * 2),
+                    ),
+                },
+            )
             with self.assertRaises(api.FullBF16EvidenceError):
                 api.verify_adapter_checkpoint_binding(
                     case_manifest=case, phase="fresh", worker_snapshot=snap,
@@ -1534,18 +1558,61 @@ class B0FinalStrictReviewR3RED(unittest.TestCase):
 
     def test_rejects_full_bf16_alpha_f32_even_when_all_hashes_match(self):
         api = _support()
+        for dtype, raw in (
+            ("F32", struct.pack("<f", 4.0)),
+            ("BF16", b"\x00\x40"),  # Wrong BF16 scalar value: 2, not 4.
+        ):
+            with tempfile.TemporaryDirectory() as td:
+                case = json.loads(Path(_generate(Path(td), R2)["manifest"]).read_text(encoding="utf-8"))
+                snap, binding = _write_host_checkpoint(case)
+                alpha = next(k for k in snap["adapter_tensors"] if k.endswith(".alpha"))
+                _rewrite_b0_checkpoint_tensors(case, snap, binding, {
+                    alpha: (dtype, [], raw),
+                })
+                with self.subTest(dtype=dtype, bytes=raw), self.assertRaises(api.FullBF16EvidenceError):
+                    api.verify_adapter_checkpoint_binding(
+                        case_manifest=case, phase="fresh", worker_snapshot=snap,
+                        binding=binding, expected_phase_id="host-phase-1",
+                    )
+
+    def test_rejects_missing_complete_lora_target_even_with_rehashed_manifest(self):
+        api = _support()
         with tempfile.TemporaryDirectory() as td:
-            case = json.loads(Path(_generate(Path(td), R2)["manifest"]).read_text(encoding="utf-8"))
+            case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
             snap, binding = _write_host_checkpoint(case)
-            self.assertTrue(any(
-                k.endswith(".alpha") and v["dtype"] == "F32"
-                for k, v in snap["adapter_tensors"].items()
-            ))
+            removed_module = next(iter(api.build_sd35_medium_lora_target_spec()))
+            _rewrite_b0_checkpoint_tensors(
+                case, snap, binding, {},
+                remove=tuple(
+                    removed_module + suffix
+                    for suffix in (".lora_down.weight", ".lora_up.weight", ".alpha")
+                ),
+            )
             with self.assertRaises(api.FullBF16EvidenceError):
                 api.verify_adapter_checkpoint_binding(
                     case_manifest=case, phase="fresh", worker_snapshot=snap,
                     binding=binding, expected_phase_id="host-phase-1",
                 )
+
+    def test_full_reference_target_counts_and_shapes(self):
+        api = _support()
+        targets = api.build_sd35_medium_lora_target_spec()
+        counts = {}
+        for module, target in targets.items():
+            self.assertTrue(module.startswith("lora_unet_joint_blocks_"))
+            self.assertEqual(target["rank"], 4)
+            counts[target["component_id"]] = counts.get(target["component_id"], 0) + 1
+        self.assertEqual(counts, {
+            "mmdit.attention.adapter": 121, "mmdit.mlp.adapter": 94,
+            "mmdit.modulation_norm.adapter": 48,
+        })
+        self.assertEqual(
+            targets["lora_unet_joint_blocks_23_context_block_adaLN_modulation_1"]["output_features"],
+            3072,
+        )
+        self.assertNotIn("lora_unet_joint_blocks_23_context_block_mlp_fc1", targets)
+        self.assertNotIn("lora_unet_joint_blocks_13_x_block_attn2_qkv", targets)
+        self.assertIn("lora_unet_joint_blocks_12_x_block_attn2_qkv", targets)
 
     def test_rejects_coherently_rehashed_frozen_text_encoder_lora(self):
         api = _support()
