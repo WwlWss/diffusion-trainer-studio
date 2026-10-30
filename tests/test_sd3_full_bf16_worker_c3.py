@@ -57,7 +57,7 @@ class C3HostEventContract(unittest.TestCase):
             host.validate_worker_event_stream(case_id=R2, phase="fresh", events=rows)
 
     def test_early_scheduler_and_repeated_muon_child_rejected(self):
-        for index in (5, 6):
+        for index in (5, 4):
             rows = [*r2_step(), event("train_completed", 9, case=R2)]
             rows[index] = dict(rows[index])
             if index == 5:
