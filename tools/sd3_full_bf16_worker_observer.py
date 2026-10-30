@@ -139,6 +139,31 @@ def verify_prepared_identity(*, session: Any, accelerator: Any, scheduler: Any) 
     }
 
 
+
+def audit_physical_optimizer_groups(
+    *, session: Any, canonical_names_by_id: Mapping[int, str],
+    routing_assignments: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    """Device-neutral real object identity audit; NEVER a CUDA qualification.
+
+    Production invokes this after its fixed 263/526 BF16 CUDA scope gate.
+    CPU tests cover the exact same group/Component/Route invariants.
+    """
+    optimizer = session.optimizer
+    if not isinstance(optimizer, CompositeOptimizer):
+        _fail("Physical group audit requires real DTS CompositeOptimizer")
+    if len(session.runtime_spec.optimizers) != len(optimizer.entries):
+        _fail("Mismatch in actual runtime Optimizer topology")
+    assignments = routing_assignments
+    by_id = canonical_names_by_id
+    expected_names = set(by_id.values())
+    children = audit_physical_optimizer_groups(
+        session=session, canonical_names_by_id=by_id,
+        routing_assignments=assignments,
+    )
+    return children
+
+
 def observe_prepared_ownership(
     *, session: Any, accelerator: Any, network: torch.nn.Module,
     train_dataloader: Any, case_id: str,
@@ -643,5 +668,6 @@ def __getattr__(name: str):
 __all__ = [
     "fingerprint_tensor", "fingerprint_state_tree", "snapshot_rng_fingerprint",
     "verify_prepared_identity", "observe_prepared_ownership",
+    "audit_physical_optimizer_groups",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]
