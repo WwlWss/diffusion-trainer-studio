@@ -152,12 +152,12 @@ def check_expected_red(stage: str) -> int:
     if summary:
         with open(summary, "a", encoding="utf-8") as stream:
             stream.write(
-                f"### {outcome}\\n\\n"
-                f"- Actual unittest executions: {result.testsRun}\\n"
-                f"- Expected missing-interface errors: {len(expected_errors)}\\n"
-                f"- Actual passing tests: {len(expected_successes)}\\n"
-                "- Unexpected errors, skipped tests or assertion failures: 0\\n"
-                "- **No C4 worker_complete, real CUDA or release qualification.**\\n\\n"
+                f"### {outcome}\n\n"
+                f"- Actual unittest executions: {result.testsRun}\n"
+                f"- Expected missing-interface errors: {len(expected_errors)}\n"
+                f"- Actual passing tests: {len(expected_successes)}\n"
+                "- Unexpected errors, skipped tests or assertion failures: 0\n"
+                "- **No C4 worker_complete, real CUDA or release qualification.**\n\n"
             )
     return 0
 
