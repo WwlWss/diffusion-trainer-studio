@@ -9,6 +9,8 @@ import copy
 from dataclasses import replace
 import json
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -104,6 +106,19 @@ class C2TicketAndAssetGateContract(unittest.TestCase):
             with self.assertRaises(ValueError):
                 api().resolve_phase_invocation(alias)
             self.assertFalse(alias.with_name(alias.name + ".consumed").exists())
+
+
+    def test_direct_script_cli_resolves_repo_imports_outside_checkout(self):
+        """Actual future Runner form must not import a shadow tools package."""
+        script = host.ROOT / "tools" / "sd3_full_bf16_evidence_worker.py"
+        with tempfile.TemporaryDirectory() as td:
+            result = subprocess.run(
+                [sys.executable, str(script), "--ticket", "relative.json"],
+                cwd=td, capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("absolute --ticket", result.stderr)
+            self.assertNotIn("ModuleNotFoundError", result.stderr)
 
 
 class C2LeaseContract(unittest.TestCase):

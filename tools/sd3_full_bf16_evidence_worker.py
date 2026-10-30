@@ -21,8 +21,9 @@ from typing import Any, Callable, Mapping
 # source import semantics as python -m tools.sd3_full_bf16_evidence_worker.
 if __package__ in (None, ""):
     _source_root = str(Path(__file__).resolve().parents[1])
-    if _source_root not in sys.path:
-        sys.path.insert(0, _source_root)
+    # The checked-out Worker must take precedence even when PYTHONPATH puts an
+    # unrelated "tools" package earlier than the repository in sys.path.
+    sys.path[:] = [_source_root] + [p for p in sys.path if p != _source_root]
 
 from tools import sd3_full_bf16_evidence_support as host
 
@@ -335,6 +336,17 @@ def _production_namespace(invocation: WorkerInvocation):
     if source_file != scripts_dir / "sd3_train_network.py":
         _reject("Worker imported a shadow production SD3 Trainer")
     from library import train_util
+    for label, module, expected in (
+        ("production train_network", trainer_module.train_network,
+         scripts_dir / "train_network.py"),
+        ("production train_util", train_util,
+         scripts_dir / "library" / "train_util.py"),
+    ):
+        imported = host._real_path(
+            str(Path(module.__file__).resolve()), name=label, must_exist=True,
+        )
+        if imported != expected:
+            _reject(f"Worker imported shadow {label}")
     parser = trainer_module.setup_parser()
     args = parser.parse_args(invocation.trainer_argv[1:])
     if getattr(args, "config_file", None) is not None:
