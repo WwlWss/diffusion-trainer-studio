@@ -1375,5 +1375,90 @@ class B0FinalStrictReviewR2RED(unittest.TestCase):
                 self._bind(api, case, snapshot, binding)
 
 
+def _inject_complete_frozen_text_encoder_triplet(
+    *, case: dict, snapshot: dict, binding: dict,
+) -> None:
+    """Deliberately build a coherent *invalid B0* adapter/ownership state."""
+    path = Path(case["fresh_adapter_path"])
+    original = path.read_bytes()
+    header_len = struct.unpack("<Q", original[:8])[0]
+    header = json.loads(original[8:8 + header_len])
+    payload = original[8 + header_len:]
+    prefix = "lora_te1_text_model_encoder_layers_0_self_attn_q_proj"
+    for suffix, shape, raw, role in (
+        (".lora_down.weight", [2, 2], b"\x00\x3f\x00\x40\x80\x40\x00\x41", "frozen_weight"),
+        (".lora_up.weight", [2, 2], b"\x00\x40\x00\x3f\x00\x41\x80\x40", "frozen_weight"),
+        (".alpha", [], struct.pack("<f", 4.0), "alpha_buffer"),
+    ):
+        key = prefix + suffix
+        offset = len(payload)
+        payload += raw
+        header[key] = {"dtype": "F32" if suffix == ".alpha" else "BF16",
+                       "shape": shape, "data_offsets": [offset, len(payload)]}
+        snapshot["adapter_tensors"][key] = {
+            "dtype": header[key]["dtype"], "shape": shape, "role": role,
+            "sha256": _digest(raw),
+        }
+        if suffix.endswith(".weight"):
+            canonical = "network." + key
+            snapshot["parameter_ownership"]["parameter_rows"][key] = {
+                "canonical_name": canonical, "component_id": "clip_l.adapter",
+                "optimizer_profile": None, "route_kind": "frozen",
+                "requires_grad": False, "parameter_class": "matrix_weight",
+                "dtype": "BF16", "shape": shape,
+            }
+    new_header = json.dumps(header, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    new_file = struct.pack("<Q", len(new_header)) + new_header + payload
+    path.write_bytes(new_file)
+    saved_network = Path(case["fresh_checkpoint_dir"]) / "model.safetensors"
+    saved_network.write_bytes(new_file)
+    snapshot["state_file_sha256"][saved_network.name] = _digest(new_file)
+    binding["adapter_file_sha256"] = _digest(new_file)
+    binding["adapter_tensor_inventory_sha256"] = _support()._json_sha256(snapshot["adapter_tensors"])
+
+
+class B0FinalStrictReviewR3RED(unittest.TestCase):
+    def test_rejects_physically_impossible_two_by_two_incomplete_reference(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            snap, binding = _write_host_checkpoint(case)
+            # Old Host fixture has only 3 modules, rank=2 and is accepted.
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=snap,
+                    binding=binding, expected_phase_id="host-phase-1",
+                )
+
+    def test_rejects_full_bf16_alpha_f32_even_when_all_hashes_match(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R2)["manifest"]).read_text(encoding="utf-8"))
+            snap, binding = _write_host_checkpoint(case)
+            self.assertTrue(any(
+                k.endswith(".alpha") and v["dtype"] == "F32"
+                for k, v in snap["adapter_tensors"].items()
+            ))
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=snap,
+                    binding=binding, expected_phase_id="host-phase-1",
+                )
+
+    def test_rejects_coherently_rehashed_frozen_text_encoder_lora(self):
+        api = _support()
+        with tempfile.TemporaryDirectory() as td:
+            case = json.loads(Path(_generate(Path(td), R1)["manifest"]).read_text(encoding="utf-8"))
+            snap, binding = _write_host_checkpoint(case)
+            _inject_complete_frozen_text_encoder_triplet(
+                case=case, snapshot=snap, binding=binding,
+            )
+            with self.assertRaises(api.FullBF16EvidenceError):
+                api.verify_adapter_checkpoint_binding(
+                    case_manifest=case, phase="fresh", worker_snapshot=snap,
+                    binding=binding, expected_phase_id="host-phase-1",
+                )
+
+
 if __name__ == "__main__":
     unittest.main()
