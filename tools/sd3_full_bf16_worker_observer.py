@@ -390,6 +390,7 @@ class PhysicalStepProbe:
         children = {}
         for entry in self.optimizer.entries:
             nonzero, count = 0, 0
+            gradient_identity = hashlib.sha256()
             for p in self.child_params[entry.profile_name]:
                 grad = p.grad
                 if grad is None or grad.layout != torch.strided:
@@ -398,12 +399,21 @@ class PhysicalStepProbe:
                     _fail("Non-BF16 or wrong-device physical gradient")
                 if not bool(torch.isfinite(grad).all().item()):
                     _fail("Non-finite physical BF16 Gradient")
+                fingerprint = fingerprint_tensor(grad)
+                gradient_identity.update(host._canonical_json_bytes({
+                    "canonical_name": names[id(p)],
+                    "dtype": fingerprint["dtype"],
+                    "shape": fingerprint["shape"],
+                    "sha256": fingerprint["sha256"],
+                }))
+                gradient_identity.update(b"\\n")
                 count += 1
                 nonzero += int(torch.count_nonzero(grad).item() > 0)
             if require_nonzero and not nonzero:
                 _fail("Optimizer Child has no real nonzero BF16 Gradient")
             children[entry.profile_name] = {
                 "tensor_count": count, "nonzero_tensor_count": nonzero,
+                "gradient_sha256": gradient_identity.hexdigest(),
             }
         return {
             "child_gradients": children,
@@ -506,6 +516,29 @@ class PhysicalStepProbe:
                     )
                     if before_state == after_state:
                         _fail("Physical Child did not advance actual optimizer state")
+                    child = next(e for e in self.optimizer.entries if e.profile_name==name)
+                    if child.optimizer_type == "Muon":
+                        actual_steps = [
+                            group.get("step")
+                            for group in child.optimizer.param_groups
+                        ]
+                        if any(type(n) is not int or n != step for n in actual_steps):
+                            _fail("Real Muon physical ParamGroup step counter disagrees with logical Step")
+                    elif child.optimizer_type == "AdamW":
+                        state_steps = []
+                        for group in child.optimizer.param_groups:
+                            for parameter in group["params"]:
+                                state = child.optimizer.state.get(parameter, {})
+                                actual = state.get("step")
+                                if isinstance(actual, torch.Tensor):
+                                    actual = actual.item()
+                                state_steps.append(actual)
+                        if (not state_steps
+                                or any(type(n) not in (int,float) or n != step
+                                       for n in state_steps)):
+                            _fail("Real AdamW physical state step counter disagrees with logical Step")
+                    else:
+                        _fail("Unreviewed physical Optimizer Child type")
                     self._step_children[step][name] += 1
                     self._record("physical_child_stepped", profile=name, details={
                         "optimizer_state_before": before_state,
@@ -513,6 +546,7 @@ class PhysicalStepProbe:
                         "parameter_before": before_params,
                         "parameter_after": after_params,
                         "post_clip_gradient": self._pre_step_grad,
+                        "physical_step": step,
                     })
                     return result
                 return wrapped
