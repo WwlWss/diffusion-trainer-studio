@@ -22,14 +22,6 @@ _CPU_OBSERVER_ERROR = "ModuleNotFoundError: No module named 'tools.sd3_full_bf16
 
 _HOST = {
     **{
-        "WorkerEntryContractRED." + name: _HOST_WORKER_ERROR
-        for name in (
-            "test_entrypoint_has_no_torch_import_at_module_import",
-            "test_worker_cli_accepts_one_absolute_ticket_only",
-            "test_ticket_manifest_recomputed_digests_and_output",
-        )
-    },
-    **{
         "TimelineContractRED." + name: _HOST_TIMELINE_ERROR
         for name in (
             "test_r1_minimal_complete_step_accepted_as_metadata_only",
@@ -49,13 +41,18 @@ _CPU = {
         "test_resume_rng_snapshot_interface",
     )
 }
+_HOST_SUCCESS = {
+    "WorkerEntryContractRED.test_entrypoint_has_no_torch_import_at_module_import",
+    "WorkerEntryContractRED.test_worker_cli_accepts_one_absolute_ticket_only",
+    "WorkerEntryContractRED.test_ticket_manifest_recomputed_digests_and_output",
+}
 _CPU_SUCCESS = {"WorkerPhysicalObserverRED.test_pinned_real_cpu_packages"}
 
 
 def check_expected_red(stage: str) -> int:
     if stage == "host":
         module, expected_errors, expected_successes = (
-            "tests.test_sd3_full_bf16_worker", _HOST, set()
+            "tests.test_sd3_full_bf16_worker", _HOST, _HOST_SUCCESS
         )
     elif stage == "cpu":
         module, expected_errors, expected_successes = (

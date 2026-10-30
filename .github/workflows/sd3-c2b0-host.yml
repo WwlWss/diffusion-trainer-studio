@@ -4,6 +4,12 @@ on:
   pull_request:
     paths:
       - "docs/d1-sd3c2b-plan.md"
+      - "docs/d1-sd3c2b-fix-c-worker-contract.md"
+      - "tests/test_sd3_full_bf16_worker.py"
+      - "tests/test_sd3_full_bf16_worker_c2.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/check_sd3_full_bf16_c1_red.py"
+      - ".github/workflows/sd3-c2b0-fix-c-red.yml"
       - "tests/test_sd3_full_bf16_gpu_evidence.py"
       - "tools/sd3_full_bf16_evidence_support.py"
       - "tools/prepare_sd3_full_bf16_cases.py"
@@ -75,10 +81,13 @@ jobs:
         run: python -c "from tools.prepare_sd3_full_bf16_cases import _source_submodule_inventory; print(_source_submodule_inventory())"
 
       - name: Compile B0 Host modules and RED tests
-        run: python -m py_compile tools/sd3_full_bf16_evidence_support.py tools/prepare_sd3_full_bf16_cases.py tests/test_sd3_full_bf16_gpu_evidence.py
+        run: python -m py_compile tools/sd3_full_bf16_evidence_support.py tools/prepare_sd3_full_bf16_cases.py tests/test_sd3_full_bf16_gpu_evidence.py tools/sd3_full_bf16_evidence_worker.py tests/test_sd3_full_bf16_worker.py tests/test_sd3_full_bf16_worker_c2.py
 
       - name: Run B0 Host GREEN-1 contracts
         run: python -m unittest tests.test_sd3_full_bf16_gpu_evidence -v
+
+      - name: Run C2 Worker admission/lease GREEN (pure Host, NO CUDA)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c2 -v
 
       - name: Re-run C2-A and mixed-BF16 R0 Host regression
         run: python -m unittest tests.test_sd3_full_bf16_scope tests.test_sd3_component_gpu_evidence -v

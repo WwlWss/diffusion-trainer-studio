@@ -16,6 +16,14 @@ from pathlib import Path
 import sys
 from typing import Any, Callable, Mapping
 
+# Direct script execution starts sys.path in tools/. Restore only the fixed repo
+# root, so python tools/sd3_full_bf16_evidence_worker.py has the same trusted
+# source import semantics as python -m tools.sd3_full_bf16_evidence_worker.
+if __package__ in (None, ""):
+    _source_root = str(Path(__file__).resolve().parents[1])
+    if _source_root not in sys.path:
+        sys.path.insert(0, _source_root)
+
 from tools import sd3_full_bf16_evidence_support as host
 
 

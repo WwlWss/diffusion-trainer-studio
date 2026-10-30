@@ -213,5 +213,62 @@ class C2FailurePublicationRED(unittest.TestCase):
                 )
 
 
+class C2ClaimAndFailureRED(unittest.TestCase):
+    def test_post_claim_runtime_failure_is_recorded_and_ticket_cannot_replay(self):
+        with tempfile.TemporaryDirectory() as td:
+            manifest, ticket, _mf, path = fixture(Path(td))
+            with (
+                patch.object(host, "validate_case_assets",
+                             return_value={"status": "preflight_pass"}),
+                patch.object(api(), "_verify_source_identity",
+                             return_value={"source_commit": SHA}),
+                patch.object(api(), "validate_runtime_environment",
+                             side_effect=RuntimeError("CUDA required (injected C2 Host test)")),
+            ):
+                self.assertEqual(api().main(["--ticket", str(path)]), 1)
+            claim_path = path.with_name(path.name + ".consumed")
+            result_path = path.parent / "fresh-fresh-c2red-0001.result.json"
+            self.assertTrue(claim_path.is_file())
+            evidence = host._read_json(result_path)
+            self.assertEqual(evidence["status"], "fail")
+            self.assertEqual(evidence["error"]["type"], "RuntimeError")
+            self.assertIn("CUDA required", evidence["error"]["message"])
+            self.assertFalse(evidence["backend_qualification_eligible"])
+            self.assertFalse((Path(manifest["work_root"]) / "fresh").exists())
+            with self.assertRaises(ValueError):
+                api().resolve_phase_invocation(path)
+            self.assertEqual(host._read_json(result_path), evidence)
+
+    def test_source_submodule_checkout_drift_and_missing_runtime_gitlink(self):
+        from tools import prepare_sd3_full_bf16_cases as generator
+        submodule_names = ("frontend", "mikazuki/dataset-tag-editor", "sd-scripts")
+        good = {
+            name: {"gitlink_sha": SHA, "checkout": "initialized"}
+            for name in submodule_names
+        }
+        manifest = {"source_commit": SHA, "source_submodules": good}
+        with (
+            patch.object(generator, "_source_commit", return_value=SHA),
+            patch.object(generator, "_source_submodule_inventory",
+                         return_value=copy.deepcopy(good)),
+        ):
+            self.assertTrue(api()._verify_source_identity(manifest)["source_clean"])
+        bad = copy.deepcopy(good)
+        bad["sd-scripts"]["checkout"] = "uninitialized"
+        with (
+            patch.object(generator, "_source_commit", return_value=SHA),
+            patch.object(generator, "_source_submodule_inventory",
+                         return_value=bad),
+        ):
+            with self.assertRaises(ValueError):
+                api()._verify_source_identity(manifest)
+
+    def test_source_invalid_commit_rejected(self):
+        from tools import prepare_sd3_full_bf16_cases as generator
+        with patch.object(generator, "_source_commit", return_value="b" * 40):
+            with self.assertRaises(ValueError):
+                api()._verify_source_identity({"source_commit": SHA})
+
+
 if __name__ == "__main__":
     unittest.main()
