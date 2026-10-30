@@ -137,7 +137,7 @@ def two_batches(bundle, *, first_zero=False, second_zero=False,
         probe.close()
 
 
-class C3FixF1OwnershipRED(unittest.TestCase):
+class C3FixF1OwnershipContract(unittest.TestCase):
     def test_reference_exact_shape_and_r2_430_96_route(self):
         for case in (R1, R2):
             with self.subTest(case=case):
@@ -191,7 +191,7 @@ class C3FixF1OwnershipRED(unittest.TestCase):
             )
 
 
-class C3FixF2GradientRED(unittest.TestCase):
+class C3FixF2GradientContract(unittest.TestCase):
     def test_three_component_gradients_have_physical_coverage(self):
         events = two_batches(three_component_cpu_probe())
         backward = [e for e in events if e["event_type"] == "backward_completed"]
@@ -219,13 +219,21 @@ class C3FixF2GradientRED(unittest.TestCase):
             two_batches(three_component_cpu_probe(), second_zero=True)
 
 
-class C3FixF3PhysicalWeightRED(unittest.TestCase):
+class C3FixF3PhysicalWeightContract(unittest.TestCase):
     def test_child_state_advance_but_zero_lr_weight_update_is_rejected(self):
         bundle = three_component_cpu_probe()
         facade = bundle[4]
         adamw = next(e.optimizer for e in facade.entries if e.optimizer_type == "AdamW")
         adamw.param_groups[0]["lr"] = 0.0
         with self.assertRaisesRegex(ValueError, "weight|Parameter|unchanged|physical"):
+            two_batches(bundle)
+
+    def test_tiny_nonzero_lr_that_rounds_away_in_bf16_is_rejected(self):
+        bundle = three_component_cpu_probe()
+        facade = bundle[4]
+        adamw = next(e.optimizer for e in facade.entries if e.optimizer_type == "AdamW")
+        adamw.param_groups[0]["lr"] = 1e-12
+        with self.assertRaisesRegex(ValueError, "BF16|weight|changed"):
             two_batches(bundle)
 
     def test_changed_weight_counts_positive_for_both_children(self):
@@ -260,7 +268,26 @@ class C3FixF3PhysicalWeightRED(unittest.TestCase):
             delattr(adamw, "step")
 
 
-class C3FixF4MuonStateRED(unittest.TestCase):
+class C3FixF4MuonStateContract(unittest.TestCase):
+    def test_actual_muon_and_adamw_state_advances_twice_without_extra_steps(self):
+        bundle = three_component_cpu_probe()
+        first_events = two_batches(bundle)
+        self.assertEqual(len([e for e in first_events if e["event_type"] == "physical_child_stepped"]), 2)
+        second_events = two_batches(bundle)
+        self.assertEqual(len([e for e in second_events if e["event_type"] == "physical_child_stepped"]), 4)
+        facade = bundle[4]
+        muon = next(e.optimizer for e in facade.entries if e.optimizer_type == "Muon")
+        adamw = next(e.optimizer for e in facade.entries if e.optimizer_type == "AdamW")
+        self.assertEqual(muon.param_groups[0]["step"], 2)
+        self.assertEqual(
+            observer.validate_muon_parameter_states(muon, physical_step=2)["momentum_parameter_count"], 2,
+        )
+        self.assertTrue(all(int(state["step"].item()) == 2 for state in adamw.state.values()))
+        self.assertTrue(all(
+            event["changed_parameter_count"] > 0
+            for event in second_events if event["event_type"] == "physical_child_stepped"
+        ))
+
     def test_each_muon_parameter_requires_real_finite_momentum_buffer(self):
         bundle = three_component_cpu_probe()
         two_batches(bundle)
@@ -285,6 +312,14 @@ class C3FixF4MuonStateRED(unittest.TestCase):
                 observer.validate_muon_parameter_states(entry.optimizer, physical_step=1)
         finally:
             original.copy_(saved)
+        entry.optimizer.state[p2]["momentum_buffer"] = torch.ones(
+            (1,), dtype=p2.dtype, device=p2.device,
+        )
+        try:
+            with self.assertRaisesRegex(ValueError, "shape|momentum|Muon"):
+                observer.validate_muon_parameter_states(entry.optimizer, physical_step=1)
+        finally:
+            entry.optimizer.state[p2]["momentum_buffer"] = original
         entry.optimizer.state[p2]["momentum_buffer"] = torch.ones(
             p2.shape, dtype=p2.dtype, device="meta",
         )
