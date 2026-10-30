@@ -26,6 +26,11 @@ on:
       - "scripts/dev/library/train_util.py"
       - "scripts/dev/networks/lora_sd3.py"
       - "scripts/dev/networks/lora_flux.py"
+      - "scripts/dev/library/sd3_utils.py"
+      - "scripts/dev/library/sd3_models.py"
+      - "scripts/dev/library/config_util.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "mikazuki/optimizer_profiles.py"
 
 permissions:
   contents: read
@@ -85,7 +90,7 @@ jobs:
         run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0"
 
       - name: Install pinned Accelerate and Host dependencies
-        run: python -m pip install --disable-pip-version-check "accelerate==1.6.0" "safetensors==0.4.5" "numpy==1.26.4" "pillow==11.1.0"
+        run: python -m pip install --disable-pip-version-check "accelerate==1.6.0" "safetensors==0.4.5" "numpy==1.26.4" "pillow==11.1.0" "transformers==4.54.1" "diffusers==0.32.1" "einops==0.7.0" "huggingface-hub==0.34.3" "pytorch-optimizer==3.10.0"
 
       - name: Execute real CPU save/load and Scheduler identity tests
         run: python -m unittest tests.test_sd3_full_bf16_accelerate_cpu -v
