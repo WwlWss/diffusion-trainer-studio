@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** Fix B GREEN-1R4 completed and independently Final Strict Reviewed at `b5ff9f9`. Fix C C0/C1 and **C2 restricted Worker GREEN Host/CPU** complete at `b401699` (GitHub Actions #41112624188/#41112624214). C3 physical Observer, C4 Save/Resume, Fix D Runner, B1/B2 CUDA and Full-BF16 release are **not** complete. C2 cannot certify physical CUDA or production qualification.
+> **Status:** Fix B reviewed; Fix C C0/C1 and C2 Host/CPU GREEN complete. **C3 real-Observer Host/CPU implementation is present, but exact-final-HEAD CI and independent review are pending.** C4 Checkpoint/Resume, Fix D Runner, B1/B2 CUDA and persistent Full-BF16 release are not complete; backend `sd3-lora` remains Pending.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
@@ -14,7 +14,7 @@
 | D1-SD3C1, PR #62 | `docs/parameter-policy-sd3-component-baseline.md`; R0 production Component mixed-BF16 AdamW CUDA | merged |
 | D1-SD3C2-A, PR #63 | `docs/parameter-policy-sd3-full-bf16-scope.md`; pure R1/R2 host admission and asset gate | merged; backend pending |
 | Shared safety, PR #64 | `mikazuki/parameter_policy_runtime_bools.py` and early direct-trainer preflight | merged |
-| **D1-SD3C2-B0** | This plan, C0/C1 tests, C2 Worker, later C3/C4 Observer and Fix D Runner | Fix B reviewed, C2 Host/CPU GREEN; C3/C4/Fix D pending; no CUDA claim |
+| **D1-SD3C2-B0** | Fix B Host, Fix C1/C2/C3 Worker, upcoming C4/Fix D | C3 implementation candidate pending exact-head CI; C4/D incomplete; no CUDA claim |
 
 The following are **sources of truth**, rather than a second runtime implementation:
 
