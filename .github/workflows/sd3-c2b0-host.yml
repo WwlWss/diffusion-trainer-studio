@@ -7,6 +7,7 @@ on:
       - "docs/d1-sd3c2b-fix-c-worker-contract.md"
       - "tests/test_sd3_full_bf16_worker.py"
       - "tests/test_sd3_full_bf16_worker_c2.py"
+      - "tests/test_sd3_full_bf16_worker_c2_cpu.py"
       - "tools/sd3_full_bf16_evidence_worker.py"
       - "tools/check_sd3_full_bf16_c1_red.py"
       - ".github/workflows/sd3-c2b0-fix-c-red.yml"
@@ -116,6 +117,9 @@ jobs:
 
       - name: Execute real CPU save/load and Scheduler identity tests
         run: python -m unittest tests.test_sd3_full_bf16_accelerate_cpu -v
+
+      - name: Run C2 Worker pinned CPU parser and CUDA fail-closed tests
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c2_cpu -v
 
       - name: Run full C2-A scope suite under real Torch (ZERO skipped)
         if: ${{ always() }}
