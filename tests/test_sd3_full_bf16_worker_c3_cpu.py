@@ -231,8 +231,8 @@ class C3PhysicalObserverCPU(unittest.TestCase):
 
 
     def test_observed_trainer_is_actual_production_subclass_and_fail_closed_c4(self):
-        import sd3_train_network
         cls = observer().ObservedSd3NetworkTrainer
+        import sd3_train_network
         self.assertTrue(issubclass(cls, sd3_train_network.Sd3NetworkTrainer))
         trainer = cls(
             invocation=SimpleNamespace(case_id=R2),
@@ -270,8 +270,8 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         self.assertIs(session.build_scheduler, original_build)
 
     def test_original_sd3_hook_and_step_start_delegate_first(self):
-        import sd3_train_network
         cls = observer().ObservedSd3NetworkTrainer
+        import sd3_train_network
         trainer = cls(
             invocation=SimpleNamespace(case_id=R2),
             cuda_environment={}, qualification_lease={},
