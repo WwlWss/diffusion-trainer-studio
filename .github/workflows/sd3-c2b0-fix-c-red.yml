@@ -74,5 +74,3 @@ jobs:
       - name: Execute pinned CPU C1 RED; require exact missing Observer errors
         run: python -m tools.check_sd3_full_bf16_c1_red --stage cpu
 
-      - name: Execute new C3 RED real CPU probes and require missing Observer
-        run: python -m tools.check_sd3_full_bf16_c1_red --stage c3-cpu

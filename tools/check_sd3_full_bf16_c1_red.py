@@ -32,29 +32,20 @@ _HOST = {
     },
 }
 
-_CPU = {
-    "WorkerPhysicalObserverRED." + name: _CPU_OBSERVER_ERROR
-    for name in (
-        "test_exact_bf16_tensor_fingerprint_uses_original_bytes",
-        "test_nested_optimizer_state_fingerprint_stable_across_object_instances",
-        "test_actual_accelerate_optimizer_and_scheduler_identity",
-        "test_resume_rng_snapshot_interface",
-    )
-}
+_CPU = {}
 _HOST_SUCCESS = {
     "WorkerEntryContractRED.test_entrypoint_has_no_torch_import_at_module_import",
     "WorkerEntryContractRED.test_worker_cli_accepts_one_absolute_ticket_only",
     "WorkerEntryContractRED.test_ticket_manifest_recomputed_digests_and_output",
 }
-_CPU_SUCCESS = {"WorkerPhysicalObserverRED.test_pinned_real_cpu_packages"}
-_C3_CPU = {
-    "C3PhysicalObserverCPU." + name: _CPU_OBSERVER_ERROR
+_CPU_SUCCESS = {
+    "WorkerPhysicalObserverRED." + name
     for name in (
-        "test_exact_tensor_state_and_rng_fingerprints",
-        "test_physical_muon_and_adamw_only_step_on_second_microbatch",
-        "test_non_sync_parameter_mutation_is_rejected",
-        "test_prepared_identity_wrong_session_optimizer_rejected",
-        "test_observe_prepared_ownership_cannot_certify_cpu",
+        "test_pinned_real_cpu_packages",
+        "test_exact_bf16_tensor_fingerprint_uses_original_bytes",
+        "test_nested_optimizer_state_fingerprint_stable_across_object_instances",
+        "test_actual_accelerate_optimizer_and_scheduler_identity",
+        "test_resume_rng_snapshot_interface",
     )
 }
 
@@ -67,10 +58,6 @@ def check_expected_red(stage: str) -> int:
     elif stage == "cpu":
         module, expected_errors, expected_successes = (
             "tests.test_sd3_full_bf16_worker_cpu", _CPU, _CPU_SUCCESS
-        )
-    elif stage == "c3-cpu":
-        module, expected_errors, expected_successes = (
-            "tests.test_sd3_full_bf16_worker_c3_cpu", _C3_CPU, set()
         )
     else:
         raise ValueError("Unknown RED stage: " + repr(stage))
@@ -169,6 +156,6 @@ def check_expected_red(stage: str) -> int:
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--stage", choices=("host", "cpu", "c3-cpu"), required=True)
+    parser.add_argument("--stage", choices=("host", "cpu"), required=True)
     args = parser.parse_args()
     raise SystemExit(check_expected_red(args.stage))

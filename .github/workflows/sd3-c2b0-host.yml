@@ -8,6 +8,9 @@ on:
       - "tests/test_sd3_full_bf16_worker.py"
       - "tests/test_sd3_full_bf16_worker_c2.py"
       - "tests/test_sd3_full_bf16_worker_c2_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
+      - "tools/sd3_full_bf16_worker_observer.py"
+      - "tools/sd3_full_bf16_observed_trainer.py"
       - "tools/sd3_full_bf16_evidence_worker.py"
       - "tools/check_sd3_full_bf16_c1_red.py"
       - ".github/workflows/sd3-c2b0-fix-c-red.yml"
@@ -120,6 +123,9 @@ jobs:
 
       - name: Run C2 Worker pinned CPU parser and CUDA fail-closed tests
         run: python -m unittest tests.test_sd3_full_bf16_worker_c2_cpu -v
+
+      - name: Run C3 real BF16 Muon/AdamW Step Probe and fingerprint tests (CPU diagnostic only)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c3_cpu -v
 
       - name: Run full C2-A scope suite under real Torch (ZERO skipped)
         if: ${{ always() }}
