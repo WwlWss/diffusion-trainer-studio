@@ -221,6 +221,82 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
             self.assertEqual(file_data[8 + header_size + begin:8 + header_size + end],
                              b"\x80\x40")
 
+    def test_production_lora_network_save_weights_and_host_parser(self):
+        """Use the *production* LoRANetwork.save_weights, not direct save_file.
+
+        A one-Linear fake SingleDiTBlock tests the real module selection,
+        float Alpha BF16 casting and the production metadata/hash writer
+        without loading 2.9B model weights or running CUDA.
+        """
+        import hashlib
+        import re
+        import sys
+        from safetensors import safe_open
+        from tools import sd3_full_bf16_evidence_support as host
+
+        sys.path.insert(0, str(host.ROOT / "scripts" / "dev"))
+        from networks.lora_sd3 import LoRANetwork
+
+        class SingleDiTBlock(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.proj = torch.nn.Linear(8, 16)
+
+        class TinyMMDiT(torch.nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.joint_blocks = torch.nn.ModuleList([SingleDiTBlock()])
+
+        model = TinyMMDiT()
+        network = LoRANetwork(
+            [], model, lora_dim=4, alpha=4.0,
+            split_qkv=False, train_t5xxl=False,
+        )
+        self.assertEqual(len(network.unet_loras), 1)
+        network.apply_to([], model, apply_text_encoder=False, apply_unet=True)
+        network.to(torch.bfloat16)
+        state = network.state_dict()
+        self.assertEqual(len(state), 3)
+        expected = {}
+        for key, value in state.items():
+            self.assertEqual(value.dtype, torch.bfloat16)
+            raw_bytes = (
+                value.detach().cpu().contiguous().reshape(-1)
+                .view(torch.uint8).numpy().tobytes()
+            )
+            expected[key] = {
+                "dtype": "BF16", "shape": list(value.shape),
+                "role": "alpha_buffer" if key.endswith(".alpha")
+                        else "trainable_weight",
+                "sha256": hashlib.sha256(raw_bytes).hexdigest(),
+            }
+        with tempfile.TemporaryDirectory() as td:
+            file = Path(td) / "real-sd3-network.safetensors"
+            supplied_meta = {
+                "ss_steps": "1", "ss_epoch": "0",
+                "dts_cpu_contract": "r4-production-save",
+            }
+            network.save_weights(str(file), dtype=None, metadata=dict(supplied_meta))
+            file_sha = hashlib.sha256(file.read_bytes()).hexdigest()
+            result = host.verify_adapter_file(
+                file, expected_file_sha256=file_sha, expected_tensors=expected,
+            )
+            self.assertEqual(result["file_sha256"], file_sha)
+            with safe_open(str(file), framework="pt", device="cpu") as opened:
+                self.assertEqual(set(opened.keys()), set(expected))
+                for key, value in state.items():
+                    self.assertTrue(
+                        torch.equal(opened.get_tensor(key), value.cpu()), key,
+                    )
+                metadata = opened.metadata() or {}
+            for name, value in supplied_meta.items():
+                self.assertEqual(metadata.get(name), value)
+            self.assertRegex(metadata.get("sshs_model_hash", ""), r"^[0-9a-f]{64}$")
+            self.assertRegex(metadata.get("sshs_legacy_hash", ""), r"^[0-9a-f]{8}$")
+            # Distinguish the production model hash from the full artifact
+            # SHA256 which the Host separately checks.
+            self.assertNotEqual(metadata["sshs_model_hash"], file_sha)
+
     def test_real_sd35_medium_lora_target_enumeration_matches_host_spec(self):
         """Use production MMDiT and LoRANetwork; no checkpoint weights/GPU."""
         import sys
