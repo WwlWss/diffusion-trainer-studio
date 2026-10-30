@@ -1077,7 +1077,14 @@ def verify_reference_parameter_ownership(
     children = ownership.get("optimizer_child_parameter_names")
     if not isinstance(rows, Mapping) or not isinstance(children, Mapping):
         _fail("Missing prepared parameter rows/physical child groups")
+    reference_targets = build_sd35_medium_lora_target_spec()
+    expected_keys = {
+        name + suffix for name in reference_targets
+        for suffix in (".lora_down.weight", ".lora_up.weight")
+    }
     saved_parameters = {k for k in adapter_tensors if k.endswith(".weight")}
+    if saved_parameters != expected_keys:
+        _fail("Prepared reference ownership has incomplete/extra LoRA target weights")
     if set(rows) != saved_parameters or set(children) != set(profiles):
         _fail("Saved LoRA weight keys or physical Optimizer Profiles differ")
     seen: set[str] = set()
@@ -1099,8 +1106,24 @@ def verify_reference_parameter_ownership(
                 or component not in policy["components"]):
             _fail(f"Prepared ownership differs from canonical saved parameter: {key}")
         seen.add(canonical)
+        module, kind = _adapter_key_role(key)
+        target = reference_targets.get(module)
+        if (target is None or kind not in ("down", "up")
+                or component != target["component_id"]):
+            _fail(f"Prepared ownership Component mismatches actual target: {key}")
+        shape = ([target["rank"], target["input_features"]] if kind == "down"
+                 else [target["output_features"], target["rank"]])
+        if tensor.get("shape") != shape:
+            _fail(f"Prepared ownership LoRA rank/target shape mismatch: {key}")
         route = policy["components"][component]
         if route["train"] is True:
+            reference_kind = (
+                "fallback" if case_manifest.get("case_id")
+                == "r2-muon-adamw-fallback-accum2"
+                and component == "mmdit.modulation_norm.adapter" else "primary"
+            )
+            if route_kind != reference_kind:
+                _fail(f"Optimizer primary/fallback route not allowed for target: {key}")
             expected_child = (route["optimizer_profile"] if route_kind == "primary"
                               else route.get("fallback_optimizer_profile") if route_kind == "fallback"
                               else None)
@@ -1178,6 +1201,14 @@ def _verify_resume_fresh_parent(
     snapshot: Mapping[str, Any],
 ) -> str:
     if (not isinstance(accepted_fresh_evidence, Mapping)
+            or accepted_fresh_evidence.get("source_commit") != case_manifest.get("source_commit")
+            or accepted_fresh_evidence.get("case_manifest_sha256") != _json_sha256(case_manifest)
+            or accepted_fresh_evidence.get("input_identity_sha256")
+            != _json_sha256(case_manifest.get("input_identity"))
+            or accepted_fresh_evidence.get("policy_hash")
+            != case_manifest["input_identity"]["canonical_policy_hash"]
+            or accepted_fresh_evidence.get("reference_target_spec_sha256")
+            != _json_sha256(build_sd35_medium_lora_target_spec())
             or accepted_fresh_evidence.get("status") != "physical_binding_valid"
             or accepted_fresh_evidence.get("case_id") != case_manifest.get("case_id")
             or accepted_fresh_evidence.get("logical_step") != 1):
@@ -1362,16 +1393,17 @@ def verify_adapter_checkpoint_binding(
         _fail("Adapter Tensor inventory hash differs from real Worker snapshot")
     if binding.get("adapter_file_sha256") != _sha256_file(expected_adapter_path):
         _fail("Actual Step adapter file bytes differ from bound evidence")
-    adapter_check = verify_adapter_file(
+    expected_targets = build_sd35_medium_lora_target_spec()
+    adapter_check = verify_b0_reference_adapter(
         expected_adapter_path, expected_file_sha256=binding["adapter_file_sha256"],
-        expected_tensors=expected_tensors,
+        expected_tensors=expected_tensors, expected_targets=expected_targets,
     )
     # Accelerate's prepared Network state must match the same-step LoRA
     # snapshot, without assuming file-level metadata is byte-identical.
-    network_check = verify_adapter_file(
+    network_check = verify_b0_reference_adapter(
         checkpoint / "model.safetensors",
         expected_file_sha256=all_files["model.safetensors"],
-        expected_tensors=expected_tensors,
+        expected_tensors=expected_tensors, expected_targets=expected_targets,
     )
     return {
         "status": "physical_binding_valid",
@@ -1385,6 +1417,11 @@ def verify_adapter_checkpoint_binding(
         "runtime_topology_fingerprint": pmanifest["runtime_topology_fingerprint"],
         "scheduler_signature": pmanifest["scheduler_signature"],
         "parameter_ownership_summary": ownership_check,
+        "reference_target_spec_sha256": adapter_check["reference_target_spec_sha256"],
+        "source_commit": case_manifest["source_commit"],
+        "input_identity_sha256": inputs["input_identity_sha256"],
+        "case_manifest_sha256": _json_sha256(case_manifest),
+        "policy_hash": manifest_view["policy_hash"],
     }
 
 
@@ -1395,5 +1432,6 @@ __all__ = [
     "validate_qualification_lease_records", "issue_phase_ticket",
     "claim_phase_ticket", "publish_phase_result", "verify_adapter_file",
     "validate_adapter_checkpoint_metadata",
+    "build_sd35_medium_lora_target_spec", "verify_b0_reference_adapter",
     "verify_reference_parameter_ownership", "verify_adapter_checkpoint_binding",
 ]
