@@ -212,6 +212,14 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
             for key in state:
                 self.assertTrue(torch.equal(saved[key], state[key]), key)
             self.assertEqual(saved["alpha"].dtype, torch.bfloat16)
+            import json
+            import struct
+            file_data = path.read_bytes()
+            header_size = struct.unpack("<Q", file_data[:8])[0]
+            header = json.loads(file_data[8:8 + header_size])
+            begin, end = header["alpha"]["data_offsets"]
+            self.assertEqual(file_data[8 + header_size + begin:8 + header_size + end],
+                             b"\\x80\\x40")
 
     def test_real_sd35_medium_lora_target_enumeration_matches_host_spec(self):
         """Use production MMDiT and LoRANetwork; no checkpoint weights/GPU."""
@@ -232,7 +240,10 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
                 [], mmdit, lora_dim=4, alpha=4.0,
                 split_qkv=False, train_t5xxl=False,
             )
+        from mikazuki.model_component_profiles import get_model_component_profile
+        component_profile = get_model_component_profile("sd3-lora")
         actual = {}
+        actual_eligibility = {}
         for lora in network.unet_loras:
             name = lora.lora_name
             self.assertEqual(lora.split_dims, None)
@@ -242,8 +253,29 @@ class Accelerate16CheckpointCPU(unittest.TestCase):
                 "output_features": lora.org_module.out_features,
                 "rank": lora.lora_dim,
             }
+            target_root, target_path, target_type = getattr(
+                lora, "_dts_parameter_policy_target_v1"
+            )
+            alias = {
+                "adapter_target": {
+                    "root": target_root, "module_path": target_path,
+                    "module_type": target_type,
+                },
+                "parameter_class": "matrix_weight",
+            }
+            component = component_profile.classify_alias(alias)
+            self.assertEqual(component, expected[name]["component_id"], name)
+            eligible, _reason = component_profile.eligibility_check(
+                "model_hidden_2d_weight", alias, component
+            )
+            actual_eligibility[name] = bool(eligible)
         self.assertEqual(len(actual), 263)
         self.assertEqual(set(actual), set(expected))
+        self.assertEqual(
+            sum(actual_eligibility.values()), 215,
+            "R2 must route 121 Attention + 94 MLP modules to Muon",
+        )
+        self.assertEqual(len(actual_eligibility) - sum(actual_eligibility.values()), 48)
         for name, real in actual.items():
             ref = expected[name]
             self.assertEqual(real["input_features"], ref["input_features"], name)
