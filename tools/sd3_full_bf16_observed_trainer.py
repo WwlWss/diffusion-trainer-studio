@@ -192,7 +192,12 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             accelerator=accelerator,
             composite_optimizer=session.optimizer,
             composite_scheduler=scheduler,
-            parameter_names=params, case_id=self._c3_invocation.case_id,
+            parameter_names=params,
+            component_by_parameter={
+                row["canonical_name"]: row["component_id"]
+                for row in ownership["parameter_rows"].values()
+            },
+            case_id=self._c3_invocation.case_id,
             run_id=self._c3_invocation.run_id,
             phase_id=self._c3_invocation.phase_id,
             source_commit=self._c3_invocation.source_commit,

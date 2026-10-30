@@ -429,6 +429,7 @@ class PhysicalStepProbe:
         self, *, accelerator: Any, composite_optimizer: CompositeOptimizer,
         composite_scheduler: CompositeLRScheduler,
         parameter_names: Mapping[str, torch.nn.Parameter],
+        component_by_parameter: Mapping[str, str],
         case_id: str, run_id: str, phase_id: str, source_commit: str,
         phase: str, start_step: int = 0,
     ):
@@ -443,6 +444,18 @@ class PhysicalStepProbe:
         self.optimizer = composite_optimizer
         self.scheduler = composite_scheduler
         self.params = dict(parameter_names)
+        self.component_by_parameter = dict(component_by_parameter)
+        expected_components = {
+            "mmdit.attention.adapter",
+            "mmdit.mlp.adapter",
+            "mmdit.modulation_norm.adapter",
+        }
+        if (set(self.component_by_parameter) != set(self.params)
+                or not self.component_by_parameter
+                or not set(self.component_by_parameter.values()).issubset(expected_components)):
+            _fail("Probe Component binding is missing or unreviewed")
+        if len(self.params) == 526 and set(self.component_by_parameter.values()) != expected_components:
+            _fail("Reference Probe requires all three trained Components")
         self.case_id, self.run_id, self.phase_id = case_id, run_id, phase_id
         self.source_commit, self.phase = source_commit, phase
         self.accumulation = spec["gradient_accumulation_steps"]
@@ -458,6 +471,7 @@ class PhysicalStepProbe:
         self._current_sync: bool | None = None
         self._backward_seen = False
         self._pending_nosync_state: dict[str, str] | None = None
+        self._pending_gradient_snapshot: str | None = None
         self._step_children: dict[int, dict[str, int]] = {}
         self._step_scheduler: dict[int, int] = {}
         self._sample_names: dict[int, set[str]] = {}
@@ -485,6 +499,15 @@ class PhysicalStepProbe:
         if seen != set(named_ids):
             _fail("Probe misses actual Optimizer-owned Parameters")
         self.child_params = owners
+        self.profile_by_name = {}
+        for name, param in self.params.items():
+            profiles = [
+                profile for profile, owned in self.child_params.items()
+                if any(param is member for member in owned)
+            ]
+            if len(profiles) != 1:
+                _fail("Parameter lacks exactly one physical Child Profile")
+            self.profile_by_name[name] = profiles[0]
 
     def _record(self, event_type: str, *, profile: str | None = None,
                 sample: str | None = None, sync: bool | None = None,
@@ -521,40 +544,69 @@ class PhysicalStepProbe:
             "scheduler": fingerprint_state_tree(self.scheduler.state_dict()),
         }
 
+    def _gradient_snapshot(self) -> str:
+        """Physical gradient-state bytes, including None vs BF16 Tensor."""
+        return fingerprint_state_tree({
+            name: (None if param.grad is None else param.grad.detach())
+            for name, param in sorted(self.params.items())
+        })
+
     def _gradients(self, *, require_nonzero: bool) -> dict[str, Any]:
-        names = {id(p): name for name,p in self.params.items()}
-        children = {}
-        for entry in self.optimizer.entries:
-            nonzero, count = 0, 0
-            gradient_identity = hashlib.sha256()
-            for p in self.child_params[entry.profile_name]:
-                grad = p.grad
-                if grad is None or grad.layout != torch.strided:
-                    _fail("Missing or unsupported real Backward Gradient")
-                if grad.dtype != torch.bfloat16 or grad.device != p.device:
-                    _fail("Non-BF16 or wrong-device physical gradient")
-                if not bool(torch.isfinite(grad).all().item()):
-                    _fail("Non-finite physical BF16 Gradient")
-                fingerprint = fingerprint_tensor(grad)
-                gradient_identity.update(host._canonical_json_bytes({
-                    "canonical_name": names[id(p)],
-                    "dtype": fingerprint["dtype"],
-                    "shape": fingerprint["shape"],
-                    "sha256": fingerprint["sha256"],
-                }))
-                gradient_identity.update(b"\\n")
-                count += 1
-                nonzero += int(torch.count_nonzero(grad).item() > 0)
-            if require_nonzero and not nonzero:
-                _fail("Optimizer Child has no real nonzero BF16 Gradient")
-            children[entry.profile_name] = {
-                "tensor_count": count, "nonzero_tensor_count": nonzero,
-                "gradient_sha256": gradient_identity.hexdigest(),
-            }
+        """Audit every physical BF16 gradient once, grouped by Child AND Component."""
+        child_stats: dict[str, dict[str, Any]] = {
+            key: {"tensor_count": 0, "nonzero_tensor_count": 0,
+                  "nonzero_element_count": 0, "hasher": hashlib.sha256()}
+            for key in self.child_profiles
+        }
+        component_stats: dict[str, dict[str, Any]] = {
+            key: {"tensor_count": 0, "nonzero_tensor_count": 0,
+                  "nonzero_element_count": 0, "hasher": hashlib.sha256()}
+            for key in sorted(set(self.component_by_parameter.values()))
+        }
+        for name, parameter in sorted(self.params.items()):
+            gradient = parameter.grad
+            if gradient is None or gradient.layout != torch.strided or gradient.is_meta:
+                _fail("Missing or unsupported real Backward Gradient")
+            if gradient.dtype != torch.bfloat16 or gradient.device != parameter.device:
+                _fail("Non-BF16 or wrong-device physical gradient")
+            if not bool(torch.isfinite(gradient).all().item()):
+                _fail("Non-finite physical BF16 Gradient")
+            desc = fingerprint_tensor(gradient)
+            payload = host._canonical_json_bytes({
+                "canonical_name": name,
+                "dtype": desc["dtype"], "shape": desc["shape"],
+                "sha256": desc["sha256"],
+            }) + b"\n"
+            n_nonzero = int(torch.count_nonzero(gradient).item())
+            for stat in (
+                child_stats[self.profile_by_name[name]],
+                component_stats[self.component_by_parameter[name]],
+            ):
+                stat["tensor_count"] += 1
+                stat["nonzero_tensor_count"] += int(n_nonzero > 0)
+                stat["nonzero_element_count"] += n_nonzero
+                stat["hasher"].update(payload)
+
+        def finalize(stats: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+            result = {}
+            for key, stat in stats.items():
+                if require_nonzero and stat["nonzero_tensor_count"] == 0:
+                    _fail("Physical Optimizer Child or Component has no nonzero BF16 Gradient: " + key)
+                result[key] = {
+                    "tensor_count": stat["tensor_count"],
+                    "nonzero_tensor_count": stat["nonzero_tensor_count"],
+                    "nonzero_element_count": stat["nonzero_element_count"],
+                    "gradient_sha256": stat["hasher"].hexdigest(),
+                }
+            return result
+
         return {
-            "child_gradients": children,
-            "gradient_phase": "post_backward_pre_clip" if not require_nonzero
-                              else "post_clip_pre_physical_step",
+            "child_gradients": finalize(child_stats),
+            "component_gradients": finalize(component_stats),
+            "gradient_phase": (
+                "post_clip_pre_physical_step" if require_nonzero
+                else "post_backward_pre_clip"
+            ),
         }
 
     def _patch(self, obj: Any, name: str, wrapped: Callable) -> None:
@@ -582,6 +634,21 @@ class PhysicalStepProbe:
                 _fail("Backward without unique active real Batch")
             result = original_backward(*args, **kwargs)
             summary = self._gradients(require_nonzero=False)
+            if not any(
+                info["nonzero_tensor_count"]
+                for info in summary["component_gradients"].values()
+            ):
+                _fail("Microbatch produced no nonzero real BF16 gradient contribution")
+            after_gradient = self._gradient_snapshot()
+            if self._current_micro == 1 and self.accumulation > 1:
+                if self._pending_gradient_snapshot is not None:
+                    _fail("Unexpected prior pending accumulation gradient")
+                self._pending_gradient_snapshot = after_gradient
+            elif self._current_micro > 1:
+                if (self._pending_gradient_snapshot is None
+                        or after_gradient == self._pending_gradient_snapshot):
+                    _fail("Second Microbatch has no observable accumulated gradient contribution")
+                self._pending_gradient_snapshot = None
             self._record("backward_completed", sample=self._sample,
                          sync=self._current_sync, details=summary)
             self._backward_seen = True
@@ -694,6 +761,9 @@ class PhysicalStepProbe:
         if self._pending_nosync_state is not None:
             if self._snapshot() != self._pending_nosync_state:
                 _fail("premature/non-sync accumulation changed Adapter, Optimizer or Scheduler")
+            if (self._pending_gradient_snapshot is None
+                    or self._gradient_snapshot() != self._pending_gradient_snapshot):
+                _fail("First Microbatch BF16 gradient was not retained through accumulation")
             self._pending_nosync_state = None
         if self._current_step is not None and not self._backward_seen:
             _fail("Previous Batch had no real Backward")
@@ -734,8 +804,9 @@ class PhysicalStepProbe:
             _fail("Physical Step missing/duplicate real Scheduler advance")
 
     def assert_step_complete(self) -> None:
-        if not self._installed or self._pending_nosync_state is not None:
-            _fail("Incomplete accumulation or detached physical Probe")
+        if (not self._installed or self._pending_nosync_state is not None
+                or self._pending_gradient_snapshot is not None):
+            _fail("Incomplete accumulation, retained gradient or detached physical Probe")
         if self._backwards != self._started or self._backwards % self.accumulation:
             _fail("Incomplete real Backward/Microbatch pair sequence")
         if not self._step_children:

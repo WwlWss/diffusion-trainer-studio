@@ -105,6 +105,10 @@ def make_probe():
             "network.left.weight": model["left"].weight,
             "network.right.weight": model["right"].weight,
         },
+        component_by_parameter={
+            "network.left.weight": "mmdit.attention.adapter",
+            "network.right.weight": "mmdit.modulation_norm.adapter",
+        },
         case_id=R2, run_id="run-c3cpu-0001",
         phase_id="fresh-c3cpu-0001",
         source_commit="a" * 40, phase="fresh",
@@ -405,6 +409,9 @@ class C3PhysicalObserverCPU(unittest.TestCase):
             accelerator=acc, composite_optimizer=facade,
             composite_scheduler=sched,
             parameter_names={"network.adamw.weight":net.weight},
+            component_by_parameter={
+                "network.adamw.weight": "mmdit.attention.adapter",
+            },
             case_id="r1-adamw-accum1", run_id="run-c3r1-0001",
             phase_id="fresh-c3r1-0001", phase="fresh",
             source_commit="a"*40,
@@ -445,6 +452,9 @@ class C3PhysicalObserverCPU(unittest.TestCase):
                 accelerator=acc, composite_optimizer=optim,
                 composite_scheduler=sched,
                 parameter_names={"network.left.weight":model["left"].weight},
+                component_by_parameter={
+                    "network.left.weight": "mmdit.attention.adapter",
+                },
                 case_id=R2, run_id="run-c3cpu-0002",
                 phase_id="fresh-c3cpu-0002",
                 phase="fresh", source_commit="a"*40,
