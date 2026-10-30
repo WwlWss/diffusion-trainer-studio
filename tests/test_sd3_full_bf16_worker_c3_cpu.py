@@ -205,19 +205,24 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         self.assertFalse("step" in vars(optim), "method wrapper leaked")
         self.assertFalse("backward" in vars(acc), "Accelerator patch leaked")
 
-    def test_unmodified_production_accelerator_default_is_fail_closed(self):
-        """The stock production Accelerator currently violates C3 R2 contract.
+    def test_unmodified_production_accelerator_effective_default_is_safe(self):
+        """Pin effective v1.6.0 production behavior, not dataclass defaults.
 
-        This test documents the actual v1.6.0 default without papering over
-        production behavior via a Worker-only state mutation.
+        KwargsHandler.to_kwargs() drops the plugin's default True value;
+        GradientState.adjust_scheduler reads absent keys as False.
+        This surprising behavior must be retested on future upgrades.
         """
         acc, model, optimizer, scheduler, prepared_opt, prepared_sched = (
             build_two_child_cpu(production_default_accumulator=True)
         )
         self.assertEqual(acc.gradient_accumulation_steps, 2)
-        self.assertTrue(
+        self.assertFalse(
             acc.gradient_state.adjust_scheduler,
-            "Pinned Accelerate default changed; re-review stock Trainer behavior",
+            "Production-style GradientState effective scheduler flag changed",
+        )
+        self.assertNotIn(
+            "adjust_scheduler", acc.gradient_state.plugin_kwargs,
+            "Unexpected explicit adjust_scheduler override in stock production path",
         )
         state_before = observer().fingerprint_state_tree(
             {entry.profile_name: entry.optimizer.state_dict()
@@ -243,14 +248,15 @@ class C3PhysicalObserverCPU(unittest.TestCase):
         scheduler_after = scheduler.state_dict()
         self.assertEqual(scheduler_after["last_epoch"], scheduler_before["last_epoch"])
         self.assertEqual(
-            scheduler_after["step_count"], scheduler_before["step_count"] + 1,
-            "Stock unsynced AcceleratedScheduler did not advance the internal count",
+            scheduler_after["step_count"], scheduler_before["step_count"],
+            "Stock production-style unsynced Scheduler mutated internal state",
         )
-        with self.assertRaisesRegex(ValueError, "adjust_scheduler"):
-            observer().verify_prepared_identity(
-                session=SimpleNamespace(optimizer=optimizer),
-                accelerator=acc, scheduler=scheduler,
-            )
+        verified = observer().verify_prepared_identity(
+            session=SimpleNamespace(optimizer=optimizer),
+            accelerator=acc, scheduler=scheduler,
+        )
+        self.assertEqual(verified["optimizer_children"], 2)
+        self.assertEqual(verified["scheduler_children"], 2)
 
     def test_non_sync_parameter_mutation_is_rejected(self):
         acc, model, optim, sched, po, ps, probe = make_probe()
