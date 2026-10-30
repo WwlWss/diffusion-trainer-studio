@@ -42,10 +42,10 @@ def build_two_child_cpu(*, production_default_accumulator: bool = False):
         "right": torch.nn.Linear(4, 4, bias=False, dtype=torch.bfloat16),
     })
     muon = Muon([{
-        "params": [model["left"].weight], "lr": 1e-4, "use_muon": True,
+        "params": [model["left"].weight], "lr": 0.02, "use_muon": True,
     }])
     adamw = torch.optim.AdamW(
-        [model["right"].weight], lr=1e-4, weight_decay=0.01,
+        [model["right"].weight], lr=0.01, weight_decay=0.01,
     )
     topology = SimpleNamespace(topology_fingerprint="c3-physical-cpu-v1")
     optimizer = CompositeOptimizer(topology, (

@@ -420,6 +420,66 @@ def observe_prepared_ownership(
     }
 
 
+
+def validate_muon_parameter_states(
+    muon: Any, *, physical_step: int,
+    canonical_names_by_id: Mapping[int, str] | None = None,
+) -> dict[str, Any]:
+    """Audit pinned pytorch-optimizer Muon 3.10.0 per-Parameter state.
+
+    Only observed live Tensor state, no guessed step from a serialized blob.
+    Group.step advances even if a Parameter had grad=None, hence all required
+    momentum_buffers are checked separately. No GPU-only behavior is faked.
+    """
+    from pytorch_optimizer import Muon
+    if not isinstance(muon, Muon) or type(physical_step) is not int or physical_step < 1:
+        _fail("Muon state audit requires real Muon and positive physical Step")
+    names = {}
+    seen_ids: set[int] = set()
+    total = 0
+    for group_index, group in enumerate(muon.param_groups):
+        if (group.get("use_muon") is not True
+                or type(group.get("step")) is not int
+                or group["step"] != physical_step):
+            _fail("Muon physical Group step/use_muon mismatch")
+        for parameter_index, param in enumerate(group["params"]):
+            param_id = id(param)
+            if param_id in seen_ids:
+                _fail("Duplicate Muon physical Parameter state")
+            seen_ids.add(param_id)
+            if canonical_names_by_id is not None:
+                name = canonical_names_by_id.get(param_id)
+                if not isinstance(name, str) or not name:
+                    _fail("Muon physical State lacks canonical Parameter name")
+            else:
+                name = f"group{group_index}/param{parameter_index}"
+            state = muon.state.get(param)
+            if not isinstance(state, dict) or "momentum_buffer" not in state:
+                _fail("Muon physical Parameter missing momentum_buffer: " + name)
+            if "exp_avg" in state or "exp_avg_sq" in state:
+                _fail("Muon physical Parameter incorrectly uses AdamW fallback state: " + name)
+            buffer = state["momentum_buffer"]
+            if (not isinstance(buffer, torch.Tensor) or buffer.is_meta
+                    or buffer.layout != torch.strided
+                    or buffer.dtype != param.dtype or buffer.device != param.device
+                    or tuple(buffer.shape) != tuple(param.shape)
+                    or buffer.dtype != torch.bfloat16):
+                _fail("Muon momentum_buffer BF16 shape/device mismatch: " + name)
+            if not bool(torch.isfinite(buffer).all().item()):
+                _fail("Muon momentum_buffer contains non-finite values: " + name)
+            names[name] = fingerprint_tensor(buffer)["sha256"]
+            total += 1
+    if total == 0:
+        _fail("Muon physical Parameter state inventory is empty")
+    return {
+        "momentum_parameter_count": total,
+        "momentum_buffer_sha256_by_parameter": dict(sorted(names.items())),
+        "momentum_inventory_sha256": host._json_sha256(names),
+        "physical_step": physical_step,
+    }
+
+
+
 class PhysicalStepProbe:
     """Instance-only physical step recorder over REAL prepared torch objects.
 
@@ -476,6 +536,7 @@ class PhysicalStepProbe:
         self._step_scheduler: dict[int, int] = {}
         self._sample_names: dict[int, set[str]] = {}
         self._pre_step_grad: dict[str, Any] | None = None
+        self._last_muon_momentum_sha: dict[str, str] = {}
         required_types = tuple(spec["optimizer_types"])
         physical_types = tuple(entry.optimizer_type for entry in composite_optimizer.entries)
         if sorted(physical_types) != sorted(required_types):
@@ -700,33 +761,86 @@ class PhysicalStepProbe:
                     step = self._current_step
                     if self._step_children[step][name] != 0:
                         _fail("Duplicate Child physical optimizer step")
-                    before_params = fingerprint_state_tree({
-                        k: v.detach() for k,v in self.params.items()
-                        if any(v is p for p in self.child_params[name])
-                    })
-                    before_state = fingerprint_state_tree(
-                        next(e for e in self.optimizer.entries if e.profile_name==name)
-                        .optimizer.state_dict()
+                    child = next(e for e in self.optimizer.entries if e.profile_name == name)
+                    # One contiguous BF16 Tensor at a time: hashes are from
+                    # original bytes, not cloned GPU parameters or FP32 casts.
+                    members = {
+                        canonical: param for canonical, param in sorted(self.params.items())
+                        if self.profile_by_name[canonical] == name
+                    }
+                    before_devices = {
+                        canonical: param.device for canonical, param in members.items()
+                    }
+                    before_shapes = {
+                        canonical: tuple(param.shape) for canonical, param in members.items()
+                    }
+                    before_tensors = {
+                        canonical: fingerprint_tensor(param)
+                        for canonical, param in members.items()
+                    }
+                    before_params = host._json_sha256(before_tensors)
+                    before_state = fingerprint_state_tree(child.optimizer.state_dict())
+                    before_group_ids = tuple(
+                        tuple(id(p) for p in group["params"])
+                        for group in child.optimizer.param_groups
                     )
+                    muon_before = None
+                    if child.optimizer_type == "Muon" and step > 1:
+                        muon_before = validate_muon_parameter_states(
+                            child.optimizer, physical_step=step - 1,
+                            canonical_names_by_id={
+                                id(param): canonical for canonical, param in members.items()
+                            },
+                        )
+                        previous_digest = self._last_muon_momentum_sha.get(name)
+                        if (previous_digest is not None and
+                                muon_before["momentum_inventory_sha256"] != previous_digest):
+                            _fail("Muon momentum_buffer changed between physical Steps")
                     result = original(*args, **kwargs)
-                    after_params = fingerprint_state_tree({
-                        k: v.detach() for k,v in self.params.items()
-                        if any(v is p for p in self.child_params[name])
-                    })
-                    after_state = fingerprint_state_tree(
-                        next(e for e in self.optimizer.entries if e.profile_name==name)
-                        .optimizer.state_dict()
+                    after_group_ids = tuple(
+                        tuple(id(p) for p in group["params"])
+                        for group in child.optimizer.param_groups
                     )
+                    if after_group_ids != before_group_ids:
+                        _fail("Physical Child Step changed Parameter ownership/order")
+                    after_tensors = {}
+                    changed_components = {
+                        component: 0 for component in sorted(
+                            {self.component_by_parameter[key] for key in members}
+                        )
+                    }
+                    changed_parameters = 0
+                    for canonical, param in members.items():
+                        if (param.dtype != torch.bfloat16
+                                or param.device != before_devices[canonical]
+                                or tuple(param.shape) != before_shapes[canonical]):
+                            _fail("Physical Child changed BF16 Parameter dtype/device/shape")
+                        if not bool(torch.isfinite(param).all().item()):
+                            _fail("Physical Child produced a non-finite BF16 weight")
+                        result_fp = fingerprint_tensor(param)
+                        after_tensors[canonical] = result_fp
+                        if result_fp["sha256"] != before_tensors[canonical]["sha256"]:
+                            changed_parameters += 1
+                            changed_components[self.component_by_parameter[canonical]] += 1
+                    after_params = host._json_sha256(after_tensors)
+                    if not changed_parameters or before_params == after_params:
+                        _fail("Physical Child advanced state but changed no BF16 LoRA weight")
+                    after_state = fingerprint_state_tree(child.optimizer.state_dict())
                     if before_state == after_state:
                         _fail("Physical Child did not advance actual optimizer state")
-                    child = next(e for e in self.optimizer.entries if e.profile_name==name)
+                    muon_after = None
                     if child.optimizer_type == "Muon":
-                        actual_steps = [
-                            group.get("step")
-                            for group in child.optimizer.param_groups
-                        ]
-                        if any(type(n) is not int or n != step for n in actual_steps):
-                            _fail("Real Muon physical ParamGroup step counter disagrees with logical Step")
+                        muon_after = validate_muon_parameter_states(
+                            child.optimizer, physical_step=step,
+                            canonical_names_by_id={
+                                id(param): canonical for canonical, param in members.items()
+                            },
+                        )
+                        if (muon_before is not None and
+                                muon_before["momentum_inventory_sha256"]
+                                == muon_after["momentum_inventory_sha256"]):
+                            _fail("Muon physical Step did not advance any BF16 momentum_buffer")
+                        self._last_muon_momentum_sha[name] = muon_after["momentum_inventory_sha256"]
                     elif child.optimizer_type == "AdamW":
                         state_steps = []
                         for group in child.optimizer.param_groups:
@@ -748,6 +862,9 @@ class PhysicalStepProbe:
                         "optimizer_state_after": after_state,
                         "parameter_before": before_params,
                         "parameter_after": after_params,
+                        "changed_parameter_count": changed_parameters,
+                        "changed_component_parameter_counts": changed_components,
+                        "muon_momentum_state": muon_after,
                         "post_clip_gradient": self._pre_step_grad,
                         "physical_step": step,
                     })
@@ -838,5 +955,6 @@ __all__ = [
     "verify_prepared_identity", "observe_prepared_ownership",
     "audit_physical_optimizer_groups",
     "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
+    "validate_muon_parameter_states",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]
