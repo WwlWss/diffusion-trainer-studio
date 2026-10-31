@@ -296,8 +296,11 @@ def validate_reference_alpha_buffers(
 
 
 def _reference_lr_hex(lr: Any, *, label: str) -> str:
-    if type(lr) is not float or not math.isfinite(lr) or lr <= 0:
-        _fail("Physical learning rate must be a positive finite Python float: " + label)
+    if type(lr) is not float or not math.isfinite(lr) or lr < 0:
+        # The production fixed Policy is strictly positive (0.0001).
+        # Zero is allowed solely for a non-CUDA CPU diagnostic fixture that
+        # proves F3 rejects a real state-only BF16 optimizer step.
+        _fail("Physical learning rate must be a nonnegative finite Python float: " + label)
     return lr.hex()
 
 
@@ -569,6 +572,72 @@ def validate_muon_parameter_states(
         "momentum_parameter_count": total,
         "momentum_buffer_sha256_by_parameter": dict(sorted(names.items())),
         "momentum_inventory_sha256": host._json_sha256(names),
+        "physical_step": physical_step,
+    }
+
+
+
+
+def validate_adamw_parameter_states(
+    adamw: Any, *, physical_step: int,
+    canonical_names_by_id: Mapping[int, str],
+) -> dict[str, Any]:
+    """Audit actual pinned torch.optim.AdamW 2.7 default BF16 moment state.
+
+    exp_avg/exp_avg_sq follow their Parameter's BF16 dtype/device/shape.
+    Default noncapturable/nonfused AdamW 'step' is a CPU float32 scalar,
+    even when trainable Parameters live on CUDA. No silent provider fallback.
+    """
+    if (type(adamw) is not torch.optim.AdamW
+            or type(physical_step) is not int or physical_step < 1):
+        _fail("AdamW state audit requires real torch.optim.AdamW and positive physical Step")
+    if not isinstance(canonical_names_by_id, Mapping):
+        _fail("AdamW state audit requires canonical physical Parameter names")
+    seen: set[int] = set()
+    moments: dict[str, Any] = {}
+    for group in adamw.param_groups:
+        if (group.get("amsgrad") is not False
+                or group.get("capturable") is not False
+                or group.get("fused") not in (None, False)):
+            _fail("Unreviewed AdamW provider state mode (amsgrad/capturable/fused)")
+        for param in group["params"]:
+            identifier = id(param)
+            name = canonical_names_by_id.get(identifier)
+            if (identifier in seen or not isinstance(name, str) or not name
+                    or param.dtype != torch.bfloat16 or param.is_meta):
+                _fail("AdamW moment state has duplicate/unknown/non-BF16 Parameter")
+            seen.add(identifier)
+            state = adamw.state.get(param)
+            if not isinstance(state, Mapping) or set(state) != {
+                "step", "exp_avg", "exp_avg_sq",
+            }:
+                _fail("AdamW Parameter missing/unreviewed step or momentum buffers: " + name)
+            step_tensor = state["step"]
+            if (not isinstance(step_tensor, torch.Tensor) or step_tensor.is_meta
+                    or step_tensor.ndim != 0
+                    or step_tensor.dtype != torch.float32
+                    or step_tensor.device.type != "cpu"
+                    or not bool(torch.isfinite(step_tensor).item())
+                    or float(step_tensor.item()) != physical_step):
+                _fail("AdamW CPU scalar step does not match real physical Step: " + name)
+            values: dict[str, str] = {}
+            for field_name in ("exp_avg", "exp_avg_sq"):
+                value = state[field_name]
+                if (not isinstance(value, torch.Tensor) or value.is_meta
+                        or value.layout != torch.strided
+                        or value.dtype != param.dtype or value.device != param.device
+                        or tuple(value.shape) != tuple(param.shape)):
+                    _fail("AdamW momentum shape/dtype/device mismatch: " + name + "/" + field_name)
+                if not bool(torch.isfinite(value).all().item()):
+                    _fail("AdamW momentum contains non-finite values: " + name + "/" + field_name)
+                values[field_name] = fingerprint_tensor(value)["sha256"]
+            moments[name] = values
+    if not moments or len(moments) != len(canonical_names_by_id):
+        _fail("AdamW momentum inventory missing/extra physical Parameters")
+    return {
+        "moment_parameter_count": len(moments),
+        "moments_by_parameter": dict(sorted(moments.items())),
+        "moment_inventory_sha256": host._json_sha256(moments),
         "physical_step": physical_step,
     }
 
@@ -974,18 +1043,25 @@ class PhysicalStepProbe:
                         tuple(id(p) for p in group["params"])
                         for group in child.optimizer.param_groups
                     )
+                    canonical_child_names = {
+                        id(param): canonical for canonical, param in members.items()
+                    }
                     muon_before = None
                     if child.optimizer_type == "Muon" and step > 1:
                         muon_before = validate_muon_parameter_states(
                             child.optimizer, physical_step=step - 1,
-                            canonical_names_by_id={
-                                id(param): canonical for canonical, param in members.items()
-                            },
+                            canonical_names_by_id=canonical_child_names,
                         )
                         previous_digest = self._last_muon_momentum_sha.get(name)
                         if (previous_digest is not None and
                                 muon_before["momentum_inventory_sha256"] != previous_digest):
                             _fail("Muon momentum_buffer changed between physical Steps")
+                    adamw_before = None
+                    if child.optimizer_type == "AdamW" and step > 1:
+                        adamw_before = validate_adamw_parameter_states(
+                            child.optimizer, physical_step=step - 1,
+                            canonical_names_by_id=canonical_child_names,
+                        )
                     result = original(*args, **kwargs)
                     self._check_physical_group_lrs(phase="post_child_step")
                     after_group_ids = tuple(
@@ -1020,12 +1096,11 @@ class PhysicalStepProbe:
                     if before_state == after_state:
                         _fail("Physical Child did not advance actual optimizer state")
                     muon_after = None
+                    adamw_after = None
                     if child.optimizer_type == "Muon":
                         muon_after = validate_muon_parameter_states(
                             child.optimizer, physical_step=step,
-                            canonical_names_by_id={
-                                id(param): canonical for canonical, param in members.items()
-                            },
+                            canonical_names_by_id=canonical_child_names,
                         )
                         if (muon_before is not None and
                                 muon_before["momentum_inventory_sha256"]
@@ -1033,18 +1108,17 @@ class PhysicalStepProbe:
                             _fail("Muon physical Step did not advance any BF16 momentum_buffer")
                         self._last_muon_momentum_sha[name] = muon_after["momentum_inventory_sha256"]
                     elif child.optimizer_type == "AdamW":
-                        state_steps = []
-                        for group in child.optimizer.param_groups:
-                            for parameter in group["params"]:
-                                state = child.optimizer.state.get(parameter, {})
-                                actual = state.get("step")
-                                if isinstance(actual, torch.Tensor):
-                                    actual = actual.item()
-                                state_steps.append(actual)
-                        if (not state_steps
-                                or any(type(n) not in (int,float) or n != step
-                                       for n in state_steps)):
-                            _fail("Real AdamW physical state step counter disagrees with logical Step")
+                        adamw_after = validate_adamw_parameter_states(
+                            child.optimizer, physical_step=step,
+                            canonical_names_by_id=canonical_child_names,
+                        )
+                        if (adamw_before is not None and
+                                adamw_before["moment_inventory_sha256"] ==
+                                adamw_after["moment_inventory_sha256"]):
+                            # No independent AdamW momentum advancement despite
+                            # a claimed real physical Step. Weight changes are
+                            # verified independently above.
+                            _fail("AdamW moments did not advance in real physical Step")
                     else:
                         _fail("Unreviewed physical Optimizer Child type")
                     self._step_children[step][name] += 1
@@ -1056,6 +1130,7 @@ class PhysicalStepProbe:
                         "changed_parameter_count": changed_parameters,
                         "changed_component_parameter_counts": changed_components,
                         "muon_momentum_state": muon_after,
+                        "adamw_momentum_state": adamw_after,
                         "post_clip_gradient": self._pre_step_grad,
                         "physical_step": step,
                         "physical_group_learning_rates": before_lrs[name],
@@ -1148,6 +1223,6 @@ __all__ = [
     "audit_physical_optimizer_groups",
     "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
     "validate_reference_group_learning_rates",
-    "validate_muon_parameter_states",
+    "validate_muon_parameter_states", "validate_adamw_parameter_states",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]
