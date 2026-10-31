@@ -1,0 +1,76 @@
+name: SD3 C2-B0 C1-C3 Host/CPU transition contracts (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-fix-c-red.yml"
+      - "tools/check_sd3_full_bf16_c1_red.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/sd3_full_bf16_worker_observer.py"
+      - "tools/sd3_full_bf16_evidence_support.py"
+      - "tests/test_sd3_full_bf16_worker.py"
+      - "tests/test_sd3_full_bf16_worker_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-fix-c-red.yml"
+      - "tools/check_sd3_full_bf16_c1_red.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/sd3_full_bf16_worker_observer.py"
+      - "tools/sd3_full_bf16_evidence_support.py"
+      - "tests/test_sd3_full_bf16_worker.py"
+      - "tests/test_sd3_full_bf16_worker_cpu.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-c1-red:
+    name: Host C1-C3 contract checks (NO CUDA)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned minimal Host dependencies
+        run: python -m pip install --disable-pip-version-check "numpy==1.26.4" "safetensors==0.4.5" "pillow==11.1.0"
+      - name: Compile C1 RED tests and strict verifier
+        run: python -m py_compile tests/test_sd3_full_bf16_worker.py tools/check_sd3_full_bf16_c1_red.py
+      - name: Verify C1/C3 Host contracts (real passing tests)
+        run: python -m tools.check_sd3_full_bf16_c1_red --stage host
+
+  pinned-accelerate-c1-red:
+    name: Pinned real CPU C1-C3 checks (NO CUDA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned CPU Torch 2.7.0 / TorchVision 0.22.0
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0" "torchvision==0.22.0"
+      - name: Install pinned Accelerate and Runtime dependencies
+        run: python -m pip install --disable-pip-version-check "accelerate==1.6.0" "safetensors==0.4.5" "numpy==1.26.4" "pillow==11.1.0" "transformers==4.54.1" "diffusers==0.32.1" "einops==0.7.0" "huggingface-hub==0.34.3" "pytorch-optimizer==3.10.0" "opencv-python-headless==4.10.0.84" "toml==0.10.2" "imagesize==1.4.1" "ftfy==6.3.1"
+      - name: Compile C1 RED tests and strict verifier
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_cpu.py tools/check_sd3_full_bf16_c1_red.py
+      - name: Verify real pinned CPU Observer interfaces (real passing tests)
+        run: python -m tools.check_sd3_full_bf16_c1_red --stage cpu
+

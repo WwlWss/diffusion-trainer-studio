@@ -1,0 +1,185 @@
+name: SD3 C2-B0 Host evidence contracts
+
+on:
+  pull_request:
+    paths:
+      - "docs/d1-sd3c2b-plan.md"
+      - "docs/d1-sd3c2b-fix-c-worker-contract.md"
+      - "tests/test_sd3_full_bf16_worker.py"
+      - "tests/test_sd3_full_bf16_worker_c2.py"
+      - "tests/test_sd3_full_bf16_worker_c2_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_strict_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f6_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3.py"
+      - "tools/sd3_full_bf16_worker_observer.py"
+      - "tools/sd3_full_bf16_observed_trainer.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/check_sd3_full_bf16_c1_red.py"
+      - ".github/workflows/sd3-c2b0-fix-c-red.yml"
+      - "tests/test_sd3_full_bf16_gpu_evidence.py"
+      - "tools/sd3_full_bf16_evidence_support.py"
+      - "tools/prepare_sd3_full_bf16_cases.py"
+      - ".github/workflows/sd3-c2b0-host.yml"
+      - "tests/test_sd3_full_bf16_accelerate_cpu.py"
+      - "requirements.txt"
+      - ".gitmodules"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/parameter_policy_torch.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_routing.py"
+      - "mikazuki/model_component_profiles.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+      - "scripts/dev/sd3_train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/dev/library/sd3_forward_contract.py"
+      - "scripts/dev/library/sd3_resume_cursor.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/dev/networks/lora_sd3.py"
+      - "scripts/dev/networks/lora_flux.py"
+      - "scripts/dev/library/sd3_utils.py"
+      - "scripts/dev/library/sd3_models.py"
+      - "scripts/dev/library/config_util.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "mikazuki/optimizer_profiles.py"
+      # B0 reference policy, qualification registry, SD3 configuration
+      - "tools/prepare_sd3_component_baseline.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "scripts/dev/library/sd3_train_utils.py"
+      - "mikazuki/sd3_architecture_contract.py"
+      # Actual C2-A/R0 tests and their shared fixtures
+      - "tests/test_sd3_full_bf16_scope.py"
+      - "tests/test_sd3_component_gpu_evidence.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      # Gitlink SHA changes are changes to the path itself, not submodule/**
+      - "sd-scripts"
+      - "frontend"
+      - "mikazuki/dataset-tag-editor"
+
+permissions:
+  contents: read
+
+jobs:
+  host-evidence:
+    name: B0 Host tests only (NO CUDA qualification)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install minimal Host decoding dependencies
+        run: python -m pip install --disable-pip-version-check "numpy==1.26.4" "safetensors==0.4.5" "pillow==11.1.0"
+
+      - name: Read real Gitlink checkout status without claiming runtime readiness
+        run: python -c "from tools.prepare_sd3_full_bf16_cases import _source_submodule_inventory; print(_source_submodule_inventory())"
+
+      - name: Compile B0 Host modules and RED tests
+        run: python -m py_compile tools/sd3_full_bf16_evidence_support.py tools/prepare_sd3_full_bf16_cases.py tests/test_sd3_full_bf16_gpu_evidence.py tools/sd3_full_bf16_evidence_worker.py tests/test_sd3_full_bf16_worker.py tests/test_sd3_full_bf16_worker_c2.py
+
+      - name: Run B0 Host GREEN-1 contracts
+        run: python -m unittest tests.test_sd3_full_bf16_gpu_evidence -v
+
+      - name: Run C1-C3 Host timeline validation (metadata, NO CUDA)
+        run: python -m unittest tests.test_sd3_full_bf16_worker tests.test_sd3_full_bf16_worker_c3 -v
+
+      - name: Run C2 Worker admission/lease GREEN (pure Host, NO CUDA)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c2 -v
+
+      - name: Re-run C2-A and mixed-BF16 R0 Host regression
+        run: python -m unittest tests.test_sd3_full_bf16_scope tests.test_sd3_component_gpu_evidence -v
+
+
+  accelerate-160-cpu:
+    name: Pinned Accelerate 1.6.0 CPU save/load contract (NO CUDA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout exact PR source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install pinned CPU Torch 2.7.0 / TorchVision 0.22.0
+        run: python -m pip install --disable-pip-version-check --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0" "torchvision==0.22.0"
+
+      - name: Install pinned Accelerate and Host dependencies
+        run: python -m pip install --disable-pip-version-check "accelerate==1.6.0" "safetensors==0.4.5" "numpy==1.26.4" "pillow==11.1.0" "transformers==4.54.1" "diffusers==0.32.1" "einops==0.7.0" "huggingface-hub==0.34.3" "pytorch-optimizer==3.10.0" "opencv-python-headless==4.10.0.84" "toml==0.10.2" "imagesize==1.4.1" "ftfy==6.3.1" "voluptuous==0.15.2"
+
+      - name: Execute real CPU save/load and Scheduler identity tests
+        run: python -m unittest tests.test_sd3_full_bf16_accelerate_cpu -v
+
+      - name: Run C2 Worker pinned CPU parser and CUDA fail-closed tests
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c2_cpu -v
+
+      - name: Run C1 prepared Observer interfaces (pinned CPU only)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_cpu -v
+
+      - name: Run C3 real BF16 Muon/AdamW Step Probe and fingerprint tests (CPU diagnostic only)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c3_cpu -v
+      - name: Execute C3 Strict Review RED→GREEN physical negative controls (CPU only)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c3_strict_cpu -v
+
+      - name: Strict C3-F6 real CPU RED-to-GREEN (13 tests; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f6_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 13:
+              raise SystemExit(
+                  f"C3-F6 strict test discovery drift: expected 13, found {discovered}"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 13 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C3-F6 physical evidence suite invalid: "
+                  f"run={result.testsRun} errors={len(result.errors)} "
+                  f"failed={len(result.failures)} skipped={len(result.skipped)} "
+                  f"expected_failures={len(result.expectedFailures)} "
+                  f"unexpected_successes={len(result.unexpectedSuccesses)}"
+              )
+          print("C3-F6 PINNED REAL CPU GREEN: 13 PASS, 0 SKIP, 0 FAIL; NO CUDA QUALIFICATION")
+          PY
+
+      - name: Run full C2-A scope suite under real Torch (ZERO skipped)
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_scope"
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if not result.wasSuccessful() or result.skipped:
+              raise SystemExit(
+                  "Strict CPU C2-A failure: "
+                  f"run={result.testsRun} errors={len(result.errors)} "
+                  f"failures={len(result.failures)} skipped={len(result.skipped)}"
+              )
+          print(f"Strict CPU C2-A: {result.testsRun} PASS, 0 SKIPPED")
+          PY
