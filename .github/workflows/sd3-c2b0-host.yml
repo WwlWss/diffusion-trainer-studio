@@ -10,6 +10,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c2_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_strict_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f6_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -136,6 +137,9 @@ jobs:
         run: python -m unittest tests.test_sd3_full_bf16_worker_c3_cpu -v
       - name: Execute C3 Strict Review RED→GREEN physical negative controls (CPU only)
         run: python -m unittest tests.test_sd3_full_bf16_worker_c3_strict_cpu -v
+
+      - name: Execute C3 F6 source-provenance, reference LR, AdamW state RED controls (CPU)
+        run: python -m unittest tests.test_sd3_full_bf16_worker_c3_f6_cpu -v
 
       - name: Run full C2-A scope suite under real Torch (ZERO skipped)
         if: ${{ always() }}
