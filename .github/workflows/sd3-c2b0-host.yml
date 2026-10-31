@@ -11,6 +11,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_strict_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f6_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f7_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -163,6 +164,28 @@ jobs:
                   f"unexpected_successes={len(result.unexpectedSuccesses)}"
               )
           print("C3-F6 PINNED REAL CPU GREEN: 13 PASS, 0 SKIP, 0 FAIL; NO CUDA QUALIFICATION")
+          PY
+
+      - name: Strict C3-F7 real pinned CPU semantic and continuity qualification (18 tests; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f7_cpu"
+          )
+          count = suite.countTestCases()
+          if count != 18:
+              raise SystemExit(f"C3-F7 test discovery drift: expected 18, found {count}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 18 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"C3-F7 PINNED CPU FAIL: run={result.testsRun}, "
+                  f"errors={len(result.errors)}, failed={len(result.failures)}, "
+                  f"skipped={len(result.skipped)}"
+              )
+          print("C3-F7 PINNED REAL CPU GREEN: 18 PASS, 0 SKIP, 0 FAIL; NOT CUDA QUALIFICATION")
           PY
 
       - name: Run full C2-A scope suite under real Torch (ZERO skipped)
