@@ -138,8 +138,32 @@ jobs:
       - name: Execute C3 Strict Review RED→GREEN physical negative controls (CPU only)
         run: python -m unittest tests.test_sd3_full_bf16_worker_c3_strict_cpu -v
 
-      - name: Execute C3 F6 source-provenance, reference LR, AdamW state RED controls (CPU)
-        run: python -m unittest tests.test_sd3_full_bf16_worker_c3_f6_cpu -v
+      - name: Strict C3-F6 real CPU RED-to-GREEN (13 tests; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f6_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 13:
+              raise SystemExit(
+                  f"C3-F6 strict test discovery drift: expected 13, found {discovered}"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 13 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C3-F6 physical evidence suite invalid: "
+                  f"run={result.testsRun} errors={len(result.errors)} "
+                  f"failed={len(result.failures)} skipped={len(result.skipped)} "
+                  f"expected_failures={len(result.expectedFailures)} "
+                  f"unexpected_successes={len(result.unexpectedSuccesses)}"
+              )
+          print("C3-F6 PINNED REAL CPU GREEN: 13 PASS, 0 SKIP, 0 FAIL; NO CUDA QUALIFICATION")
+          PY
 
       - name: Run full C2-A scope suite under real Torch (ZERO skipped)
         if: ${{ always() }}
