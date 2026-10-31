@@ -1,6 +1,6 @@
 # D1-SD3C2-B0 — SD3.5 Medium Component Full-BF16 real-CUDA evidence contract
 
-> **Status:** Fix B reviewed; C0/C1/C2 Host/CPU GREEN complete. **C3 physical Observer Strict Review fixes F1–F4 have been implemented and are in F5 exact-HEAD Host/CPU regression; independent Final Strict Review still required before Ready.** C4 Checkpoint/Resume, Fix D Runner, B1/B2 CUDA and persistent Full-BF16 release remain incomplete; backend `sd3-lora` remains Pending.
+> **Status:** Fix B reviewed; C0/C1/C2 Host/CPU GREEN complete. **C3 physical Observer C3-F6-A/B/C repairs are implemented; F6-D exact-final-HEAD Host/CPU regression and independent Strict Re-review required before Ready.** C4 Save/Resume, Fix D Runner, B1/B2 CUDA and persistent Full-BF16 release remain incomplete; backend `sd3-lora` stays Pending.
 > **Contract baseline:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96` (merged PR #63, with PR #64 ancestor).
 > **Release status:** `FULL_BF16_BACKEND_QUALIFICATIONS["sd3-lora"].status == "pending"`; B0/B1/B2/B3 must not silently promote it.
 > **Purpose:** define the bounded, production-trainer-based evidence infrastructure for two **candidate** SD3.5 Medium Component Full-BF16 cases. A host or synthetic PASS is not physical CUDA qualification.
