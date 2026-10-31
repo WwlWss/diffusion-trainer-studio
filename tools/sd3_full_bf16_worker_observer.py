@@ -612,6 +612,46 @@ class PhysicalStepProbe:
             for name, param in sorted(self.params.items())
         })
 
+    def _pre_backward_gradient_health(self, *, first_microbatch: bool) -> None:
+        """Read-only baseline: stale gradients may not be called new Backward."""
+        for name, param in sorted(self.params.items()):
+            grad = param.grad
+            if grad is None:
+                continue
+            if (grad.layout != torch.strided or grad.is_meta
+                    or grad.dtype != torch.bfloat16
+                    or grad.device != param.device
+                    or tuple(grad.shape) != tuple(param.shape)):
+                _fail("Unexpected non-BF16 or wrong-shape pre-Backward gradient: " + name)
+            if not bool(torch.isfinite(grad).all().item()):
+                _fail("Non-finite pre-Backward gradient: " + name)
+            if first_microbatch and bool(torch.count_nonzero(grad).item()):
+                _fail("First Microbatch has stale nonzero pre-existing BF16 gradient: " + name)
+
+    def _gradient_value_snapshot(self) -> str:
+        """Numeric BF16 state digest (signed zeros normalized, None distinct).
+
+        CPU bytes are processed one Tensor at a time. No GPU clones, gradient
+        mutations, FP32 conversion, nor retained full-model CPU snapshots.
+        A None->all-zero transition cannot prove a contribution.
+        """
+        values: dict[str, Any] = {}
+        for name, param in sorted(self.params.items()):
+            grad = param.grad
+            if grad is None:
+                values[name] = None
+                continue
+            # _pre_backward_gradient_health and _gradients validate metadata/
+            # finite values at the corresponding pre/post call boundaries.
+            bits = grad.detach().contiguous().to(device="cpu").view(torch.int16)
+            canonical_bits = bits.numpy().copy()
+            canonical_bits[canonical_bits == -32768] = 0  # -0 BF16 == +0 BF16
+            values[name] = {
+                "shape": list(grad.shape), "dtype": str(grad.dtype),
+                "numeric_sha256": hashlib.sha256(canonical_bits.tobytes()).hexdigest(),
+            }
+        return host._json_sha256(values)
+
     def _gradients(self, *, require_nonzero: bool) -> dict[str, Any]:
         """Audit every physical BF16 gradient once, grouped by Child AND Component."""
         child_stats: dict[str, dict[str, Any]] = {
@@ -693,6 +733,18 @@ class PhysicalStepProbe:
         def backward_wrapper(*args, **kwargs):
             if self._current_step is None or self._backward_seen:
                 _fail("Backward without unique active real Batch")
+            first = self._current_micro == 1
+            self._pre_backward_gradient_health(first_microbatch=first)
+            before_gradient = self._gradient_snapshot()
+            before_numeric = self._gradient_value_snapshot()
+            if not first:
+                if (self._pending_gradient_snapshot is None
+                        or before_gradient != self._pending_gradient_snapshot):
+                    _fail("Retained first-Microbatch BF16 gradient changed before actual Backward")
+            elif self._pending_gradient_snapshot is not None:
+                _fail("First Microbatch unexpectedly inherits retained gradients")
+            # The actual production Accelerator.backward is called once, only
+            # after all pre-Backward provenance assertions have passed.
             result = original_backward(*args, **kwargs)
             summary = self._gradients(require_nonzero=False)
             if not any(
@@ -701,15 +753,18 @@ class PhysicalStepProbe:
             ):
                 _fail("Microbatch produced no nonzero real BF16 gradient contribution")
             after_gradient = self._gradient_snapshot()
-            if self._current_micro == 1 and self.accumulation > 1:
-                if self._pending_gradient_snapshot is not None:
-                    _fail("Unexpected prior pending accumulation gradient")
+            after_numeric = self._gradient_value_snapshot()
+            if (before_gradient == after_gradient
+                    or before_numeric == after_numeric):
+                _fail("Actual Backward produced no observable numeric BF16 gradient contribution")
+            if first and self.accumulation > 1:
                 self._pending_gradient_snapshot = after_gradient
-            elif self._current_micro > 1:
-                if (self._pending_gradient_snapshot is None
-                        or after_gradient == self._pending_gradient_snapshot):
-                    _fail("Second Microbatch has no observable accumulated gradient contribution")
+            elif not first:
                 self._pending_gradient_snapshot = None
+            summary["pre_backward_gradient_sha256"] = before_gradient
+            summary["post_backward_gradient_sha256"] = after_gradient
+            summary["pre_backward_numeric_sha256"] = before_numeric
+            summary["post_backward_numeric_sha256"] = after_numeric
             self._record("backward_completed", sample=self._sample,
                          sync=self._current_sync, details=summary)
             self._backward_seen = True
