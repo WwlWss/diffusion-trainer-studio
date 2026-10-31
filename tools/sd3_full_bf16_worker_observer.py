@@ -387,6 +387,87 @@ def validate_reference_group_learning_rates(
     return resolved
 
 
+
+def _reference_provider_semantics(case_id: str) -> dict[str, dict[str, Any]]:
+    """Build frozen semantics from Policy and fresh pinned-provider objects."""
+    from pytorch_optimizer import Muon
+
+    policy = host.build_reference_policy(case_id)
+    out = {}
+    for profile, definition in policy["optimizer_profiles"].items():
+        kind = definition["type"]
+        sample = torch.nn.Parameter(torch.zeros((2, 2), dtype=torch.bfloat16))
+        payload = [{"params": [sample], "lr": 0.0001}]
+        if kind == "Muon":
+            payload[0]["use_muon"] = True
+            opt = Muon(payload, **definition["args"])
+            fields = {"lr", "momentum", "nesterov", "weight_decay",
+                      "weight_decouple", "ns_steps", "ns_coeffs",
+                      "use_adjusted_lr", "use_muon"}
+            instance = {"maximize": opt.maximize}
+        elif kind == "AdamW":
+            opt = torch.optim.AdamW(payload, **definition["args"])
+            fields = {"lr", "betas", "eps", "weight_decay", "amsgrad",
+                      "maximize", "foreach", "capturable", "differentiable",
+                      "fused", "decoupled_weight_decay"}
+            instance = {}
+        else:
+            _fail("Unreviewed F7 Provider: " + str(kind))
+        if set(opt.param_groups[0]) - {"params", "step"} != fields:
+            _fail("Pinned provider schema changed: " + profile)
+        out[profile] = {
+            "optimizer_type": kind, "fields": frozenset(fields),
+            "group": {k: opt.param_groups[0][k] for k in sorted(fields)},
+            "instance_fields": instance,
+        }
+    return out
+
+
+def _actual_provider_semantics(entry: Any, expected: Mapping[str, Any]) -> dict[str, Any]:
+    from pytorch_optimizer import Muon
+
+    opt = entry.optimizer
+    kind = expected["optimizer_type"]
+    if (kind == "AdamW" and type(opt) is not torch.optim.AdamW) or (
+        kind == "Muon" and type(opt) is not Muon
+    ):
+        _fail("Physical Optimizer provider type differs from fixed reference")
+    instance = {k: getattr(opt, k, None) for k in expected["instance_fields"]}
+    if fingerprint_state_tree(instance) != fingerprint_state_tree(expected["instance_fields"]):
+        _fail("Optimizer instance semantic drift")
+    groups = []
+    for group in opt.param_groups:
+        if set(group) - {"params", "step", "initial_lr"} != expected["fields"]:
+            _fail("Optimizer Group semantic field set differs from reference")
+        if "initial_lr" in group and _typed_tree(group["initial_lr"]) != _typed_tree(group["lr"]):
+            _fail("Optimizer Group initial_lr differs from current rate")
+        groups.append({k: group[k] for k in sorted(expected["fields"])})
+    if not groups:
+        _fail("No physical provider Group")
+    return {"optimizer_type": kind, "groups": groups, "instance_fields": instance}
+
+
+def validate_reference_optimizer_group_semantics(
+    *, case_id: str, session: Any,
+) -> dict[str, dict[str, Any]]:
+    """Independently bind the actual provider Groups to frozen R1/R2 defaults."""
+    refs = _reference_provider_semantics(case_id)
+    entries = tuple(session.optimizer.entries)
+    if len(entries) != len(refs) or {x.profile_name for x in entries} != set(refs):
+        _fail("Reference Optimizer semantic Profile mismatch")
+    result = {}
+    for entry in entries:
+        ref = refs[entry.profile_name]
+        actual = _actual_provider_semantics(entry, ref)
+        if any(fingerprint_state_tree(group) != fingerprint_state_tree(ref["group"])
+               for group in actual["groups"]):
+            _fail("Physical Optimizer Group semantic differs from reference: " + entry.profile_name)
+        result[entry.profile_name] = {
+            **actual, "semantic_sha256": fingerprint_state_tree(actual),
+        }
+    return result
+
+
 def observe_prepared_ownership(
     *, session: Any, accelerator: Any, network: torch.nn.Module,
     train_dataloader: Any, case_id: str,
@@ -493,6 +574,9 @@ def observe_prepared_ownership(
     reference_lrs = validate_reference_group_learning_rates(
         case_id=case_id, session=session,
     )
+    reference_semantics = validate_reference_optimizer_group_semantics(
+        case_id=case_id, session=session,
+    )
     if {profile: len(members) for profile, members in children.items()} != reference["child_tensor_counts"]:
         _fail("Physical Child Group ownership differs from frozen 430/96 or 526 reference")
     component_counts = {}
@@ -514,6 +598,7 @@ def observe_prepared_ownership(
         "reference_component_tensor_counts": reference["component_tensor_counts"],
         "reference_child_tensor_counts": reference["child_tensor_counts"],
         "reference_group_learning_rates": reference_lrs,
+        "reference_optimizer_group_semantics": reference_semantics,
     }
 
 
@@ -654,6 +739,7 @@ class PhysicalStepProbe:
         parameter_names: Mapping[str, torch.nn.Parameter],
         component_by_parameter: Mapping[str, str],
         expected_group_lrs: Mapping[str, list[float]] | None = None,
+        expected_group_semantics: Mapping[str, Any] | None = None,
         case_id: str, run_id: str, phase_id: str, source_commit: str,
         phase: str, start_step: int = 0,
     ):
@@ -701,6 +787,7 @@ class PhysicalStepProbe:
         self._sample_names: dict[int, set[str]] = {}
         self._pre_step_grad: dict[str, Any] | None = None
         self._last_muon_momentum_sha: dict[str, str] = {}
+        self._last_adamw_moment_sha: dict[str, str] = {}
         required_types = tuple(spec["optimizer_types"])
         physical_types = tuple(entry.optimizer_type for entry in composite_optimizer.entries)
         if sorted(physical_types) != sorted(required_types):
@@ -729,6 +816,29 @@ class PhysicalStepProbe:
             for profile in self.child_profiles
         }
         self._check_physical_group_lrs(phase="probe_init")
+        refs = _reference_provider_semantics(case_id)
+        if expected_group_semantics is None:
+            if len(self.params) == 526 and accelerator.device.type == "cuda":
+                _fail("Real CUDA Worker omitted independently verified Group semantics")
+            # CPU diagnostics intentionally use a larger LR; all other values
+            # must still equal the independently built pinned provider defaults.
+            expected_group_semantics = {}
+            for entry in composite_optimizer.entries:
+                ref = refs[entry.profile_name]
+                actual = _actual_provider_semantics(entry, ref)
+                for group in actual["groups"]:
+                    for key in ref["fields"] - {"lr"}:
+                        if _typed_tree(group[key]) != _typed_tree(ref["group"][key]):
+                            _fail("CPU Probe Group semantics differ from pinned provider")
+                expected_group_semantics[entry.profile_name] = actual
+        if set(expected_group_semantics) != set(self.child_profiles):
+            _fail("Missing expected Group semantic Profiles")
+        self.expected_group_semantics = {
+            p: {k: v for k, v in expected_group_semantics[p].items()
+                if k != "semantic_sha256"}
+            for p in self.child_profiles
+        }
+        self._check_physical_group_semantics(phase="probe_init")
         owners = {}
         seen: set[int] = set()
         named_ids = {id(p): name for name, p in self.params.items()}
@@ -770,6 +880,17 @@ class PhysicalStepProbe:
                 normalized.append(current)
             actual[entry.profile_name] = normalized
         return actual
+
+    def _check_physical_group_semantics(self, *, phase: str) -> dict[str, str]:
+        refs = _reference_provider_semantics(self.case_id)
+        digests = {}
+        for entry in self.optimizer.entries:
+            name = entry.profile_name
+            actual = _actual_provider_semantics(entry, refs[name])
+            if fingerprint_state_tree(actual) != fingerprint_state_tree(self.expected_group_semantics[name]):
+                _fail("Physical Optimizer Group semantic drift at " + phase + ": " + name)
+            digests[name] = fingerprint_state_tree(actual)
+        return digests
 
     def _record(self, event_type: str, *, profile: str | None = None,
                 sample: str | None = None, sync: bool | None = None,
@@ -993,9 +1114,11 @@ class PhysicalStepProbe:
             if set(k for k,v in self._step_children[step].items() if v) != set(self.child_profiles):
                 _fail("Scheduler step preceded physical Child completion")
             self._check_physical_group_lrs(phase="pre_scheduler")
+            self._check_physical_group_semantics(phase="pre_scheduler")
             before = fingerprint_state_tree(self.scheduler.state_dict())
             result = original_scheduler_step(*args, **kwargs)
             self._check_physical_group_lrs(phase="post_constant_scheduler")
+            self._check_physical_group_semantics(phase="post_constant_scheduler")
             after = fingerprint_state_tree(self.scheduler.state_dict())
             if after == before:
                 _fail("Real CompositeLRScheduler step did not change state")
@@ -1021,6 +1144,7 @@ class PhysicalStepProbe:
                         _fail("Duplicate Child physical optimizer step")
                     child = next(e for e in self.optimizer.entries if e.profile_name == name)
                     before_lrs = self._check_physical_group_lrs(phase="pre_child_step")
+                    before_semantics = self._check_physical_group_semantics(phase="pre_child_step")
                     # One contiguous BF16 Tensor at a time: hashes are from
                     # original bytes, not cloned GPU parameters or FP32 casts.
                     members = {
@@ -1062,8 +1186,15 @@ class PhysicalStepProbe:
                             child.optimizer, physical_step=step - 1,
                             canonical_names_by_id=canonical_child_names,
                         )
+                        if self.phase == "fresh":
+                            previous = self._last_adamw_moment_sha.get(name)
+                            if previous is None:
+                                _fail("Missing prior AdamW moment baseline")
+                            if adamw_before["moment_inventory_sha256"] != previous:
+                                _fail("AdamW moments changed between physical Steps")
                     result = original(*args, **kwargs)
                     self._check_physical_group_lrs(phase="post_child_step")
+                    self._check_physical_group_semantics(phase="post_child_step")
                     after_group_ids = tuple(
                         tuple(id(p) for p in group["params"])
                         for group in child.optimizer.param_groups
@@ -1119,6 +1250,7 @@ class PhysicalStepProbe:
                             # a claimed real physical Step. Weight changes are
                             # verified independently above.
                             _fail("AdamW moments did not advance in real physical Step")
+                        self._last_adamw_moment_sha[name] = adamw_after["moment_inventory_sha256"]
                     else:
                         _fail("Unreviewed physical Optimizer Child type")
                     self._step_children[step][name] += 1
@@ -1134,6 +1266,7 @@ class PhysicalStepProbe:
                         "post_clip_gradient": self._pre_step_grad,
                         "physical_step": step,
                         "physical_group_learning_rates": before_lrs[name],
+                        "physical_group_semantics_sha256": before_semantics[name],
                     })
                     return result
                 return wrapped
@@ -1223,6 +1356,7 @@ __all__ = [
     "audit_physical_optimizer_groups",
     "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
     "validate_reference_group_learning_rates",
+    "validate_reference_optimizer_group_semantics",
     "validate_muon_parameter_states", "validate_adamw_parameter_states",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]
