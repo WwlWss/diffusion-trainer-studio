@@ -294,6 +294,96 @@ def validate_reference_alpha_buffers(
 
 
 
+
+def _reference_lr_hex(lr: Any, *, label: str) -> str:
+    if type(lr) is not float or not math.isfinite(lr) or lr <= 0:
+        _fail("Physical learning rate must be a positive finite Python float: " + label)
+    return lr.hex()
+
+
+def validate_reference_group_learning_rates(
+    *, case_id: str, session: Any,
+) -> dict[str, list[float]]:
+    """Compare *three* independent LR sources to the frozen R1/R2 Policy.
+
+    The caller must independently verify complete 526-parameter ownership via
+    observe_prepared_ownership() before treating this as CUDA evidence. This
+    device-neutral helper also permits small real-Optimizer CPU negatives.
+    """
+    policy = host.build_reference_policy(case_id)
+    assignments_list = tuple(session.routing_plan.assignments)
+    assignments = {a.canonical_name: a for a in assignments_list}
+    if not assignments_list or len(assignments) != len(assignments_list):
+        _fail("Reference LR audit has empty/duplicate routing assignments")
+    runtime = tuple(session.runtime_spec.optimizers)
+    entries = tuple(session.optimizer.entries)
+    expected_profiles = set(policy["optimizer_profiles"])
+    if (len(runtime) != len(entries)
+            or {s.profile_name for s in runtime} != expected_profiles
+            or {e.profile_name for e in entries} != expected_profiles):
+        _fail("Physical reference learning-rate Profiles differ from frozen Policy")
+    actual_names: set[str] = set()
+    resolved: dict[str, list[float]] = {}
+    for runtime_entry, physical_entry in zip(runtime, entries):
+        name = runtime_entry.profile_name
+        if name != physical_entry.profile_name:
+            _fail("Physical learning-rate Child order differs from RuntimeSpec")
+        if len(runtime_entry.groups) != len(physical_entry.optimizer.param_groups):
+            _fail("Physical learning-rate Parameter Group cardinality differs")
+        groups: list[float] = []
+        for group_spec, physical_group in zip(
+            runtime_entry.groups, physical_entry.optimizer.param_groups
+        ):
+            parameters = tuple(group_spec.parameters)
+            actual_parameters = tuple(physical_group["params"])
+            if not parameters or len(parameters) != len(actual_parameters):
+                _fail("Reference LR group has wrong physical Parameter count")
+            reference_values: set[str] = set()
+            for p_spec, real_parameter in zip(parameters, actual_parameters):
+                canonical = p_spec.canonical_name
+                assignment = assignments.get(canonical)
+                if (assignment is None or canonical in actual_names
+                        or getattr(p_spec, "parameter", None) is not real_parameter):
+                    _fail("Reference LR group has stale/duplicate physical Parameter")
+                actual_names.add(canonical)
+                component = policy["components"].get(assignment.component_id)
+                if not isinstance(component, Mapping) or component.get("train") is not True:
+                    _fail("Reference LR group targets an unknown/frozen Component")
+                if assignment.route_kind == "primary":
+                    profile = component["optimizer_profile"]
+                    expected = component["learning_rate"]
+                elif assignment.route_kind == "fallback":
+                    profile = component.get("fallback_optimizer_profile")
+                    expected = component.get(
+                        "fallback_learning_rate", component["learning_rate"]
+                    )
+                else:
+                    _fail("Unreviewed physical learning-rate Route")
+                if assignment.optimizer_profile != profile or name != profile:
+                    _fail("Reference LR group uses the wrong Component/Profile Route")
+                expected_hex = _reference_lr_hex(expected, label=canonical + "/reference")
+                if _reference_lr_hex(
+                    assignment.learning_rate, label=canonical + "/routing"
+                ) != expected_hex:
+                    _fail("Routing assignment differs from independent reference learning rate")
+                reference_values.add(expected_hex)
+            if len(reference_values) != 1:
+                _fail("Physical Group mixes incompatible reference learning rates")
+            expected_hex = next(iter(reference_values))
+            if (_reference_lr_hex(
+                    group_spec.learning_rate, label=name + "/RuntimeSpec"
+                ) != expected_hex
+                    or _reference_lr_hex(
+                        physical_group.get("lr"), label=name + "/param_groups"
+                    ) != expected_hex):
+                _fail("Actual physical Group/RuntimeSpec learning rate differs from reference")
+            groups.append(group_spec.learning_rate)
+        resolved[name] = groups
+    if actual_names != set(assignments):
+        _fail("Reference LR assignment set and physical Group ownership disagree")
+    return resolved
+
+
 def observe_prepared_ownership(
     *, session: Any, accelerator: Any, network: torch.nn.Module,
     train_dataloader: Any, case_id: str,
@@ -397,6 +487,9 @@ def observe_prepared_ownership(
         buffers, target_spec, expected_device=expected_device,
     )
     reference = validate_reference_ownership_rows(case_id=case_id, rows=rows)
+    reference_lrs = validate_reference_group_learning_rates(
+        case_id=case_id, session=session,
+    )
     if {profile: len(members) for profile, members in children.items()} != reference["child_tensor_counts"]:
         _fail("Physical Child Group ownership differs from frozen 430/96 or 526 reference")
     component_counts = {}
@@ -417,6 +510,7 @@ def observe_prepared_ownership(
         "alpha_buffer_count": alpha_count,
         "reference_component_tensor_counts": reference["component_tensor_counts"],
         "reference_child_tensor_counts": reference["child_tensor_counts"],
+        "reference_group_learning_rates": reference_lrs,
     }
 
 
@@ -490,6 +584,7 @@ class PhysicalStepProbe:
         composite_scheduler: CompositeLRScheduler,
         parameter_names: Mapping[str, torch.nn.Parameter],
         component_by_parameter: Mapping[str, str],
+        expected_group_lrs: Mapping[str, list[float]] | None = None,
         case_id: str, run_id: str, phase_id: str, source_commit: str,
         phase: str, start_step: int = 0,
     ):
@@ -544,6 +639,27 @@ class PhysicalStepProbe:
         if len({entry.profile_name for entry in composite_optimizer.entries}) != len(required_types):
             _fail("Duplicate Profile name in physical optimizer")
         self.child_profiles = tuple(entry.profile_name for entry in composite_optimizer.entries)
+        # Genuine CUDA reference ownership must supply an independently
+        # checked Policy LR contract. Tiny diagnostic CPU Probes instead pin
+        # their own immutable initial LR baseline (NOT CUDA qualification).
+        if expected_group_lrs is None:
+            if len(self.params) == 526 and accelerator.device.type == "cuda":
+                _fail("Real CUDA Worker omitted independently audited reference learning rates")
+            expected_group_lrs = {
+                entry.profile_name: [
+                    group.get("lr") for group in entry.optimizer.param_groups
+                ] for entry in composite_optimizer.entries
+            }
+        if set(expected_group_lrs) != set(self.child_profiles):
+            _fail("Reference LR Probe missing/extra physical Child Profiles")
+        self.expected_group_lrs = {
+            profile: tuple(
+                float(lr) for lr in expected_group_lrs[profile]
+                if _reference_lr_hex(lr, label=profile + "/prepared")
+            )
+            for profile in self.child_profiles
+        }
+        self._check_physical_group_lrs(phase="probe_init")
         owners = {}
         seen: set[int] = set()
         named_ids = {id(p): name for name, p in self.params.items()}
@@ -569,6 +685,22 @@ class PhysicalStepProbe:
             if len(profiles) != 1:
                 _fail("Parameter lacks exactly one physical Child Profile")
             self.profile_by_name[name] = profiles[0]
+
+    def _check_physical_group_lrs(self, *, phase: str) -> dict[str, list[float]]:
+        actual: dict[str, list[float]] = {}
+        for entry in self.optimizer.entries:
+            rates = entry.optimizer.param_groups
+            expected = self.expected_group_lrs.get(entry.profile_name, ())
+            if len(rates) != len(expected):
+                _fail("Physical learning-rate Group count drift at " + phase)
+            normalized = []
+            for i, (group, lr) in enumerate(zip(rates, expected)):
+                current = group.get("lr")
+                if _reference_lr_hex(current, label=entry.profile_name + "/" + phase) != lr.hex():
+                    _fail("Physical Child learning rate drifted after preparation at " + phase)
+                normalized.append(current)
+            actual[entry.profile_name] = normalized
+        return actual
 
     def _record(self, event_type: str, *, profile: str | None = None,
                 sample: str | None = None, sync: bool | None = None,
@@ -791,8 +923,10 @@ class PhysicalStepProbe:
                 _fail("Duplicate physical Scheduler step")
             if set(k for k,v in self._step_children[step].items() if v) != set(self.child_profiles):
                 _fail("Scheduler step preceded physical Child completion")
+            self._check_physical_group_lrs(phase="pre_scheduler")
             before = fingerprint_state_tree(self.scheduler.state_dict())
             result = original_scheduler_step(*args, **kwargs)
+            self._check_physical_group_lrs(phase="post_constant_scheduler")
             after = fingerprint_state_tree(self.scheduler.state_dict())
             if after == before:
                 _fail("Real CompositeLRScheduler step did not change state")
@@ -817,6 +951,7 @@ class PhysicalStepProbe:
                     if self._step_children[step][name] != 0:
                         _fail("Duplicate Child physical optimizer step")
                     child = next(e for e in self.optimizer.entries if e.profile_name == name)
+                    before_lrs = self._check_physical_group_lrs(phase="pre_child_step")
                     # One contiguous BF16 Tensor at a time: hashes are from
                     # original bytes, not cloned GPU parameters or FP32 casts.
                     members = {
@@ -852,6 +987,7 @@ class PhysicalStepProbe:
                                 muon_before["momentum_inventory_sha256"] != previous_digest):
                             _fail("Muon momentum_buffer changed between physical Steps")
                     result = original(*args, **kwargs)
+                    self._check_physical_group_lrs(phase="post_child_step")
                     after_group_ids = tuple(
                         tuple(id(p) for p in group["params"])
                         for group in child.optimizer.param_groups
@@ -922,6 +1058,7 @@ class PhysicalStepProbe:
                         "muon_momentum_state": muon_after,
                         "post_clip_gradient": self._pre_step_grad,
                         "physical_step": step,
+                        "physical_group_learning_rates": before_lrs[name],
                     })
                     return result
                 return wrapped
@@ -1010,6 +1147,7 @@ __all__ = [
     "verify_prepared_identity", "observe_prepared_ownership",
     "audit_physical_optimizer_groups",
     "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
+    "validate_reference_group_learning_rates",
     "validate_muon_parameter_states",
     "PhysicalStepProbe", "ObservedSd3NetworkTrainer",
 ]

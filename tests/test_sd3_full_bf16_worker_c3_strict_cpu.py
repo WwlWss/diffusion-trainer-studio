@@ -52,7 +52,7 @@ def reference_rows(case_id: str) -> dict:
     return rows
 
 
-def three_component_cpu_probe():
+def three_component_cpu_probe(*, muon_lr=0.02, adamw_lr=0.01):
     """Physical real 3-component R2 model with independent Muon/AdamW."""
     torch.manual_seed(123456)
     model = torch.nn.ModuleDict({
@@ -61,8 +61,8 @@ def three_component_cpu_probe():
     })
     muon = Muon([{"params": [
         model["attention"].weight, model["mlp"].weight,
-    ], "lr": 0.02, "use_muon": True}])
-    adamw = torch.optim.AdamW([model["modulation"].weight], lr=0.01)
+    ], "lr": muon_lr, "use_muon": True}])
+    adamw = torch.optim.AdamW([model["modulation"].weight], lr=adamw_lr)
     facade = CompositeOptimizer(
         SimpleNamespace(topology_fingerprint="c3-strict-cpu-v1"),
         (
@@ -221,18 +221,12 @@ class C3FixF2GradientContract(unittest.TestCase):
 
 class C3FixF3PhysicalWeightContract(unittest.TestCase):
     def test_child_state_advance_but_zero_lr_weight_update_is_rejected(self):
-        bundle = three_component_cpu_probe()
-        facade = bundle[4]
-        adamw = next(e.optimizer for e in facade.entries if e.optimizer_type == "AdamW")
-        adamw.param_groups[0]["lr"] = 0.0
+        bundle = three_component_cpu_probe(adamw_lr=0.0)
         with self.assertRaisesRegex(ValueError, "weight|Parameter|unchanged|physical"):
             two_batches(bundle)
 
     def test_tiny_nonzero_lr_that_rounds_away_in_bf16_is_rejected(self):
-        bundle = three_component_cpu_probe()
-        facade = bundle[4]
-        adamw = next(e.optimizer for e in facade.entries if e.optimizer_type == "AdamW")
-        adamw.param_groups[0]["lr"] = 1e-12
+        bundle = three_component_cpu_probe(adamw_lr=1e-12)
         with self.assertRaisesRegex(ValueError, "BF16|weight|changed"):
             two_batches(bundle)
 
