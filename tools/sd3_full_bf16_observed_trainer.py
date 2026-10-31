@@ -198,6 +198,7 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
                 for row in ownership["parameter_rows"].values()
             },
             expected_group_lrs=ownership["reference_group_learning_rates"],
+            expected_group_semantics=ownership["reference_optimizer_group_semantics"],
             case_id=self._c3_invocation.case_id,
             run_id=self._c3_invocation.run_id,
             phase_id=self._c3_invocation.phase_id,
