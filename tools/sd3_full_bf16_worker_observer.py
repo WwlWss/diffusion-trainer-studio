@@ -792,6 +792,10 @@ class PhysicalStepProbe:
         self._pre_step_grad: dict[str, Any] | None = None
         self._last_muon_momentum_sha: dict[str, str] = {}
         self._last_adamw_moment_sha: dict[str, str] = {}
+        # The accepted *whole logical Step* baseline is written only after
+        # both physical Children and the actual Scheduler pass validation.
+        self._last_completed_step: int | None = None
+        self._last_completed_adapter_sha256: str | None = None
         required_types = tuple(spec["optimizer_types"])
         physical_types = tuple(entry.optimizer_type for entry in composite_optimizer.entries)
         if sorted(physical_types) != sorted(required_types):
@@ -949,6 +953,13 @@ class PhysicalStepProbe:
         if details:
             row.update(details)
         self.events.append(row)
+
+    def _adapter_parameter_sha256(self) -> str:
+        """One-Tensor-at-a-time hash of all canonical real BF16 LoRA weights."""
+        return fingerprint_state_tree({
+            name: parameter.detach()
+            for name, parameter in sorted(self.params.items())
+        })
 
     def _snapshot(self) -> dict[str, str]:
         return {
@@ -1155,10 +1166,15 @@ class PhysicalStepProbe:
             after = fingerprint_state_tree(self.scheduler.state_dict())
             if after == before:
                 _fail("Real CompositeLRScheduler step did not change state")
+            # Capture the accepted full-Adapter fingerprint after both
+            # physical Child steps and the constant Scheduler have succeeded.
+            accepted_adapter_sha = self._adapter_parameter_sha256()
             self._step_scheduler[step] += 1
             self._record("physical_scheduler_stepped", details={
                 "scheduler_before": before, "scheduler_after": after,
             })
+            self._last_completed_step = step
+            self._last_completed_adapter_sha256 = accepted_adapter_sha
             return result
 
         self._patch(self.accelerator, "backward", backward_wrapper)
@@ -1328,6 +1344,16 @@ class PhysicalStepProbe:
         sync = self.accelerator.sync_gradients
         if type(sync) is not bool or sync != (current_micro == self.accumulation):
             _fail("Incorrect real Accelerate synchronization sequence for accumulation")
+        # A new process's first Step (Resume logical Step 2) is exempt:
+        # cross-process Checkpoint continuity is exclusively a C4 obligation.
+        # For an in-process Fresh successor, reject *before* new Backward.
+        if current_micro == 1 and current_step > self.start_step + 1:
+            if self._last_completed_step != current_step - 1:
+                _fail("Missing prior completed Adapter physical Step")
+            if self._last_completed_adapter_sha256 is None:
+                _fail("Missing prior Adapter parameter baseline")
+            if self._adapter_parameter_sha256() != self._last_completed_adapter_sha256:
+                _fail("Adapter parameters changed between physical Steps")
         if (not isinstance(sample_marker, str)
                 or not sample_marker.startswith("dts_c2b_sample_")
                 or len(sample_marker) != len("dts_c2b_sample_0001")
