@@ -59,7 +59,7 @@ class TinyRealLoraNetwork(torch.nn.Module):
                 original.weight.requires_grad_(False)
                 lora = LoRAModule(
                     f"lora_unet_f9_{key}", original,
-                    multiplier=1.0, lora_dim=4, alpha=4,
+                    multiplier=1.0, lora_dim=4, alpha=4.0,
                 )
                 lora.apply_to()
                 lora.to(dtype=torch.bfloat16)
