@@ -269,7 +269,7 @@ class F8CFreshAdapterParameterContinuity(unittest.TestCase):
         )
         self.assertEqual(probe._step_scheduler, {1: 1, 2: 1})
 
-    def test_unmodified_r2_accumulation_and_resume_first_step_remain_valid(self):
+    def test_unmodified_r2_two_fresh_accumulation_steps_remain_valid(self):
         bundle = three_component_cpu_probe()
         two_batches(bundle)
         events = two_batches(bundle)
