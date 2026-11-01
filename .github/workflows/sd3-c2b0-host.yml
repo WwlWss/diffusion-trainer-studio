@@ -14,6 +14,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f7_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f8_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f9_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f9a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -231,6 +232,28 @@ jobs:
                   f"failures={len(result.failures)} skipped={len(result.skipped)}"
               )
           print(f"Strict CPU C2-A: {result.testsRun} PASS, 0 SKIPPED")
+          PY
+
+      - name: Strict C3-F9-A real Linear Forward Hook and sampling controls (4; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f9a_cpu"
+          )
+          count = suite.countTestCases()
+          if count != 4:
+              raise SystemExit(f"C3-F9-A supplemental test discovery drift: {count} != 4")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 4 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C3-F9-A real Forward Hook FAIL: "
+                  f"run={result.testsRun}, failures={len(result.failures)}, "
+                  f"errors={len(result.errors)}, skipped={len(result.skipped)}"
+              )
+          print("C3-F9-A REAL CPU HOOK GREEN: 4 PASS, 0 SKIP, 0 FAIL; NOT CUDA")
           PY
 
       - name: Strict C3-F9 REAL CPU Tests-only RED (18 tests, ZERO SKIP)
