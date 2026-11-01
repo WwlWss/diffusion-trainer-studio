@@ -199,6 +199,8 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             },
             expected_group_lrs=ownership["reference_group_learning_rates"],
             expected_group_semantics=ownership["reference_optimizer_group_semantics"],
+            lora_network=network,
+            expected_lora_forward_semantics=ownership["reference_lora_forward_semantics"],
             case_id=self._c3_invocation.case_id,
             run_id=self._c3_invocation.run_id,
             phase_id=self._c3_invocation.phase_id,
