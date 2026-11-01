@@ -894,6 +894,8 @@ class PhysicalStepProbe:
         component_by_parameter: Mapping[str, str],
         expected_group_lrs: Mapping[str, list[float]] | None = None,
         expected_group_semantics: Mapping[str, Any] | None = None,
+        lora_network: torch.nn.Module | None = None,
+        expected_lora_forward_semantics: Mapping[str, Any] | None = None,
         case_id: str, run_id: str, phase_id: str, source_commit: str,
         phase: str, start_step: int = 0,
     ):
@@ -928,6 +930,14 @@ class PhysicalStepProbe:
         self.sync_sequence: tuple[bool, ...] = ()
         self._installed = False
         self._patched: list[tuple[Any, str, bool, Any]] = []
+        self._lora_forward_handles: list[Any] = []
+        self._lora_training_window = False
+        self._lora_network = lora_network
+        self._lora_expected_sha256: str | None = None
+        self._lora_module_digests: dict[str, str] = {}
+        self._lora_module_refs: dict[str, Any] = {}
+        self._lora_target_refs: dict[str, torch.nn.Linear] = {}
+        self._lora_target_spec: Mapping[str, Any] | None = None
         self._backwards = 0
         self._started = 0
         self._current_step: int | None = None
@@ -1050,6 +1060,89 @@ class PhysicalStepProbe:
             if len(profiles) != 1:
                 _fail("Parameter lacks exactly one physical Child Profile")
             self.profile_by_name[name] = profiles[0]
+        # F9-A: the CPU-only legacy Probe remains compatible; real CUDA MUST
+        # bind the exact independently audited 263-Module Prepared reference.
+        real_forward_cuda = len(self.params) == 526 and accelerator.device.type == "cuda"
+        if self._lora_network is None:
+            if real_forward_cuda or expected_lora_forward_semantics is not None:
+                _fail("Real CUDA LoRA Forward reference was not bound to its actual Network")
+        else:
+            if real_forward_cuda and expected_lora_forward_semantics is None:
+                _fail("Real CUDA omitted independently audited LoRA Forward semantics")
+            if expected_lora_forward_semantics is not None:
+                if (not isinstance(expected_lora_forward_semantics, Mapping)
+                        or set(expected_lora_forward_semantics) != {
+                            "module_names", "semantic_sha256",
+                        }):
+                    _fail("Prepared LoRA Forward semantic reference is malformed")
+                names = expected_lora_forward_semantics["module_names"]
+                if (not isinstance(names, (list, tuple))
+                        or len(names) != len(set(names))
+                        or any(type(item) is not str or not item for item in names)
+                        or type(expected_lora_forward_semantics["semantic_sha256"]) is not str):
+                    _fail("Prepared LoRA Forward names or SHA256 are malformed")
+                expected_names = tuple(names)
+            else:
+                expected_names = None
+            self._lora_target_spec = (
+                host.build_sd35_medium_lora_target_spec()
+                if real_forward_cuda else None
+            )
+            payload, modules, targets = inspect_reference_lora_forward_semantics(
+                network=self._lora_network,
+                expected_names=expected_names,
+                target_spec=self._lora_target_spec,
+            )
+            sha = fingerprint_state_tree(payload)
+            if (expected_lora_forward_semantics is not None
+                    and sha != expected_lora_forward_semantics["semantic_sha256"]):
+                _fail("Physical LoRA Forward differs from independent Prepared reference")
+            self._lora_expected_sha256 = sha
+            self._lora_module_digests = {
+                name: fingerprint_state_tree(fields)
+                for name, fields in payload["modules"].items()
+            }
+            self._lora_module_refs = dict(modules)
+            self._lora_target_refs = dict(targets)
+            self._check_lora_forward_semantics(phase="probe_init")
+
+    def _check_lora_forward_semantics(self, *, phase: str) -> None:
+        if self._lora_network is None:
+            return
+        payload, modules, targets = inspect_reference_lora_forward_semantics(
+            network=self._lora_network,
+            expected_names=tuple(sorted(self._lora_module_refs)),
+            target_spec=self._lora_target_spec,
+        )
+        for name in self._lora_module_refs:
+            if (modules[name] is not self._lora_module_refs[name]
+                    or targets[name] is not self._lora_target_refs[name]):
+                _fail("LoRA Forward module/Linear identity drift at " + phase + ": " + name)
+        if fingerprint_state_tree(payload) != self._lora_expected_sha256:
+            _fail("LoRA Forward semantic drift at " + phase)
+
+    def _check_single_lora_forward(self, name: str, target: Any) -> None:
+        if self._lora_network is None:
+            return
+        if target is not self._lora_target_refs[name]:
+            _fail("LoRA Forward actual Linear target identity drift: " + name)
+        if (type(self._lora_network.multiplier) is not float
+                or self._lora_network.multiplier != 1.0):
+            _fail("LoRA Forward root multiplier drift at actual physical Forward")
+        fields, actual_target = _lora_forward_module_payload(
+            name, self._lora_module_refs[name],
+        )
+        if actual_target is not target:
+            _fail("LoRA Forward original Linear target was replaced: " + name)
+        # Immutable registration path is part of the Prepared semantic digest;
+        # this single-Linear pre-hook checks real call-time scalars and Alpha.
+        registered_path = next(
+            (key for key, module in self._lora_network.named_modules()
+             if module is self._lora_module_refs[name]), None,
+        )
+        fields["registered_path"] = registered_path
+        if fingerprint_state_tree(fields) != self._lora_module_digests[name]:
+            _fail("LoRA Forward semantic drift at real Linear Forward: " + name)
 
     def _check_physical_group_lrs(self, *, phase: str) -> dict[str, list[float]]:
         actual: dict[str, list[float]] = {}
@@ -1247,6 +1340,7 @@ class PhysicalStepProbe:
         self._installed = True
 
         def backward_wrapper(*args, **kwargs):
+            self._lora_training_window = False
             if self._current_step is None or self._backward_seen:
                 _fail("Backward without unique active real Batch")
             first = self._current_micro == 1
@@ -1288,6 +1382,7 @@ class PhysicalStepProbe:
             return result
 
         def optimizer_wrapper(*args, **kwargs):
+            self._check_lora_forward_semantics(phase="pre_composite_step")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Physical CompositeOptimizer.step before synchronized Backward")
             step = self._current_step
@@ -1300,6 +1395,7 @@ class PhysicalStepProbe:
             return result
 
         def scheduler_wrapper(*args, **kwargs):
+            self._check_lora_forward_semantics(phase="pre_scheduler")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Scheduler advanced without synchronized Backward")
             step = self._current_step
@@ -1311,6 +1407,7 @@ class PhysicalStepProbe:
             self._check_physical_group_semantics(phase="pre_scheduler")
             before = fingerprint_state_tree(self.scheduler.state_dict())
             result = original_scheduler_step(*args, **kwargs)
+            self._check_lora_forward_semantics(phase="post_constant_scheduler")
             self._check_physical_group_lrs(phase="post_constant_scheduler")
             self._check_physical_group_semantics(phase="post_constant_scheduler")
             after = fingerprint_state_tree(self.scheduler.state_dict())
@@ -1342,6 +1439,7 @@ class PhysicalStepProbe:
                     if self._step_children[step][name] != 0:
                         _fail("Duplicate Child physical optimizer step")
                     child = next(e for e in self.optimizer.entries if e.profile_name == name)
+                    self._check_lora_forward_semantics(phase="pre_child_step")
                     before_lrs = self._check_physical_group_lrs(phase="pre_child_step")
                     before_semantics = self._check_physical_group_semantics(phase="pre_child_step")
                     # One contiguous BF16 Tensor at a time: hashes are from
@@ -1396,6 +1494,7 @@ class PhysicalStepProbe:
                             if adamw_before["moment_inventory_sha256"] != previous:
                                 _fail("AdamW moments changed between physical Steps")
                     result = original(*args, **kwargs)
+                    self._check_lora_forward_semantics(phase="post_child_step")
                     self._check_physical_group_lrs(phase="post_child_step")
                     self._check_physical_group_semantics(phase="post_child_step")
                     after_group_ids = tuple(
@@ -1474,6 +1573,18 @@ class PhysicalStepProbe:
                     return result
                 return wrapped
             self._patch(entry.optimizer, "step", make_child_wrapper(original_child, profile))
+        if self._lora_network is not None:
+            try:
+                for lora_name, target in sorted(self._lora_target_refs.items()):
+                    def pre_forward(module, arguments, name=lora_name):
+                        if self._lora_training_window:
+                            self._check_single_lora_forward(name, module)
+                    self._lora_forward_handles.append(
+                        target.register_forward_pre_hook(pre_forward)
+                    )
+            except Exception:
+                self.close()
+                raise
 
     def begin_batch(self, sample_marker: str) -> None:
         if not self._installed:
@@ -1494,6 +1605,9 @@ class PhysicalStepProbe:
         sync = self.accelerator.sync_gradients
         if type(sync) is not bool or sync != (current_micro == self.accumulation):
             _fail("Incorrect real Accelerate synchronization sequence for accumulation")
+        # Exact static Forward semantics are enforced before each new physical
+        # training Forward, including resumed and non-sync accumulation batches.
+        self._check_lora_forward_semantics(phase="pre_training_forward")
         # A new process's first Step (Resume logical Step 2) is exempt:
         # cross-process Checkpoint continuity is exclusively a C4 obligation.
         # For an in-process Fresh successor, reject *before* new Backward.
@@ -1525,6 +1639,7 @@ class PhysicalStepProbe:
         if not sync:
             self._pending_nosync_state = self._snapshot()
         self._record("batch_started", sample=sample_marker, sync=sync)
+        self._lora_training_window = self._lora_network is not None
 
     def _assert_step(self, step: int) -> None:
         counts = self._step_children.get(step, {})
@@ -1534,6 +1649,7 @@ class PhysicalStepProbe:
             _fail("Physical Step missing/duplicate real Scheduler advance")
 
     def assert_step_complete(self) -> None:
+        self._check_lora_forward_semantics(phase="completed_physical_step")
         if (not self._installed or self._pending_nosync_state is not None
                 or self._pending_gradient_snapshot is not None):
             _fail("Incomplete accumulation, retained gradient or detached physical Probe")
@@ -1545,6 +1661,10 @@ class PhysicalStepProbe:
             self._assert_step(step)
 
     def close(self) -> None:
+        self._lora_training_window = False
+        for handle in reversed(self._lora_forward_handles):
+            handle.remove()
+        self._lora_forward_handles.clear()
         for obj, name, had_instance, original_instance in reversed(self._patched):
             if had_instance:
                 setattr(obj, name, original_instance)
@@ -1568,6 +1688,7 @@ __all__ = [
     "verify_prepared_identity", "observe_prepared_ownership",
     "audit_physical_optimizer_groups",
     "validate_reference_ownership_rows", "validate_reference_alpha_buffers",
+    "inspect_reference_lora_forward_semantics",
     "validate_reference_group_learning_rates",
     "validate_reference_optimizer_group_semantics",
     "validate_muon_parameter_states", "validate_adamw_parameter_states",
