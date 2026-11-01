@@ -296,6 +296,147 @@ def validate_reference_alpha_buffers(
 
 
 
+
+def _lora_forward_module_payload(name: str, lora: Any) -> tuple[dict[str, Any], torch.nn.Linear]:
+    """Audit genuine LoRAModule effective Forward (not merely its state_dict).
+
+    The real SD3 network patches the original Linear.forward with a bound
+    LoRAModule.forward; alpha is a separate registered BF16 Buffer while
+    scale/multiplier/dropout are regular mutable Python attributes.
+    """
+    from networks.lora_flux import LoRAModule
+
+    if type(lora) is not LoRAModule or type(name) is not str or not name:
+        _fail("Unreviewed actual LoRA Forward module type/name")
+    if lora.lora_name != name or type(lora.lora_name) is not str:
+        _fail("LoRA Forward canonical name drift: " + name)
+    if type(lora.lora_dim) is not int or lora.lora_dim != 4:
+        _fail("LoRA Forward rank differs from fixed dim=4: " + name)
+    if type(lora.scale) is not float or lora.scale != 1.0:
+        _fail("LoRA Forward scale differs from exact alpha/rank: " + name)
+    if type(lora.multiplier) is not float or lora.multiplier != 1.0:
+        _fail("LoRA Forward multiplier differs from fixed training reference: " + name)
+    if lora.split_dims is not None:
+        _fail("Unreviewed LoRA Forward split dimensions: " + name)
+    if (lora.rank_dropout is not None or lora.module_dropout is not None
+            or lora.ggpo_sigma is not None or lora.ggpo_beta is not None):
+        _fail("Unreviewed LoRA Forward dropout/GGPO modifier: " + name)
+    dropout = lora.dropout
+    if dropout is not None and not (type(dropout) is float and dropout == 0.0):
+        _fail("Unreviewed LoRA Forward neuron dropout: " + name)
+    alpha = getattr(lora, "alpha", None)
+    if (not isinstance(alpha, torch.Tensor)
+            or lora._buffers.get("alpha") is not alpha
+            or alpha.ndim != 0 or alpha.dtype != torch.bfloat16
+            or alpha.requires_grad or alpha.layout != torch.strided
+            or alpha.is_meta or not bool(torch.isfinite(alpha).item())
+            or float(alpha.item()) != 4.0):
+        _fail("LoRA Forward alpha Buffer differs from frozen BF16 scalar=4: " + name)
+    if type(lora.lora_down) is not torch.nn.Linear or type(lora.lora_up) is not torch.nn.Linear:
+        _fail("Unreviewed LoRA Forward projection modules: " + name)
+    org_forward = getattr(lora, "org_forward", None)
+    target = getattr(org_forward, "__self__", None)
+    if (type(target) is not torch.nn.Linear
+            or getattr(org_forward, "__func__", None) is not torch.nn.Linear.forward):
+        _fail("LoRA Forward original Linear binding drift: " + name)
+    live_forward = getattr(target, "forward", None)
+    if (getattr(live_forward, "__self__", None) is not lora
+            or getattr(live_forward, "__func__", None) is not LoRAModule.forward):
+        _fail("LoRA Forward target Linear has been rebound: " + name)
+    if (lora.lora_down.in_features != target.in_features
+            or lora.lora_down.out_features != 4
+            or lora.lora_up.in_features != 4
+            or lora.lora_up.out_features != target.out_features):
+        _fail("LoRA Forward projection/target feature dimensions drift: " + name)
+    if (alpha.device != lora.lora_down.weight.device
+            or alpha.device != lora.lora_up.weight.device):
+        _fail("LoRA Forward Alpha/Parameter device mismatch: " + name)
+    return {
+        "canonical_name": name,
+        "module_type": "networks.lora_flux.LoRAModule",
+        "lora_dim": lora.lora_dim, "scale": lora.scale,
+        "multiplier": lora.multiplier,
+        "dropout": dropout, "rank_dropout": lora.rank_dropout,
+        "module_dropout": lora.module_dropout,
+        "ggpo_sigma": lora.ggpo_sigma, "ggpo_beta": lora.ggpo_beta,
+        "split_dims": lora.split_dims,
+        "alpha": fingerprint_tensor(alpha),
+        "target_type": "torch.nn.Linear",
+        "target_features": (target.in_features, target.out_features),
+    }, target
+
+
+def inspect_reference_lora_forward_semantics(
+    *, network: torch.nn.Module,
+    expected_names: tuple[str, ...] | None = None,
+    target_spec: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, torch.nn.Linear]]:
+    """Read-only real Forward binding audit, independent of trainable weights.
+
+    Real CUDA additionally provides the immutable 263-module target specification;
+    tiny CPU diagnostics may use a frozen initial name inventory, but never
+    confer physical CUDA qualification.
+    """
+    from networks.lora_flux import LoRAModule
+
+    if not isinstance(network, torch.nn.Module):
+        _fail("Missing real LoRA Forward Network")
+    root_multiplier = getattr(network, "multiplier", None)
+    if type(root_multiplier) is not float or root_multiplier != 1.0:
+        _fail("LoRA Forward root multiplier differs from fixed training reference")
+    training_loras = getattr(network, "unet_loras", None)
+    text_loras = getattr(network, "text_encoder_loras", None)
+    if not isinstance(training_loras, (list, tuple)) or not training_loras:
+        _fail("Missing actual LoRA Forward MMDiT modules")
+    if not isinstance(text_loras, (list, tuple)) or len(text_loras) != 0:
+        _fail("LoRA Forward reference does not train text encoder modules")
+    if any(type(lora) is not LoRAModule for lora in training_loras):
+        _fail("Unreviewed training LoRA Forward module class")
+    names = [lora.lora_name for lora in training_loras]
+    if (any(type(n) is not str or not n for n in names)
+            or len(set(names)) != len(names)):
+        _fail("LoRA Forward target names are invalid or duplicated")
+    if expected_names is not None and set(names) != set(expected_names):
+        _fail("LoRA Forward target inventory differs from Prepared reference")
+    if target_spec is not None and (
+        len(names) != 263 or set(names) != set(target_spec)
+    ):
+        _fail("LoRA Forward physical reference is not exactly 263 reviewed targets")
+    registered = {
+        key: module
+        for key, module in network.named_modules()
+        if type(module) is LoRAModule
+    }
+    if len(registered) != len(names) or (
+        {id(m) for m in registered.values()} != {id(m) for m in training_loras}
+    ):
+        _fail("LoRA Forward registered Module inventory differs from real training modules")
+    registered_path = {id(module): key for key, module in registered.items()}
+    modules = {lora.lora_name: lora for lora in training_loras}
+    payload = {}
+    targets = {}
+    for name in sorted(modules):
+        lora = modules[name]
+        fields, target = _lora_forward_module_payload(name, lora)
+        if target_spec is not None:
+            spec = target_spec[name]
+            if registered_path[id(lora)] != name:
+                _fail("LoRA Forward canonical registration path drift: " + name)
+            if (target.in_features != spec["input_features"]
+                    or target.out_features != spec["output_features"]):
+                _fail("LoRA Forward target geometry differs from immutable reference: " + name)
+            link = getattr(lora, "_dts_parameter_policy_target_v1", None)
+            if (not isinstance(link, tuple) or len(link) != 3
+                    or link[0] != "mmdit" or type(link[1]) is not str
+                    or type(link[2]) is not str or not link[2].endswith(".Linear")):
+                _fail("LoRA Forward real target metadata is missing or mismatched: " + name)
+        fields["registered_path"] = registered_path[id(lora)]
+        payload[name] = fields
+        targets[name] = target
+    return {"root_multiplier": root_multiplier, "modules": payload}, modules, targets
+
+
+
 def _reference_lr_hex(lr: Any, *, label: str) -> str:
     if type(lr) is not float or not math.isfinite(lr) or lr < 0:
         # The production fixed Policy is strictly positive (0.0001).
@@ -574,6 +715,14 @@ def observe_prepared_ownership(
     alpha_count = validate_reference_alpha_buffers(
         buffers, target_spec, expected_device=expected_device,
     )
+    forward_payload, _forward_modules, _forward_targets = inspect_reference_lora_forward_semantics(
+        network=network, expected_names=tuple(sorted(target_spec)),
+        target_spec=target_spec,
+    )
+    forward_reference = {
+        "module_names": tuple(sorted(target_spec)),
+        "semantic_sha256": fingerprint_state_tree(forward_payload),
+    }
     reference = validate_reference_ownership_rows(case_id=case_id, rows=rows)
     reference_lrs = validate_reference_group_learning_rates(
         case_id=case_id, session=session,
@@ -599,6 +748,7 @@ def observe_prepared_ownership(
         "trainable_parameter_tensors": len(rows),
         "trained_component_counts": component_counts,
         "alpha_buffer_count": alpha_count,
+        "reference_lora_forward_semantics": forward_reference,
         "reference_component_tensor_counts": reference["component_tensor_counts"],
         "reference_child_tensor_counts": reference["child_tensor_counts"],
         "reference_group_learning_rates": reference_lrs,
