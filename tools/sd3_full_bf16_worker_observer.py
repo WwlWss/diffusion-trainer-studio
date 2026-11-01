@@ -935,6 +935,7 @@ class PhysicalStepProbe:
         self._lora_network = lora_network
         self._lora_expected_sha256: str | None = None
         self._lora_module_digests: dict[str, str] = {}
+        self._lora_registered_paths: dict[str, str] = {}
         self._lora_module_refs: dict[str, Any] = {}
         self._lora_target_refs: dict[str, torch.nn.Linear] = {}
         self._lora_target_spec: Mapping[str, Any] | None = None
@@ -1102,6 +1103,10 @@ class PhysicalStepProbe:
                 name: fingerprint_state_tree(fields)
                 for name, fields in payload["modules"].items()
             }
+            self._lora_registered_paths = {
+                name: fields["registered_path"]
+                for name, fields in payload["modules"].items()
+            }
             self._lora_module_refs = dict(modules)
             self._lora_target_refs = dict(targets)
             self._check_lora_forward_semantics(phase="probe_init")
@@ -1136,10 +1141,15 @@ class PhysicalStepProbe:
             _fail("LoRA Forward original Linear target was replaced: " + name)
         # Immutable registration path is part of the Prepared semantic digest;
         # this single-Linear pre-hook checks real call-time scalars and Alpha.
-        registered_path = next(
-            (key for key, module in self._lora_network.named_modules()
-             if module is self._lora_module_refs[name]), None,
-        )
+        # Avoid scanning every one of the 263 registered modules per Linear
+        # invocation; the constant-time named path is frozen at Probe init.
+        registered_path = self._lora_registered_paths[name]
+        try:
+            registered_module = self._lora_network.get_submodule(registered_path)
+        except AttributeError:
+            _fail("LoRA Forward registered module path disappeared: " + name)
+        if registered_module is not self._lora_module_refs[name]:
+            _fail("LoRA Forward registered module identity was replaced: " + name)
         fields["registered_path"] = registered_path
         if fingerprint_state_tree(fields) != self._lora_module_digests[name]:
             _fail("LoRA Forward semantic drift at real Linear Forward: " + name)
