@@ -1210,6 +1210,10 @@ class PhysicalStepProbe:
                             canonical_names_by_id=canonical_child_names,
                         )
                         previous_digest = self._last_muon_momentum_sha.get(name)
+                        if self.phase == "fresh" and previous_digest is None:
+                            _fail("Missing prior Fresh Muon momentum baseline")
+                        # Resume begins in another process, without Fresh memory;
+                        # only C4 may prove cross-process checkpoint continuity.
                         if (previous_digest is not None and
                                 muon_before["momentum_inventory_sha256"] != previous_digest):
                             _fail("Muon momentum_buffer changed between physical Steps")
