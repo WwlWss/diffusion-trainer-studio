@@ -201,6 +201,26 @@ def _assert_pre_backward_reject(test_case, bundle, error_regex):
         delattr(accelerator, "backward")
 
 
+
+def _assert_strict_cpu_pre_backward_reject(test_case, bundle, error_regex):
+    """Existing three-component Linear fixture, not the real-LoRA fixture."""
+    accelerator = bundle[1]
+    original = accelerator.backward
+    calls = []
+
+    def counted(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+
+    accelerator.backward = counted
+    try:
+        with test_case.assertRaisesRegex(ValueError, error_regex):
+            two_batches(bundle)
+        test_case.assertEqual(calls, [], "Group drift reached real Backward")
+    finally:
+        delattr(accelerator, "backward")
+
+
 def _ordered_groups(facade):
     return {
         entry.profile_name: tuple(
@@ -329,7 +349,7 @@ class F9BPhysicalGroupOrderedIdentity(unittest.TestCase):
         bundle = three_component_cpu_probe()
         muon = _child(bundle[4], "Muon")
         muon.param_groups[0]["params"].reverse()
-        _assert_pre_backward_reject(self, bundle, self.ERROR)
+        _assert_strict_cpu_pre_backward_reject(self, bundle, self.ERROR)
 
     def test_muon_group_reverse_between_accepted_steps_rejected(self):
         bundle = three_component_cpu_probe()
@@ -388,7 +408,7 @@ class F9BPhysicalGroupOrderedIdentity(unittest.TestCase):
         bundle = three_component_cpu_probe()
         muon = _child(bundle[4], "Muon")
         muon.param_groups[0]["params"].append(muon.param_groups[0]["params"][0])
-        _assert_pre_backward_reject(self, bundle, self.ERROR)
+        _assert_strict_cpu_pre_backward_reject(self, bundle, self.ERROR)
 
     def test_original_step_reordering_detection_still_rejects(self):
         bundle = three_component_cpu_probe()
