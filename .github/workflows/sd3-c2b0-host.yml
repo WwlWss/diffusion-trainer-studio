@@ -13,6 +13,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f6_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f7_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f8_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f9_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -230,4 +231,33 @@ jobs:
                   f"failures={len(result.failures)} skipped={len(result.skipped)}"
               )
           print(f"Strict CPU C2-A: {result.testsRun} PASS, 0 SKIPPED")
+          PY
+
+      - name: Strict C3-F9 REAL CPU Tests-only RED (18 tests, ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f9_cpu"
+          )
+          count = suite.countTestCases()
+          if count != 18:
+              raise SystemExit(
+                  f"C3-F9 test discovery drift: expected 18, found {count}"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (
+              result.testsRun != 18 or not result.wasSuccessful()
+              or result.skipped or result.expectedFailures
+              or result.unexpectedSuccesses
+          ):
+              raise SystemExit(
+                  f"C3-F9 PINNED CPU RED/FAIL: run={result.testsRun}, "
+                  f"failures={len(result.failures)}, errors={len(result.errors)}, "
+                  f"skipped={len(result.skipped)}, "
+                  f"expected_failures={len(result.expectedFailures)}, "
+                  f"unexpected_successes={len(result.unexpectedSuccesses)}"
+              )
+          print("C3-F9 PINNED REAL CPU GREEN: 18 PASS, 0 SKIP, 0 FAIL; NO CUDA")
           PY
