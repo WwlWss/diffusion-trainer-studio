@@ -151,12 +151,9 @@ def _lora_bundle():
         "phase_id": "fresh-c3-f9-real-lora-0001",
         "source_commit": "a" * 40,
         "phase": "fresh",
+        # F9-A now REQUIRES the real LoRA Network binding; no optional bridge.
+        "lora_network": model,
     }
-    # Version bridge for the RED-first harness. F9 GREEN will supply the
-    # explicit real LoRA binding through this reviewed constructor parameter;
-    # no source implementation or assertion is mocked in the RED phase.
-    if "lora_network" in inspect.signature(observer.PhysicalStepProbe).parameters:
-        probe_kwargs["lora_network"] = model
     probe = observer.PhysicalStepProbe(**probe_kwargs)
     return model, accelerator, prepared_opt, prepared_scheduler, facade, probe
 
