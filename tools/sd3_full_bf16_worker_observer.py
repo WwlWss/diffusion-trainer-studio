@@ -7,6 +7,7 @@ C4 save/load fingerprint binding has not been implemented.
 from __future__ import annotations
 
 from collections.abc import Mapping
+import copy
 import hashlib
 import json
 import math
@@ -441,7 +442,7 @@ def _actual_provider_semantics(entry: Any, expected: Mapping[str, Any]) -> dict[
             _fail("Optimizer Group semantic field set differs from reference")
         if "initial_lr" in group and _typed_tree(group["initial_lr"]) != _typed_tree(group["lr"]):
             _fail("Optimizer Group initial_lr differs from current rate")
-        groups.append({k: group[k] for k in sorted(expected["fields"])})
+        groups.append({k: copy.deepcopy(group[k]) for k in sorted(expected["fields"])})
     if not groups:
         _fail("No physical provider Group")
     return {"optimizer_type": kind, "groups": groups, "instance_fields": instance}
@@ -462,8 +463,11 @@ def validate_reference_optimizer_group_semantics(
         if any(fingerprint_state_tree(group) != fingerprint_state_tree(ref["group"])
                for group in actual["groups"]):
             _fail("Physical Optimizer Group semantic differs from reference: " + entry.profile_name)
+        # Snapshot ONLY audited static provider values, not live CUDA Parameters.
+        # Nested Muon ns_coeffs must not share a list with the actual Group.
+        snapshot = copy.deepcopy(actual)
         result[entry.profile_name] = {
-            **actual, "semantic_sha256": fingerprint_state_tree(actual),
+            **snapshot, "semantic_sha256": fingerprint_state_tree(snapshot),
         }
     return result
 
@@ -817,27 +821,55 @@ class PhysicalStepProbe:
         }
         self._check_physical_group_lrs(phase="probe_init")
         refs = _reference_provider_semantics(case_id)
-        if expected_group_semantics is None:
-            if len(self.params) == 526 and accelerator.device.type == "cuda":
+        real_reference_cuda = len(self.params) == 526 and accelerator.device.type == "cuda"
+        diagnostic_semantics = expected_group_semantics is None
+        if diagnostic_semantics:
+            if real_reference_cuda:
                 _fail("Real CUDA Worker omitted independently verified Group semantics")
-            # CPU diagnostics intentionally use a larger LR; all other values
-            # must still equal the independently built pinned provider defaults.
-            expected_group_semantics = {}
-            for entry in composite_optimizer.entries:
-                ref = refs[entry.profile_name]
-                actual = _actual_provider_semantics(entry, ref)
-                for group in actual["groups"]:
-                    for key in ref["fields"] - {"lr"}:
-                        if _typed_tree(group[key]) != _typed_tree(ref["group"][key]):
-                            _fail("CPU Probe Group semantics differ from pinned provider")
-                expected_group_semantics[entry.profile_name] = actual
-        if set(expected_group_semantics) != set(self.child_profiles):
+            # Diagnostic CPU LR can exceed the reference; every other field
+            # is still checked independently against the pinned provider.
+            expected_group_semantics = {
+                entry.profile_name: _actual_provider_semantics(entry, refs[entry.profile_name])
+                for entry in composite_optimizer.entries
+            }
+        if not isinstance(expected_group_semantics, Mapping) or (
+            set(expected_group_semantics) != set(self.child_profiles)
+        ):
             _fail("Missing expected Group semantic Profiles")
-        self.expected_group_semantics = {
-            p: {k: v for k, v in expected_group_semantics[p].items()
-                if k != "semantic_sha256"}
-            for p in self.child_profiles
-        }
+        self._expected_group_semantics_sha256: dict[str, str] = {}
+        for entry in composite_optimizer.entries:
+            name = entry.profile_name
+            ref = refs[name]
+            supplied = expected_group_semantics[name]
+            if not isinstance(supplied, Mapping) or (
+                set(supplied) - {"semantic_sha256"}
+                != {"optimizer_type", "groups", "instance_fields"}
+            ):
+                _fail("Malformed Prepared Optimizer Group semantic snapshot: " + name)
+            frozen_view = {
+                key: supplied[key]
+                for key in ("optimizer_type", "groups", "instance_fields")
+            }
+            frozen_sha = fingerprint_state_tree(frozen_view)
+            recorded_sha = supplied.get("semantic_sha256")
+            if diagnostic_semantics:
+                if recorded_sha is not None:
+                    _fail("Unexpected diagnostic Group semantic signature")
+            elif type(recorded_sha) is not str or recorded_sha != frozen_sha:
+                _fail("Prepared Optimizer Group semantic digest mismatch: " + name)
+            actual = _actual_provider_semantics(entry, ref)
+            for group in actual["groups"]:
+                # Genuine CUDA R1/R2 requires the exact independent Policy and
+                # Provider defaults; diagnostic CPU permits a higher pinned LR.
+                keys = ref["fields"] if real_reference_cuda else ref["fields"] - {"lr"}
+                for key in keys:
+                    if _typed_tree(group[key]) != _typed_tree(ref["group"][key]):
+                        _fail("Physical Group differs from pinned Provider reference: " + name)
+            if fingerprint_state_tree(actual) != frozen_sha:
+                _fail("Physical Group changed since Prepared semantic audit: " + name)
+            # Only SHA256 strings survive initialization. Neither nested
+            # Group lists nor caller-owned Prepared dictionaries are retained.
+            self._expected_group_semantics_sha256[name] = frozen_sha
         self._check_physical_group_semantics(phase="probe_init")
         owners = {}
         seen: set[int] = set()
@@ -887,9 +919,10 @@ class PhysicalStepProbe:
         for entry in self.optimizer.entries:
             name = entry.profile_name
             actual = _actual_provider_semantics(entry, refs[name])
-            if fingerprint_state_tree(actual) != fingerprint_state_tree(self.expected_group_semantics[name]):
+            actual_sha = fingerprint_state_tree(actual)
+            if actual_sha != self._expected_group_semantics_sha256[name]:
                 _fail("Physical Optimizer Group semantic drift at " + phase + ": " + name)
-            digests[name] = fingerprint_state_tree(actual)
+            digests[name] = actual_sha
         return digests
 
     def _record(self, event_type: str, *, profile: str | None = None,
