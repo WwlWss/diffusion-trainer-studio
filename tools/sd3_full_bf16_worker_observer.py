@@ -298,6 +298,32 @@ def validate_reference_alpha_buffers(
 
 
 
+def _audit_lora_global_backward_hooks() -> None:
+    """Reject only LIVE PyTorch global Backward hooks.
+
+    Historical _global_is_full_backward_hook flags may persist after .remove()
+    and must not be used to reject legitimate later sessions.
+    """
+    from torch.nn.modules import module as torch_module_runtime
+    if (getattr(torch_module_runtime, "_global_backward_hooks", None)
+            or getattr(torch_module_runtime, "_global_backward_pre_hooks", None)):
+        _fail("Unreviewed global LoRA Backward hook registry")
+
+
+def _audit_lora_module_backward_hooks(name: str, module: torch.nn.Module) -> None:
+    if (getattr(module, "_backward_hooks", None)
+            or getattr(module, "_backward_pre_hooks", None)):
+        _fail("Unreviewed LoRA Module Backward hook: " + name)
+
+
+def _audit_lora_parameter_backward_hooks(
+    name: str, parameter: torch.nn.Parameter,
+) -> None:
+    if (getattr(parameter, "_backward_hooks", None)
+            or getattr(parameter, "_post_accumulate_grad_hooks", None)):
+        _fail("Unreviewed LoRA Parameter Backward hook: " + name)
+
+
 def _audit_lora_target_execution(
     name: str, target: torch.nn.Linear,
     *, allowed_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
@@ -310,6 +336,8 @@ def _audit_lora_target_execution(
     """
     if type(target) is not torch.nn.Linear:
         _fail("LoRA target execution no longer uses the reviewed Linear: " + name)
+    _audit_lora_global_backward_hooks()
+    _audit_lora_module_backward_hooks(name + "/target", target)
     if (getattr(target, "_forward_hooks", None)
             or getattr(target, "_forward_hooks_with_kwargs", None)
             or getattr(target, "_forward_hooks_always_called", None)
@@ -341,6 +369,8 @@ def _audit_lora_projection_execution(
     """
     if type(projection) is not torch.nn.Linear:
         _fail("LoRA projection changed its real Linear class: " + name + "/" + role)
+    _audit_lora_global_backward_hooks()
+    _audit_lora_module_backward_hooks(name + "/" + role, projection)
     # PyTorch global Module Forward hooks run for ALL Linear modules and can
     # change inputs or returned activations without modifying this specific
     # projection's own hook registry. The fixed evidence reference has none.
@@ -397,6 +427,7 @@ def _audit_projection_parameter_binding(
         _fail("LoRA projection must remain bias-free: " + name + "/" + role)
     if expected_weight is not None and weight is not expected_weight:
         _fail("LoRA projection weight identity drift from Prepared: " + name + "/" + role)
+    _audit_lora_parameter_backward_hooks(name + "/" + role + ".weight", weight)
     if getattr(projection, "_buffers", None) or getattr(projection, "_modules", None):
         _fail("LoRA projection contains an unreviewed Buffer or child Module: "
               + name + "/" + role)
@@ -418,6 +449,7 @@ def _lora_forward_module_payload(
 
     if type(lora) is not LoRAModule or type(name) is not str or not name:
         _fail("Unreviewed actual LoRA Forward module type/name")
+    _audit_lora_module_backward_hooks(name + "/adapter", lora)
     if lora.lora_name != name or type(lora.lora_name) is not str:
         _fail("LoRA Forward canonical name drift: " + name)
     if type(lora.lora_dim) is not int or lora.lora_dim != 4:
@@ -1541,6 +1573,25 @@ class PhysicalStepProbe:
                 expected_path=self._lora_live_target_paths[name],
             )
 
+    def _check_lora_backward_hook_integrity(self, *, phase: str) -> None:
+        """No live unreviewed autograd execution hooks in the fixed reference.
+
+        No tensor reads, CUDA copies or per-batch baseline recapture. All
+        Parameter aliases have already been bound by F11-B to self.params.
+        """
+        if self._lora_network is None:
+            return
+        _audit_lora_global_backward_hooks()
+        for name, lora in self._lora_module_refs.items():
+            _audit_lora_module_backward_hooks(name + "/adapter", lora)
+            _audit_lora_module_backward_hooks(
+                name + "/target", self._lora_target_refs[name],
+            )
+            for role, projection in self._lora_projection_refs[name].items():
+                _audit_lora_module_backward_hooks(name + "/" + role, projection)
+        for canonical, parameter in self.params.items():
+            _audit_lora_parameter_backward_hooks(canonical, parameter)
+
     def _check_physical_group_lrs(self, *, phase: str) -> dict[str, list[float]]:
         actual: dict[str, list[float]] = {}
         for entry in self.optimizer.entries:
@@ -1732,6 +1783,7 @@ class PhysicalStepProbe:
         if self._installed:
             _fail("Probe is already installed")
         self._check_physical_group_order(phase="pre_install")
+        self._check_lora_backward_hook_integrity(phase="pre_install")
         original_backward = self.accelerator.backward
         original_optimizer_step = self.optimizer.step
         original_scheduler_step = self.scheduler.step
@@ -1742,6 +1794,7 @@ class PhysicalStepProbe:
             if self._current_step is None or self._backward_seen:
                 _fail("Backward without unique active real Batch")
             self._check_physical_group_order(phase="pre_backward")
+            self._check_lora_backward_hook_integrity(phase="pre_actual_backward")
             first = self._current_micro == 1
             self._pre_backward_gradient_health(first_microbatch=first)
             before_gradient = self._gradient_snapshot()
@@ -1755,6 +1808,7 @@ class PhysicalStepProbe:
             # The actual production Accelerator.backward is called once, only
             # after all pre-Backward provenance assertions have passed.
             result = original_backward(*args, **kwargs)
+            self._check_lora_backward_hook_integrity(phase="post_actual_backward")
             self._check_physical_group_order(phase="post_backward")
             summary = self._gradients(require_nonzero=False)
             if not any(
@@ -1783,6 +1837,7 @@ class PhysicalStepProbe:
 
         def optimizer_wrapper(*args, **kwargs):
             self._check_physical_group_order(phase="pre_composite_step")
+            self._check_lora_backward_hook_integrity(phase="pre_composite_step")
             self._check_lora_forward_semantics(phase="pre_composite_step")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Physical CompositeOptimizer.step before synchronized Backward")
@@ -1798,6 +1853,7 @@ class PhysicalStepProbe:
 
         def scheduler_wrapper(*args, **kwargs):
             self._check_physical_group_order(phase="pre_scheduler")
+            self._check_lora_backward_hook_integrity(phase="pre_scheduler")
             self._check_lora_forward_semantics(phase="pre_scheduler")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Scheduler advanced without synchronized Backward")
@@ -1810,6 +1866,7 @@ class PhysicalStepProbe:
             self._check_physical_group_semantics(phase="pre_scheduler")
             before = fingerprint_state_tree(self.scheduler.state_dict())
             result = original_scheduler_step(*args, **kwargs)
+            self._check_lora_backward_hook_integrity(phase="post_constant_scheduler")
             self._check_physical_group_order(phase="post_constant_scheduler")
             self._check_lora_forward_semantics(phase="post_constant_scheduler")
             self._check_physical_group_lrs(phase="post_constant_scheduler")
@@ -1844,6 +1901,7 @@ class PhysicalStepProbe:
                         _fail("Duplicate Child physical optimizer step")
                     child = next(e for e in self.optimizer.entries if e.profile_name == name)
                     self._check_physical_group_order(phase="pre_child_step")
+                    self._check_lora_backward_hook_integrity(phase="pre_child_step")
                     self._check_lora_forward_semantics(phase="pre_child_step")
                     before_lrs = self._check_physical_group_lrs(phase="pre_child_step")
                     before_semantics = self._check_physical_group_semantics(phase="pre_child_step")
@@ -2014,6 +2072,7 @@ class PhysicalStepProbe:
         if not self._installed:
             _fail("Cannot begin a Batch before Probe installation")
         self._check_physical_group_order(phase="pre_training_forward")
+        self._check_lora_backward_hook_integrity(phase="pre_training_forward")
         if self._pending_nosync_state is not None:
             if self._snapshot() != self._pending_nosync_state:
                 _fail("premature/non-sync accumulation changed Adapter, Optimizer or Scheduler")
@@ -2075,6 +2134,7 @@ class PhysicalStepProbe:
 
     def assert_step_complete(self) -> None:
         self._check_physical_group_order(phase="completed_physical_step")
+        self._check_lora_backward_hook_integrity(phase="completed_physical_step")
         self._check_lora_forward_semantics(phase="completed_physical_step")
         if (not self._installed or self._pending_nosync_state is not None
                 or self._pending_gradient_snapshot is not None):
