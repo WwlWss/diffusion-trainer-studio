@@ -132,8 +132,11 @@ class F11CBackwardExecutionIntegrity(unittest.TestCase):
     def test_parameter_post_accumulate_hook_rejected_before_backward(self):
         bundle = _lora_bundle()
         down = bundle[0].loras["attention_0"].lora_down
+        def change_accumulated_gradient(parameter):
+            parameter.grad.mul_(0.5)
+            # PyTorch's post-accumulate callback MUST return None.
         handle = down.weight.register_post_accumulate_grad_hook(
-            lambda parameter: parameter.grad.mul_(0.5)
+            change_accumulated_gradient
         )
         try:
             _assert_pre_backward_reject(self, bundle, self.ERROR)
