@@ -12,6 +12,7 @@ import hashlib
 import json
 import math
 import random
+import re
 from pathlib import Path
 from typing import Any, Callable
 
@@ -408,11 +409,70 @@ def _lora_forward_module_payload(
     }, target
 
 
+def _reference_sd3_mmdit_target_paths(target_spec: Mapping[str, Any]) -> dict[str, str]:
+    """Independent 263-LoRA canonical-name -> genuine SD3 MMDiT module path.
+
+    Must not derive this authority from a mutable LoRA target marker.
+    """
+    if (not isinstance(target_spec, Mapping)
+            or target_spec != host.build_sd35_medium_lora_target_spec()):
+        _fail("MMDiT target path spec differs from immutable SD3.5 Medium reference")
+    suffixes = {
+        "attn_qkv": "attn.qkv",
+        "attn_proj": "attn.proj",
+        "attn2_qkv": "attn2.qkv",
+        "attn2_proj": "attn2.proj",
+        "mlp_fc1": "mlp.fc1",
+        "mlp_fc2": "mlp.fc2",
+        "adaLN_modulation_1": "adaLN_modulation.1",
+    }
+    result = {}
+    pattern = r"lora_unet_joint_blocks_([0-9]+)_(context_block|x_block)_(.+)"
+    for name in target_spec:
+        match = re.fullmatch(pattern, name)
+        if match is None:
+            _fail("Unreviewed LoRA canonical MMDiT target name: " + name)
+        block, side, suffix = match.groups()
+        if (block != str(int(block)) or int(block) not in range(24)
+                or suffix not in suffixes):
+            _fail("LoRA canonical MMDiT target path cannot be resolved: " + name)
+        result[name] = f"joint_blocks.{block}.{side}.{suffixes[suffix]}"
+    if len(result) != 263 or len(set(result.values())) != 263:
+        _fail("LoRA canonical MMDiT target path inventory has duplicates/omissions")
+    return result
+
+
+def _audit_real_lora_target_path(
+    name: str, lora: Any, target: torch.nn.Linear,
+    *, mmdit_root: torch.nn.Module, expected_path: str,
+) -> dict[str, str]:
+    """Bind the observed patched Linear to its real MMDiT Module path."""
+    if not isinstance(mmdit_root, torch.nn.Module) or (
+        type(expected_path) is not str or not expected_path
+    ):
+        _fail("Missing actual MMDiT root or canonical LoRA target path: " + name)
+    expected_type = "torch.nn.modules.linear.Linear"
+    marker = getattr(lora, "_dts_parameter_policy_target_v1", None)
+    if (type(marker) is not tuple or len(marker) != 3
+            or any(type(value) is not str for value in marker)
+            or marker != ("mmdit", expected_path, expected_type)):
+        _fail("LoRA MMDiT target path/type metadata differs from frozen reference: " + name)
+    try:
+        live_target = mmdit_root.get_submodule(expected_path)
+    except AttributeError:
+        _fail("Real MMDiT target path disappeared: " + name + " -> " + expected_path)
+    if type(live_target) is not torch.nn.Linear or live_target is not target:
+        _fail("Real MMDiT target path points to a different Linear: " + name)
+    return {"mmdit_target_path": expected_path, "mmdit_target_type": expected_type}
+
+
 def inspect_reference_lora_forward_semantics(
     *, network: torch.nn.Module,
     expected_names: tuple[str, ...] | None = None,
     target_spec: Mapping[str, Any] | None = None,
     allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+    lora_mmdit_root: torch.nn.Module | None = None,
+    expected_lora_target_paths: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, torch.nn.Linear]]:
     """Read-only real Forward binding audit, independent of trainable weights.
 
@@ -445,6 +505,25 @@ def inspect_reference_lora_forward_semantics(
         len(names) != 263 or set(names) != set(target_spec)
     ):
         _fail("LoRA Forward physical reference is not exactly 263 reviewed targets")
+    if target_spec is not None:
+        # The real CUDA path must use independent canonical target names, not
+        # a caller-supplied mutable path map.
+        if expected_lora_target_paths is not None:
+            _fail("Real MMDiT target paths cannot be supplied by the current Network")
+        target_paths = _reference_sd3_mmdit_target_paths(target_spec)
+    else:
+        target_paths = (
+            dict(expected_lora_target_paths)
+            if expected_lora_target_paths is not None else None
+        )
+    if target_paths is None:
+        if lora_mmdit_root is not None:
+            _fail("Real MMDiT root supplied without reviewed target paths")
+    elif (lora_mmdit_root is None or set(target_paths) != set(names)
+          or any(type(path) is not str or not path for path in target_paths.values())
+          or len(set(target_paths.values())) != len(target_paths)):
+        _fail("LoRA MMDiT target-path reference inventory is incomplete/duplicated")
+
     registered = {
         key: module
         for key, module in network.named_modules()
@@ -470,11 +549,11 @@ def inspect_reference_lora_forward_semantics(
             if (target.in_features != spec["input_features"]
                     or target.out_features != spec["output_features"]):
                 _fail("LoRA Forward target geometry differs from immutable reference: " + name)
-            link = getattr(lora, "_dts_parameter_policy_target_v1", None)
-            if (not isinstance(link, tuple) or len(link) != 3
-                    or link[0] != "mmdit" or type(link[1]) is not str
-                    or type(link[2]) is not str or not link[2].endswith(".Linear")):
-                _fail("LoRA Forward real target metadata is missing or mismatched: " + name)
+        if target_paths is not None:
+            fields.update(_audit_real_lora_target_path(
+                name, lora, target, mmdit_root=lora_mmdit_root,
+                expected_path=target_paths[name],
+            ))
         fields["registered_path"] = registered_path[id(lora)]
         payload[name] = fields
         targets[name] = target
