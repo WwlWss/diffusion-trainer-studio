@@ -315,7 +315,7 @@ jobs:
           print("C3-F9 PINNED REAL CPU GREEN: 18 PASS, 0 SKIP, 0 FAIL; NO CUDA")
           PY
 
-      - name: Strict C3-F10-A real internal LoRA projection Forward (6; ZERO SKIP)
+      - name: Strict C3-F10-A real internal LoRA projection Forward (8; ZERO SKIP)
         shell: bash
         run: |
           python - <<'PY'
@@ -324,10 +324,10 @@ jobs:
               "tests.test_sd3_full_bf16_worker_c3_f10a_cpu"
           )
           discovered = suite.countTestCases()
-          if discovered != 6:
-              raise SystemExit(f"F10-A test discovery drift: {discovered} != 6")
+          if discovered != 8:
+              raise SystemExit(f"F10-A test discovery drift: {discovered} != 8")
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if (result.testsRun != 6 or not result.wasSuccessful()
+          if (result.testsRun != 8 or not result.wasSuccessful()
                   or result.skipped or result.expectedFailures
                   or result.unexpectedSuccesses):
               raise SystemExit(
@@ -335,7 +335,7 @@ jobs:
                   f"failures={len(result.failures)}, errors={len(result.errors)}, "
                   f"skipped={len(result.skipped)}"
               )
-          print("C3-F10-A PINNED REAL CPU GREEN: 6 PASS, ZERO SKIP; NO CUDA")
+          print("C3-F10-A PINNED REAL CPU GREEN: 8 PASS, ZERO SKIP; NO CUDA")
           PY
 
       - name: Strict C3-F10-B real MMDiT target-path provenance (8; ZERO SKIP)
