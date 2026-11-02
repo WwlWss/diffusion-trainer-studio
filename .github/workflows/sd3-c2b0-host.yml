@@ -410,7 +410,7 @@ jobs:
           print("C3-F11-B PINNED REAL CPU GREEN: 7 PASS, 0 SKIP; NO CUDA")
           PY
 
-      - name: Strict C3-F11-C Backward Module/global/Parameter hooks (9; ZERO SKIP)
+      - name: Strict C3-F11-C Backward Module/global/Parameter hooks (10; ZERO SKIP)
         shell: bash
         run: |
           python - <<'PY'
@@ -419,10 +419,10 @@ jobs:
               "tests.test_sd3_full_bf16_worker_c3_f11c_cpu"
           )
           discovered = suite.countTestCases()
-          if discovered != 9:
-              raise SystemExit(f"F11-C discovery drift: expected 9, found {discovered}")
+          if discovered != 10:
+              raise SystemExit(f"F11-C discovery drift: expected 10, found {discovered}")
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if (result.testsRun != 9 or not result.wasSuccessful()
+          if (result.testsRun != 10 or not result.wasSuccessful()
                   or result.skipped or result.expectedFailures
                   or result.unexpectedSuccesses):
               raise SystemExit(
@@ -430,5 +430,5 @@ jobs:
                   f"failures={len(result.failures)}, errors={len(result.errors)}, "
                   f"skipped={len(result.skipped)}"
               )
-          print("C3-F11-C PINNED REAL CPU GREEN: 9 PASS, 0 SKIP; NO CUDA")
+          print("C3-F11-C PINNED REAL CPU GREEN: 10 PASS, 0 SKIP; NO CUDA")
           PY
