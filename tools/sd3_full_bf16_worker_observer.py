@@ -311,6 +311,13 @@ def _audit_lora_projection_execution(
     """
     if type(projection) is not torch.nn.Linear:
         _fail("LoRA projection changed its real Linear class: " + name + "/" + role)
+    # PyTorch global Module Forward hooks run for ALL Linear modules and can
+    # change inputs or returned activations without modifying this specific
+    # projection's own hook registry. The fixed evidence reference has none.
+    from torch.nn.modules import module as torch_module_runtime
+    if (getattr(torch_module_runtime, "_global_forward_pre_hooks", None)
+            or getattr(torch_module_runtime, "_global_forward_hooks", None)):
+        _fail("Unreviewed global LoRA projection Forward hook: " + name + "/" + role)
     current = getattr(projection, "forward", None)
     if (getattr(current, "__self__", None) is not projection
             or getattr(current, "__func__", None) is not torch.nn.Linear.forward):
