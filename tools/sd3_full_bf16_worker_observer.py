@@ -988,6 +988,11 @@ class PhysicalStepProbe:
         self._installed = False
         self._patched: list[tuple[Any, str, bool, Any]] = []
         self._lora_forward_handles: list[Any] = []
+        self._lora_projection_handles: list[Any] = []
+        # Only Probe-installed read-only projection hooks are allowed while
+        # observing actual training Forward. Never hold this in evidence SHA.
+        self._lora_projection_allowed_pre_hooks: dict[int, tuple[int, Callable]] = {}
+        self._lora_projection_refs: dict[str, dict[str, torch.nn.Linear]] = {}
         self._lora_training_window = False
         self._lora_network = lora_network
         self._lora_expected_sha256: str | None = None
@@ -1210,6 +1215,13 @@ class PhysicalStepProbe:
             }
             self._lora_module_refs = dict(modules)
             self._lora_target_refs = dict(targets)
+            self._lora_projection_refs = {
+                name: {
+                    "lora_down": module.lora_down,
+                    "lora_up": module.lora_up,
+                }
+                for name, module in modules.items()
+            }
             self._check_lora_forward_semantics(phase="probe_init")
 
     def _check_physical_group_order(self, *, phase: str) -> None:
@@ -1234,11 +1246,15 @@ class PhysicalStepProbe:
             network=self._lora_network,
             expected_names=tuple(sorted(self._lora_module_refs)),
             target_spec=self._lora_target_spec,
+            allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
         )
         for name in self._lora_module_refs:
             if (modules[name] is not self._lora_module_refs[name]
                     or targets[name] is not self._lora_target_refs[name]):
                 _fail("LoRA Forward module/Linear identity drift at " + phase + ": " + name)
+            for role, projection in self._lora_projection_refs[name].items():
+                if getattr(modules[name], role) is not projection:
+                    _fail("LoRA projection identity drift at " + phase + ": " + name + "/" + role)
         if fingerprint_state_tree(payload) != self._lora_expected_sha256:
             _fail("LoRA Forward semantic drift at " + phase)
 
@@ -1252,7 +1268,12 @@ class PhysicalStepProbe:
             _fail("LoRA Forward root multiplier drift at actual physical Forward")
         fields, actual_target = _lora_forward_module_payload(
             name, self._lora_module_refs[name],
+            allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
         )
+        for role, projection in self._lora_projection_refs[name].items():
+            if getattr(self._lora_module_refs[name], role) is not projection:
+                _fail("LoRA projection module identity drift at real Forward: "
+                      + name + "/" + role)
         if actual_target is not target:
             _fail("LoRA Forward original Linear target was replaced: " + name)
         # Immutable registration path is part of the Prepared semantic digest;
@@ -1269,6 +1290,18 @@ class PhysicalStepProbe:
         fields["registered_path"] = registered_path
         if fingerprint_state_tree(fields) != self._lora_module_digests[name]:
             _fail("LoRA Forward semantic drift at real Linear Forward: " + name)
+
+    def _check_single_lora_projection(
+        self, *, name: str, role: str, projection: torch.nn.Module,
+    ) -> None:
+        reviewed = self._lora_projection_refs[name][role]
+        if (projection is not reviewed
+                or getattr(self._lora_module_refs[name], role) is not reviewed):
+            _fail("LoRA projection identity drift during actual Forward: " + name + "/" + role)
+        _audit_lora_projection_execution(
+            name, role, projection,
+            allowed_pre_hooks=self._lora_projection_allowed_pre_hooks,
+        )
 
     def _check_physical_group_lrs(self, *, phase: str) -> dict[str, list[float]]:
         actual: dict[str, list[float]] = {}
@@ -1717,6 +1750,22 @@ class PhysicalStepProbe:
                     self._lora_forward_handles.append(
                         target.register_forward_pre_hook(pre_forward)
                     )
+                # Checking the outer target alone cannot catch mutations made
+                # after its pre-hook but before LoRAModule calls lora_down/up.
+                # These real projection hooks are read-only; they never replace
+                # inputs, outputs, gradients, or the provider Forward.
+                for name in sorted(self._lora_projection_refs):
+                    for role, projection in self._lora_projection_refs[name].items():
+                        def projection_pre_forward(module, arguments, n=name, r=role):
+                            if self._lora_training_window:
+                                self._check_single_lora_projection(
+                                    name=n, role=r, projection=module,
+                                )
+                        handle = projection.register_forward_pre_hook(projection_pre_forward)
+                        self._lora_projection_handles.append(handle)
+                        self._lora_projection_allowed_pre_hooks[id(projection)] = (
+                            handle.id, projection_pre_forward,
+                        )
             except Exception:
                 self.close()
                 raise
@@ -1799,6 +1848,10 @@ class PhysicalStepProbe:
 
     def close(self) -> None:
         self._lora_training_window = False
+        for handle in reversed(self._lora_projection_handles):
+            handle.remove()
+        self._lora_projection_handles.clear()
+        self._lora_projection_allowed_pre_hooks.clear()
         for handle in reversed(self._lora_forward_handles):
             handle.remove()
         self._lora_forward_handles.clear()
