@@ -17,6 +17,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f9a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f9b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f10a_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f10b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -335,4 +336,27 @@ jobs:
                   f"skipped={len(result.skipped)}"
               )
           print("C3-F10-A PINNED REAL CPU GREEN: 6 PASS, ZERO SKIP; NO CUDA")
+          PY
+
+      - name: Strict C3-F10-B real MMDiT target-path provenance (6; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f10b_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 6:
+              raise SystemExit(f"F10-B test discovery drift: {discovered} != 6")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 6 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"F10-B PINNED CPU FAIL: run={result.testsRun}, "
+                  f"failures={len(result.failures)}, errors={len(result.errors)}, "
+                  f"skipped={len(result.skipped)}"
+              )
+          print("C3-F10-B PINNED REAL CPU GREEN: 6 PASS, ZERO SKIP; NO CUDA")
           PY
