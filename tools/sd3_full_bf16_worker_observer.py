@@ -905,6 +905,7 @@ class PhysicalStepProbe:
         component_by_parameter: Mapping[str, str],
         expected_group_lrs: Mapping[str, list[float]] | None = None,
         expected_group_semantics: Mapping[str, Any] | None = None,
+        expected_group_parameter_order: Mapping[str, Any] | None = None,
         lora_network: torch.nn.Module | None = None,
         expected_lora_forward_semantics: Mapping[str, Any] | None = None,
         case_id: str, run_id: str, phase_id: str, source_commit: str,
@@ -1072,6 +1073,50 @@ class PhysicalStepProbe:
             if len(profiles) != 1:
                 _fail("Parameter lacks exactly one physical Child Profile")
             self.profile_by_name[name] = profiles[0]
+        # F9-B: every real CUDA Group must be bound to the independent
+        # RuntimeSpec-ordered identity captured at Prepared, never to the
+        # possibly mutated live Group read at Probe initialization.
+        real_order_cuda = len(self.params) == 526 and accelerator.device.type == "cuda"
+        if expected_group_parameter_order is None:
+            if real_order_cuda:
+                _fail("Real CUDA omitted independently audited RuntimeSpec Group order")
+            # Tiny CPU-only diagnostics have no ParameterPolicy RuntimeSpec.
+            # Their Probe-initial Group order is a diagnostic baseline ONLY.
+            expected_group_parameter_order = {
+                entry.profile_name: tuple(
+                    tuple(id(parameter) for parameter in group["params"])
+                    for group in entry.optimizer.param_groups
+                )
+                for entry in composite_optimizer.entries
+            }
+        if (not isinstance(expected_group_parameter_order, Mapping)
+                or set(expected_group_parameter_order) != set(self.child_profiles)):
+            _fail("Prepared RuntimeSpec Group order has missing/extra Profiles")
+        frozen_group_order: dict[str, tuple[tuple[int, ...], ...]] = {}
+        all_ordered_ids: list[int] = []
+        for entry in composite_optimizer.entries:
+            source_groups = expected_group_parameter_order[entry.profile_name]
+            if (not isinstance(source_groups, (list, tuple))
+                    or len(source_groups) != len(entry.optimizer.param_groups)):
+                _fail("Prepared RuntimeSpec Group order has incorrect Group count")
+            validated_groups: list[tuple[int, ...]] = []
+            for source_group in source_groups:
+                if not isinstance(source_group, (list, tuple)) or not source_group:
+                    _fail("Prepared RuntimeSpec Group order has empty/malformed Group")
+                if any(type(parameter_id) is not int or parameter_id not in named_ids
+                       for parameter_id in source_group):
+                    _fail("Prepared RuntimeSpec Group order contains unknown Parameter ID")
+                group_ids = tuple(source_group)
+                all_ordered_ids.extend(group_ids)
+                validated_groups.append(group_ids)
+            frozen_group_order[entry.profile_name] = tuple(validated_groups)
+        if (len(all_ordered_ids) != len(set(all_ordered_ids))
+                or set(all_ordered_ids) != set(named_ids)):
+            _fail("Prepared RuntimeSpec Group order has duplicated/missing ownership")
+        # Only independent integer tuples remain: no alias to optimizer's
+        # mutable Group dictionaries, Lists or Parameter objects is retained.
+        self._expected_group_parameter_order = frozen_group_order
+        self._check_physical_group_order(phase="probe_init")
         # F9-A: the CPU-only legacy Probe remains compatible; real CUDA MUST
         # bind the exact independently audited 263-Module Prepared reference.
         real_forward_cuda = len(self.params) == 526 and accelerator.device.type == "cuda"
@@ -1121,6 +1166,21 @@ class PhysicalStepProbe:
             self._lora_module_refs = dict(modules)
             self._lora_target_refs = dict(targets)
             self._check_lora_forward_semantics(phase="probe_init")
+
+    def _check_physical_group_order(self, *, phase: str) -> None:
+        """Check full ordered identity against immutable Prepared RuntimeSpec."""
+        for entry in self.optimizer.entries:
+            actual_groups = entry.optimizer.param_groups
+            if any(not isinstance(group.get("params"), list) for group in actual_groups):
+                _fail("Physical Parameter Group params container changed at " + phase)
+            actual_order = tuple(
+                tuple(id(parameter) for parameter in group["params"])
+                for group in actual_groups
+            )
+            expected_order = self._expected_group_parameter_order.get(entry.profile_name)
+            if actual_order != expected_order:
+                _fail("Physical Parameter Group/order drift from Prepared RuntimeSpec at "
+                      + phase + ": " + entry.profile_name)
 
     def _check_lora_forward_semantics(self, *, phase: str) -> None:
         if self._lora_network is None:
@@ -1355,6 +1415,7 @@ class PhysicalStepProbe:
     def install(self) -> None:
         if self._installed:
             _fail("Probe is already installed")
+        self._check_physical_group_order(phase="pre_install")
         original_backward = self.accelerator.backward
         original_optimizer_step = self.optimizer.step
         original_scheduler_step = self.scheduler.step
@@ -1364,6 +1425,7 @@ class PhysicalStepProbe:
             self._lora_training_window = False
             if self._current_step is None or self._backward_seen:
                 _fail("Backward without unique active real Batch")
+            self._check_physical_group_order(phase="pre_backward")
             first = self._current_micro == 1
             self._pre_backward_gradient_health(first_microbatch=first)
             before_gradient = self._gradient_snapshot()
@@ -1377,6 +1439,7 @@ class PhysicalStepProbe:
             # The actual production Accelerator.backward is called once, only
             # after all pre-Backward provenance assertions have passed.
             result = original_backward(*args, **kwargs)
+            self._check_physical_group_order(phase="post_backward")
             summary = self._gradients(require_nonzero=False)
             if not any(
                 info["nonzero_tensor_count"]
@@ -1403,6 +1466,7 @@ class PhysicalStepProbe:
             return result
 
         def optimizer_wrapper(*args, **kwargs):
+            self._check_physical_group_order(phase="pre_composite_step")
             self._check_lora_forward_semantics(phase="pre_composite_step")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Physical CompositeOptimizer.step before synchronized Backward")
@@ -1411,11 +1475,13 @@ class PhysicalStepProbe:
                 _fail("Duplicate CompositeOptimizer physical Step")
             self._pre_step_grad = self._gradients(require_nonzero=True)
             result = original_optimizer_step(*args, **kwargs)
+            self._check_physical_group_order(phase="post_composite_step")
             if set(k for k,v in self._step_children[step].items() if v) != set(self.child_profiles):
                 _fail("CompositeOptimizer did not physically execute every Child once")
             return result
 
         def scheduler_wrapper(*args, **kwargs):
+            self._check_physical_group_order(phase="pre_scheduler")
             self._check_lora_forward_semantics(phase="pre_scheduler")
             if not self._backward_seen or self._current_sync is not True:
                 _fail("Scheduler advanced without synchronized Backward")
@@ -1428,6 +1494,7 @@ class PhysicalStepProbe:
             self._check_physical_group_semantics(phase="pre_scheduler")
             before = fingerprint_state_tree(self.scheduler.state_dict())
             result = original_scheduler_step(*args, **kwargs)
+            self._check_physical_group_order(phase="post_constant_scheduler")
             self._check_lora_forward_semantics(phase="post_constant_scheduler")
             self._check_physical_group_lrs(phase="post_constant_scheduler")
             self._check_physical_group_semantics(phase="post_constant_scheduler")
@@ -1460,6 +1527,7 @@ class PhysicalStepProbe:
                     if self._step_children[step][name] != 0:
                         _fail("Duplicate Child physical optimizer step")
                     child = next(e for e in self.optimizer.entries if e.profile_name == name)
+                    self._check_physical_group_order(phase="pre_child_step")
                     self._check_lora_forward_semantics(phase="pre_child_step")
                     before_lrs = self._check_physical_group_lrs(phase="pre_child_step")
                     before_semantics = self._check_physical_group_semantics(phase="pre_child_step")
@@ -1515,6 +1583,7 @@ class PhysicalStepProbe:
                             if adamw_before["moment_inventory_sha256"] != previous:
                                 _fail("AdamW moments changed between physical Steps")
                     result = original(*args, **kwargs)
+                    self._check_physical_group_order(phase="post_child_step")
                     self._check_lora_forward_semantics(phase="post_child_step")
                     self._check_physical_group_lrs(phase="post_child_step")
                     self._check_physical_group_semantics(phase="post_child_step")
@@ -1610,6 +1679,7 @@ class PhysicalStepProbe:
     def begin_batch(self, sample_marker: str) -> None:
         if not self._installed:
             _fail("Cannot begin a Batch before Probe installation")
+        self._check_physical_group_order(phase="pre_training_forward")
         if self._pending_nosync_state is not None:
             if self._snapshot() != self._pending_nosync_state:
                 _fail("premature/non-sync accumulation changed Adapter, Optimizer or Scheduler")
@@ -1670,6 +1740,7 @@ class PhysicalStepProbe:
             _fail("Physical Step missing/duplicate real Scheduler advance")
 
     def assert_step_complete(self) -> None:
+        self._check_physical_group_order(phase="completed_physical_step")
         self._check_lora_forward_semantics(phase="completed_physical_step")
         if (not self._installed or self._pending_nosync_state is not None
                 or self._pending_gradient_snapshot is not None):
