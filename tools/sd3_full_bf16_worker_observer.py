@@ -298,6 +298,36 @@ def validate_reference_alpha_buffers(
 
 
 
+def _audit_lora_target_execution(
+    name: str, target: torch.nn.Linear,
+    *, allowed_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+) -> None:
+    """Fail closed on outer target Hook registration, including late insertion.
+
+    Legitimate runtime instrumentation belongs only to this Probe's exact,
+    read-only pre-hook. The target can mutate its *output* through ordinary
+    forward_hooks even though target.forward remains LoRAModule.forward.
+    """
+    if type(target) is not torch.nn.Linear:
+        _fail("LoRA target execution no longer uses the reviewed Linear: " + name)
+    if (getattr(target, "_forward_hooks", None)
+            or getattr(target, "_forward_hooks_with_kwargs", None)
+            or getattr(target, "_forward_hooks_always_called", None)
+            or getattr(target, "_forward_pre_hooks_with_kwargs", None)):
+        _fail("Unreviewed LoRA target Forward hook: " + name)
+    current = getattr(target, "_forward_pre_hooks", None)
+    if not isinstance(current, Mapping):
+        _fail("LoRA target Forward pre-hook registry is malformed: " + name)
+    allowed = (allowed_pre_hooks or {}).get(id(target))
+    if allowed is None:
+        if current:
+            _fail("Unreviewed LoRA target Forward pre-hook: " + name)
+    else:
+        hook_id, callback = allowed
+        if len(current) != 1 or current.get(hook_id) is not callback:
+            _fail("LoRA target Forward pre-hook differs from Probe-owned hook: " + name)
+
+
 def _audit_lora_projection_execution(
     name: str, role: str, projection: torch.nn.Module,
     *, allowed_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
@@ -344,6 +374,7 @@ def _audit_lora_projection_execution(
 def _lora_forward_module_payload(
     name: str, lora: Any,
     *, allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+    allowed_target_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
 ) -> tuple[dict[str, Any], torch.nn.Linear]:
     """Audit genuine LoRAModule effective Forward (not merely its state_dict).
 
@@ -393,6 +424,9 @@ def _lora_forward_module_payload(
     if (getattr(live_forward, "__self__", None) is not lora
             or getattr(live_forward, "__func__", None) is not LoRAModule.forward):
         _fail("LoRA Forward target Linear has been rebound: " + name)
+    _audit_lora_target_execution(
+        name, target, allowed_pre_hooks=allowed_target_pre_hooks,
+    )
     if (lora.lora_down.in_features != target.in_features
             or lora.lora_down.out_features != 4
             or lora.lora_up.in_features != 4
@@ -478,6 +512,7 @@ def inspect_reference_lora_forward_semantics(
     expected_names: tuple[str, ...] | None = None,
     target_spec: Mapping[str, Any] | None = None,
     allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+    allowed_target_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
     lora_mmdit_root: torch.nn.Module | None = None,
     expected_lora_target_paths: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, torch.nn.Linear]]:
@@ -548,6 +583,7 @@ def inspect_reference_lora_forward_semantics(
         lora = modules[name]
         fields, target = _lora_forward_module_payload(
             name, lora, allowed_projection_pre_hooks=allowed_projection_pre_hooks,
+            allowed_target_pre_hooks=allowed_target_pre_hooks,
         )
         if target_spec is not None:
             spec = target_spec[name]
@@ -1081,6 +1117,7 @@ class PhysicalStepProbe:
         # Only Probe-installed read-only projection hooks are allowed while
         # observing actual training Forward. Never hold this in evidence SHA.
         self._lora_projection_allowed_pre_hooks: dict[int, tuple[int, Callable]] = {}
+        self._lora_target_allowed_pre_hooks: dict[int, tuple[int, Callable]] = {}
         self._lora_projection_refs: dict[str, dict[str, torch.nn.Linear]] = {}
         self._lora_training_window = False
         self._lora_network = lora_network
@@ -1357,6 +1394,7 @@ class PhysicalStepProbe:
             expected_names=tuple(sorted(self._lora_module_refs)),
             target_spec=self._lora_target_spec,
             allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
+            allowed_target_pre_hooks=self._lora_target_allowed_pre_hooks,
             lora_mmdit_root=self._lora_mmdit_root,
             expected_lora_target_paths=self._lora_expected_target_paths,
         )
@@ -1381,6 +1419,7 @@ class PhysicalStepProbe:
         fields, actual_target = _lora_forward_module_payload(
             name, self._lora_module_refs[name],
             allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
+            allowed_target_pre_hooks=self._lora_target_allowed_pre_hooks,
         )
         for role, projection in self._lora_projection_refs[name].items():
             if getattr(self._lora_module_refs[name], role) is not projection:
@@ -1419,6 +1458,10 @@ class PhysicalStepProbe:
         _audit_lora_projection_execution(
             name, role, projection,
             allowed_pre_hooks=self._lora_projection_allowed_pre_hooks,
+        )
+        _audit_lora_target_execution(
+            name, self._lora_target_refs[name],
+            allowed_pre_hooks=self._lora_target_allowed_pre_hooks,
         )
         # The outer Linear pre-hook ran before later user hooks. Revalidate
         # provenance at the ACTUAL child projection invocation so metadata
@@ -1875,8 +1918,10 @@ class PhysicalStepProbe:
                     def pre_forward(module, arguments, name=lora_name):
                         if self._lora_training_window:
                             self._check_single_lora_forward(name, module)
-                    self._lora_forward_handles.append(
-                        target.register_forward_pre_hook(pre_forward)
+                    handle = target.register_forward_pre_hook(pre_forward)
+                    self._lora_forward_handles.append(handle)
+                    self._lora_target_allowed_pre_hooks[id(target)] = (
+                        handle.id, pre_forward,
                     )
                 # Checking the outer target alone cannot catch mutations made
                 # after its pre-hook but before LoRAModule calls lora_down/up.
@@ -1983,6 +2028,7 @@ class PhysicalStepProbe:
         for handle in reversed(self._lora_forward_handles):
             handle.remove()
         self._lora_forward_handles.clear()
+        self._lora_target_allowed_pre_hooks.clear()
         for obj, name, had_instance, original_instance in reversed(self._patched):
             if had_instance:
                 setattr(obj, name, original_instance)
