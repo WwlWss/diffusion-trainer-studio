@@ -297,7 +297,46 @@ def validate_reference_alpha_buffers(
 
 
 
-def _lora_forward_module_payload(name: str, lora: Any) -> tuple[dict[str, Any], torch.nn.Linear]:
+def _audit_lora_projection_execution(
+    name: str, role: str, projection: torch.nn.Module,
+    *, allowed_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+) -> None:
+    """Validate genuine Linear execution, not just Parameters and dimensions.
+
+    At Prepared there must be no per-Linear hooks. A live Probe may install
+    exactly its own read-only pre-hook; all output-changing or unexpected
+    input hooks remain forbidden. Hook identities are process-local and are
+    never included in a portable evidence SHA.
+    """
+    if type(projection) is not torch.nn.Linear:
+        _fail("LoRA projection changed its real Linear class: " + name + "/" + role)
+    current = getattr(projection, "forward", None)
+    if (getattr(current, "__self__", None) is not projection
+            or getattr(current, "__func__", None) is not torch.nn.Linear.forward):
+        _fail("LoRA projection Forward callable was replaced: " + name + "/" + role)
+    if (getattr(projection, "_forward_hooks", None)
+            or getattr(projection, "_forward_hooks_with_kwargs", None)
+            or getattr(projection, "_forward_hooks_always_called", None)
+            or getattr(projection, "_forward_pre_hooks_with_kwargs", None)):
+        _fail("Unreviewed LoRA projection Forward hook: " + name + "/" + role)
+    actual_pre_hooks = getattr(projection, "_forward_pre_hooks", None)
+    if not isinstance(actual_pre_hooks, Mapping):
+        _fail("LoRA projection Forward pre-hook registry is malformed: " + name + "/" + role)
+    allowed = (allowed_pre_hooks or {}).get(id(projection))
+    if allowed is None:
+        if actual_pre_hooks:
+            _fail("Unreviewed LoRA projection Forward pre-hook: " + name + "/" + role)
+    else:
+        hook_id, hook_callable = allowed
+        if (len(actual_pre_hooks) != 1
+                or actual_pre_hooks.get(hook_id) is not hook_callable):
+            _fail("Unexpected LoRA projection Forward pre-hook: " + name + "/" + role)
+
+
+def _lora_forward_module_payload(
+    name: str, lora: Any,
+    *, allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+) -> tuple[dict[str, Any], torch.nn.Linear]:
     """Audit genuine LoRAModule effective Forward (not merely its state_dict).
 
     The real SD3 network patches the original Linear.forward with a bound
@@ -332,8 +371,11 @@ def _lora_forward_module_payload(name: str, lora: Any) -> tuple[dict[str, Any], 
             or alpha.is_meta or not bool(torch.isfinite(alpha).item())
             or float(alpha.item()) != 4.0):
         _fail("LoRA Forward alpha Buffer differs from frozen BF16 scalar=4: " + name)
-    if type(lora.lora_down) is not torch.nn.Linear or type(lora.lora_up) is not torch.nn.Linear:
-        _fail("Unreviewed LoRA Forward projection modules: " + name)
+    for role in ("lora_down", "lora_up"):
+        _audit_lora_projection_execution(
+            name, role, getattr(lora, role, None),
+            allowed_pre_hooks=allowed_projection_pre_hooks,
+        )
     org_forward = getattr(lora, "org_forward", None)
     target = getattr(org_forward, "__self__", None)
     if (type(target) is not torch.nn.Linear
@@ -370,6 +412,7 @@ def inspect_reference_lora_forward_semantics(
     *, network: torch.nn.Module,
     expected_names: tuple[str, ...] | None = None,
     target_spec: Mapping[str, Any] | None = None,
+    allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, torch.nn.Linear]]:
     """Read-only real Forward binding audit, independent of trainable weights.
 
@@ -417,7 +460,9 @@ def inspect_reference_lora_forward_semantics(
     targets = {}
     for name in sorted(modules):
         lora = modules[name]
-        fields, target = _lora_forward_module_payload(name, lora)
+        fields, target = _lora_forward_module_payload(
+            name, lora, allowed_projection_pre_hooks=allowed_projection_pre_hooks,
+        )
         if target_spec is not None:
             spec = target_spec[name]
             if registered_path[id(lora)] != name:
