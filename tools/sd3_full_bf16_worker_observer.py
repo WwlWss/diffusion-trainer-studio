@@ -371,10 +371,42 @@ def _audit_lora_projection_execution(
             _fail("Unexpected LoRA projection Forward pre-hook: " + name + "/" + role)
 
 
+def _audit_projection_parameter_binding(
+    name: str, role: str, projection: torch.nn.Linear,
+    *, expected_weight: torch.nn.Parameter | None = None,
+) -> None:
+    """The BF16 LoRA update must use the already owned, bias-free weight.
+
+    Linear(bias=False) still has a registered 'bias' key whose value is None.
+    This function never fingerprints mutable weight values or re-baselines on
+    the current projection.weight after Prepared.
+    """
+    registration = getattr(projection, "_parameters", None)
+    if (not isinstance(registration, Mapping)
+            or set(registration) != {"weight", "bias"}):
+        _fail("LoRA projection Parameter registration inventory drift: " + name + "/" + role)
+    weight = registration["weight"]
+    if (type(weight) is not torch.nn.Parameter
+            or getattr(projection, "weight", None) is not weight
+            or weight.dtype != torch.bfloat16 or not weight.requires_grad
+            or weight.is_meta or weight.layout != torch.strided
+            or tuple(weight.shape) != (projection.out_features, projection.in_features)):
+        _fail("LoRA projection registered weight is not genuine BF16 Parameter: "
+              + name + "/" + role)
+    if registration["bias"] is not None or getattr(projection, "bias", None) is not None:
+        _fail("LoRA projection must remain bias-free: " + name + "/" + role)
+    if expected_weight is not None and weight is not expected_weight:
+        _fail("LoRA projection weight identity drift from Prepared: " + name + "/" + role)
+    if getattr(projection, "_buffers", None) or getattr(projection, "_modules", None):
+        _fail("LoRA projection contains an unreviewed Buffer or child Module: "
+              + name + "/" + role)
+
+
 def _lora_forward_module_payload(
     name: str, lora: Any,
     *, allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
     allowed_target_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+    expected_projection_weights: Mapping[str, torch.nn.Parameter] | None = None,
 ) -> tuple[dict[str, Any], torch.nn.Linear]:
     """Audit genuine LoRAModule effective Forward (not merely its state_dict).
 
@@ -411,9 +443,17 @@ def _lora_forward_module_payload(
             or float(alpha.item()) != 4.0):
         _fail("LoRA Forward alpha Buffer differs from frozen BF16 scalar=4: " + name)
     for role in ("lora_down", "lora_up"):
+        projection = getattr(lora, role, None)
         _audit_lora_projection_execution(
-            name, role, getattr(lora, role, None),
+            name, role, projection,
             allowed_pre_hooks=allowed_projection_pre_hooks,
+        )
+        _audit_projection_parameter_binding(
+            name, role, projection,
+            expected_weight=(
+                expected_projection_weights.get(role)
+                if expected_projection_weights is not None else None
+            ),
         )
     org_forward = getattr(lora, "org_forward", None)
     target = getattr(org_forward, "__self__", None)
@@ -513,6 +553,7 @@ def inspect_reference_lora_forward_semantics(
     target_spec: Mapping[str, Any] | None = None,
     allowed_projection_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
     allowed_target_pre_hooks: Mapping[int, tuple[int, Callable]] | None = None,
+    expected_projection_weights: Mapping[str, Mapping[str, torch.nn.Parameter]] | None = None,
     lora_mmdit_root: torch.nn.Module | None = None,
     expected_lora_target_paths: Mapping[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, torch.nn.Linear]]:
@@ -584,6 +625,10 @@ def inspect_reference_lora_forward_semantics(
         fields, target = _lora_forward_module_payload(
             name, lora, allowed_projection_pre_hooks=allowed_projection_pre_hooks,
             allowed_target_pre_hooks=allowed_target_pre_hooks,
+            expected_projection_weights=(
+                expected_projection_weights.get(name)
+                if expected_projection_weights is not None else None
+            ),
         )
         if target_spec is not None:
             spec = target_spec[name]
@@ -1119,6 +1164,7 @@ class PhysicalStepProbe:
         self._lora_projection_allowed_pre_hooks: dict[int, tuple[int, Callable]] = {}
         self._lora_target_allowed_pre_hooks: dict[int, tuple[int, Callable]] = {}
         self._lora_projection_refs: dict[str, dict[str, torch.nn.Linear]] = {}
+        self._lora_projection_weight_refs: dict[str, dict[str, torch.nn.Parameter]] = {}
         self._lora_training_window = False
         self._lora_network = lora_network
         self._lora_mmdit_root = lora_mmdit_root
@@ -1369,6 +1415,21 @@ class PhysicalStepProbe:
                 }
                 for name, module in modules.items()
             }
+            # Authority comes from the independently audited prepared
+            # Parameter-name inventory (self.params), not live projection.weight.
+            # CPU diagnostics are scoped to their real prepared micro-fixture.
+            frozen_weights = {}
+            for name, fields in payload["modules"].items():
+                registered_path = fields["registered_path"]
+                refs = {}
+                for role in ("lora_down", "lora_up"):
+                    key = f"network.{registered_path}.{role}.weight"
+                    weight = self.params.get(key)
+                    if type(weight) is not torch.nn.Parameter:
+                        _fail("Missing prepared LoRA projection Parameter identity: " + key)
+                    refs[role] = weight
+                frozen_weights[name] = refs
+            self._lora_projection_weight_refs = frozen_weights
             self._check_lora_forward_semantics(phase="probe_init")
 
     def _check_physical_group_order(self, *, phase: str) -> None:
@@ -1395,6 +1456,7 @@ class PhysicalStepProbe:
             target_spec=self._lora_target_spec,
             allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
             allowed_target_pre_hooks=self._lora_target_allowed_pre_hooks,
+            expected_projection_weights=self._lora_projection_weight_refs,
             lora_mmdit_root=self._lora_mmdit_root,
             expected_lora_target_paths=self._lora_expected_target_paths,
         )
@@ -1420,6 +1482,7 @@ class PhysicalStepProbe:
             name, self._lora_module_refs[name],
             allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
             allowed_target_pre_hooks=self._lora_target_allowed_pre_hooks,
+            expected_projection_weights=self._lora_projection_weight_refs[name],
         )
         for role, projection in self._lora_projection_refs[name].items():
             if getattr(self._lora_module_refs[name], role) is not projection:
@@ -1458,6 +1521,10 @@ class PhysicalStepProbe:
         _audit_lora_projection_execution(
             name, role, projection,
             allowed_pre_hooks=self._lora_projection_allowed_pre_hooks,
+        )
+        _audit_projection_parameter_binding(
+            name, role, projection,
+            expected_weight=self._lora_projection_weight_refs[name][role],
         )
         _audit_lora_target_execution(
             name, self._lora_target_refs[name],
