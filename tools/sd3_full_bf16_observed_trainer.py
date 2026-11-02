@@ -164,6 +164,13 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
         if len(roots) != 1 or roots[0] is None:
             raise host.FullBF16EvidenceError("C3 cannot recover real Session LoRA root")
         network = roots[0]
+        # The production SD3 Trainer passes its actual MMDiT after
+        # accelerator.prepare(), not a path reconstructed from LoRA metadata.
+        mmdit_root = accelerator.unwrap_model(unet)
+        if mmdit_root is None or not callable(getattr(mmdit_root, "get_submodule", None)):
+            raise host.FullBF16EvidenceError(
+                "C3 cannot bind actual prepared MMDiT target Module tree"
+            )
         registered_models = getattr(accelerator, "_models", ())
         if not any(accelerator.unwrap_model(item) is network
                    for item in registered_models):
@@ -172,6 +179,7 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             )
         ownership = observe_prepared_ownership(
             session=session, accelerator=accelerator, network=network,
+            mmdit_root=mmdit_root,
             train_dataloader=train_dataloader, case_id=self._c3_invocation.case_id,
         )
         identity = self._c3_invocation.manifest_payload["input_identity"]
@@ -210,6 +218,7 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
                 for profile, groups in ownership["reference_group_parameter_names"].items()
             },
             lora_network=network,
+            lora_mmdit_root=mmdit_root,
             expected_lora_forward_semantics=ownership["reference_lora_forward_semantics"],
             case_id=self._c3_invocation.case_id,
             run_id=self._c3_invocation.run_id,
