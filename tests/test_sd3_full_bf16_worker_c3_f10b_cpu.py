@@ -132,6 +132,51 @@ class F10BRealMMDiTTargetIdentity(unittest.TestCase):
                 name,
             )
 
+    def test_target_path_changed_after_outer_check_before_projection_is_rejected(self):
+        base, root, paths = _fixture()
+        bundle = _bound_bundle(base, root, paths)
+        model, accelerator, _, _, _, probe = bundle
+        target = model.forward_targets["attention_0"]
+        lora = model.loras["attention_0"]
+        original_install = probe.install
+        original_backward = accelerator.backward
+        handles = []
+        backward_calls = []
+
+        def counted_backward(*args, **kwargs):
+            backward_calls.append(True)
+            return original_backward(*args, **kwargs)
+
+        def mutate_target_path_after_outer_check(module, inputs):
+            lora._dts_parameter_policy_target_v1 = (
+                "mmdit", "targets.attention_1", "torch.nn.modules.linear.Linear"
+            )
+
+        def install_then_mutate_at_real_forward():
+            original_install()
+            # Runs after the Observer's outer target pre-hook but before
+            # lora_down(x). The projection-level hook must catch the drift.
+            handles.append(
+                target.register_forward_pre_hook(mutate_target_path_after_outer_check)
+            )
+
+        probe.install = install_then_mutate_at_real_forward
+        accelerator.backward = counted_backward
+        try:
+            with self.assertRaisesRegex(ValueError, self.ERROR):
+                _run_real_lora_step(bundle)
+            self.assertEqual(
+                backward_calls, [],
+                "Real Backward ran after late MMDiT target-path tampering",
+            )
+        finally:
+            for handle in handles:
+                handle.remove()
+            if "install" in vars(probe):
+                delattr(probe, "install")
+            if "backward" in vars(accelerator):
+                delattr(accelerator, "backward")
+
     def test_unmodified_real_target_root_training_two_steps_positive(self):
         base, root, paths = _fixture()
         bundle = _bound_bundle(base, root, paths)
