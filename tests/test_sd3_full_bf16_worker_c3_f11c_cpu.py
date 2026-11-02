@@ -143,6 +143,43 @@ class F11CBackwardExecutionIntegrity(unittest.TestCase):
         finally:
             handle.remove()
 
+    def test_independent_bf16_gradient_oracle_forward_same_backward_different(self):
+        # Numerical oracle OUTSIDE Probe: demonstrates why a gradient-health
+        # fingerprint cannot prove that autograd was not modified by a hook.
+        # Both fixtures use the real LoRAModule, same manually pinned seed,
+        # same finite BF16 weights and same forward input.
+        def run_plain_autograd(with_hook):
+            bundle = _lora_bundle()
+            model = bundle[0]
+            lora = model.loras["attention_0"]
+            with torch.no_grad():
+                lora.lora_up.weight.fill_(0.125)
+            handle = (
+                lora.lora_up.register_full_backward_hook(_scale_grad_input)
+                if with_hook else None
+            )
+            x = torch.tensor([[0.25, -0.5, 1.0, -1.5]], dtype=torch.bfloat16)
+            try:
+                loss = model(x)
+                observed_loss = loss.detach().clone()
+                loss.backward()
+                gradient = lora.lora_down.weight.grad.detach().clone()
+                return observed_loss, gradient
+            finally:
+                if handle is not None:
+                    handle.remove()
+
+        loss_regular, grad_regular = run_plain_autograd(False)
+        loss_modified, grad_modified = run_plain_autograd(True)
+        self.assertTrue(torch.equal(loss_regular, loss_modified))
+        self.assertTrue(bool(torch.isfinite(grad_regular).all()))
+        self.assertTrue(bool(torch.isfinite(grad_modified).all()))
+        self.assertGreater(int(torch.count_nonzero(grad_regular).item()), 0)
+        self.assertFalse(
+            torch.equal(grad_regular, grad_modified),
+            "Real BF16 Backward Hook did not alter the actual down gradient",
+        )
+
     def test_unmodified_real_bf16_two_physical_steps_remain_positive(self):
         bundle = _lora_bundle()
         _run_real_lora_step(bundle)
