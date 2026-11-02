@@ -199,6 +199,16 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             },
             expected_group_lrs=ownership["reference_group_learning_rates"],
             expected_group_semantics=ownership["reference_optimizer_group_semantics"],
+            # Authored by the independently verified RuntimeSpec at Prepared.
+            # Translate stable canonical names to THIS process's real Parameter
+            # object IDs, never by reading a mutable live Optimizer Group.
+            expected_group_parameter_order={
+                profile: tuple(
+                    tuple(id(params[canonical]) for canonical in group)
+                    for group in groups
+                )
+                for profile, groups in ownership["reference_group_parameter_names"].items()
+            },
             lora_network=network,
             expected_lora_forward_semantics=ownership["reference_lora_forward_semantics"],
             case_id=self._c3_invocation.case_id,
