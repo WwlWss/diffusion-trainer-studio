@@ -85,6 +85,28 @@ class F10AProjectionForwardAndHooks(unittest.TestCase):
             if "install" in vars(probe):
                 delattr(probe, "install")
 
+    def test_global_output_changing_module_forward_hook_must_reject(self):
+        bundle = _lora_bundle()
+        up = bundle[0].loras["attention_0"].lora_up
+        handle = torch.nn.modules.module.register_module_forward_hook(
+            lambda module, args, output: output * 0.5 if module is up else None
+        )
+        try:
+            _assert_pre_backward_reject(self, bundle, self.ERROR)
+        finally:
+            handle.remove()
+
+    def test_global_input_changing_module_forward_pre_hook_must_reject(self):
+        bundle = _lora_bundle()
+        down = bundle[0].loras["attention_0"].lora_down
+        handle = torch.nn.modules.module.register_module_forward_pre_hook(
+            lambda module, args: (args[0] * 0.5,) if module is down else None
+        )
+        try:
+            _assert_pre_backward_reject(self, bundle, self.ERROR)
+        finally:
+            handle.remove()
+
     def test_unmodified_real_bf16_lora_two_steps_stay_positive(self):
         bundle = _lora_bundle()
         _run_real_lora_step(bundle)
