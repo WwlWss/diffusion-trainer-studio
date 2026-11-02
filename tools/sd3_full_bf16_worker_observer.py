@@ -740,6 +740,7 @@ def validate_reference_optimizer_group_semantics(
 def observe_prepared_ownership(
     *, session: Any, accelerator: Any, network: torch.nn.Module,
     train_dataloader: Any, case_id: str,
+    mmdit_root: torch.nn.Module | None = None,
 ) -> dict[str, Any]:
     """Real B0 reference 526 BF16 CUDA Parameters; CPU cannot satisfy this."""
     spec = host.get_case_spec(case_id)
@@ -851,7 +852,7 @@ def observe_prepared_ownership(
     )
     forward_payload, _forward_modules, _forward_targets = inspect_reference_lora_forward_semantics(
         network=network, expected_names=tuple(sorted(target_spec)),
-        target_spec=target_spec,
+        target_spec=target_spec, lora_mmdit_root=mmdit_root,
     )
     forward_reference = {
         "module_names": tuple(sorted(target_spec)),
@@ -1031,6 +1032,8 @@ class PhysicalStepProbe:
         expected_group_semantics: Mapping[str, Any] | None = None,
         expected_group_parameter_order: Mapping[str, Any] | None = None,
         lora_network: torch.nn.Module | None = None,
+        lora_mmdit_root: torch.nn.Module | None = None,
+        expected_lora_target_paths: Mapping[str, str] | None = None,
         expected_lora_forward_semantics: Mapping[str, Any] | None = None,
         case_id: str, run_id: str, phase_id: str, source_commit: str,
         phase: str, start_step: int = 0,
@@ -1074,6 +1077,12 @@ class PhysicalStepProbe:
         self._lora_projection_refs: dict[str, dict[str, torch.nn.Linear]] = {}
         self._lora_training_window = False
         self._lora_network = lora_network
+        self._lora_mmdit_root = lora_mmdit_root
+        self._lora_expected_target_paths: dict[str, str] | None = (
+            dict(expected_lora_target_paths)
+            if expected_lora_target_paths is not None else None
+        )
+        self._lora_live_target_paths: dict[str, str] | None = None
         self._lora_expected_sha256: str | None = None
         self._lora_module_digests: dict[str, str] = {}
         self._lora_registered_paths: dict[str, str] = {}
@@ -1250,11 +1259,18 @@ class PhysicalStepProbe:
         # bind the exact independently audited 263-Module Prepared reference.
         real_forward_cuda = len(self.params) == 526 and accelerator.device.type == "cuda"
         if self._lora_network is None:
-            if real_forward_cuda or expected_lora_forward_semantics is not None:
+            if (real_forward_cuda or expected_lora_forward_semantics is not None
+                    or self._lora_mmdit_root is not None
+                    or self._lora_expected_target_paths is not None):
                 _fail("Real CUDA LoRA Forward reference was not bound to its actual Network")
         else:
             if real_forward_cuda and expected_lora_forward_semantics is None:
                 _fail("Real CUDA omitted independently audited LoRA Forward semantics")
+            if (real_forward_cuda and (
+                self._lora_mmdit_root is None
+                or self._lora_expected_target_paths is not None
+            )):
+                _fail("Real CUDA must bind actual MMDiT root with fixed canonical paths")
             if expected_lora_forward_semantics is not None:
                 if (not isinstance(expected_lora_forward_semantics, Mapping)
                         or set(expected_lora_forward_semantics) != {
@@ -1274,10 +1290,18 @@ class PhysicalStepProbe:
                 host.build_sd35_medium_lora_target_spec()
                 if real_forward_cuda else None
             )
+            self._lora_live_target_paths = (
+                _reference_sd3_mmdit_target_paths(self._lora_target_spec)
+                if self._lora_target_spec is not None
+                else (dict(self._lora_expected_target_paths)
+                      if self._lora_expected_target_paths is not None else None)
+            )
             payload, modules, targets = inspect_reference_lora_forward_semantics(
                 network=self._lora_network,
                 expected_names=expected_names,
                 target_spec=self._lora_target_spec,
+                lora_mmdit_root=self._lora_mmdit_root,
+                expected_lora_target_paths=self._lora_expected_target_paths,
             )
             sha = fingerprint_state_tree(payload)
             if (expected_lora_forward_semantics is not None
@@ -1326,6 +1350,8 @@ class PhysicalStepProbe:
             expected_names=tuple(sorted(self._lora_module_refs)),
             target_spec=self._lora_target_spec,
             allowed_projection_pre_hooks=self._lora_projection_allowed_pre_hooks,
+            lora_mmdit_root=self._lora_mmdit_root,
+            expected_lora_target_paths=self._lora_expected_target_paths,
         )
         for name in self._lora_module_refs:
             if (modules[name] is not self._lora_module_refs[name]
@@ -1355,6 +1381,12 @@ class PhysicalStepProbe:
                       + name + "/" + role)
         if actual_target is not target:
             _fail("LoRA Forward original Linear target was replaced: " + name)
+        if self._lora_live_target_paths is not None:
+            fields.update(_audit_real_lora_target_path(
+                name, self._lora_module_refs[name], target,
+                mmdit_root=self._lora_mmdit_root,
+                expected_path=self._lora_live_target_paths[name],
+            ))
         # Immutable registration path is part of the Prepared semantic digest;
         # this single-Linear pre-hook checks real call-time scalars and Alpha.
         # Avoid scanning every one of the 263 registered modules per Linear
