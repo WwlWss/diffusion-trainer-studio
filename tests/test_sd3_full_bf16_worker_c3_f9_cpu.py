@@ -8,7 +8,6 @@ Do not replace real LoRAModule, BF16 training, or optimizer steps with mocks.
 """
 from __future__ import annotations
 
-import inspect
 from pathlib import Path
 import sys
 import unittest
@@ -240,12 +239,10 @@ def _new_r2_probe_using_audited_order(bundle, audited):
         phase_id="fresh-c3-f9-order-gap-0001",
         source_commit="a" * 40, phase="fresh",
     )
-    # F9 GREEN will receive the original audited RuntimeSpec order. This
-    # conditional allows the tests-only RED to exercise the old accepting API.
-    if "expected_group_parameter_order" in inspect.signature(
-        observer.PhysicalStepProbe
-    ).parameters:
-        kwargs["expected_group_parameter_order"] = audited
+    # F9-B requires an independently frozen, pre-mutation Group order.
+    # The real CUDA path derives this from audited RuntimeSpec canonical IDs;
+    # this tiny CPU fixture captures it before the deliberate tampering.
+    kwargs["expected_group_parameter_order"] = audited
     return observer.PhysicalStepProbe(**kwargs)
 
 
