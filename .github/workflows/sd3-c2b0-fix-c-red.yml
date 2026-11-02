@@ -23,6 +23,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f10b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11b_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
   pull_request:
     paths:
@@ -41,6 +42,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f10b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11b_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
   workflow_dispatch:
 
 permissions:
