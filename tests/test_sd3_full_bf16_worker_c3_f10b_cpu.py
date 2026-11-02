@@ -6,7 +6,6 @@ The reviewed full 263-path canonical map is mandatory only for real CUDA.
 """
 from __future__ import annotations
 
-import inspect
 import unittest
 
 import torch
@@ -15,6 +14,7 @@ from tests.test_sd3_full_bf16_worker_c3_f9_cpu import (
     R2, _lora_bundle, _run_real_lora_step, _assert_pre_backward_reject,
 )
 from tools import sd3_full_bf16_worker_observer as observer
+from tools import sd3_full_bf16_evidence_support as host
 
 
 class TinyRegisteredMmditRoot(torch.nn.Module):
@@ -56,13 +56,10 @@ def _bound_bundle(base, root, paths):
         phase="fresh",
         lora_network=base[0],
     )
-    # RED-stage bridge only: the old Probe has no real MMDiT root binding.
-    # In GREEN remove both optionals, requiring explicit reviewed binding.
-    params = inspect.signature(observer.PhysicalStepProbe).parameters
-    if "lora_mmdit_root" in params:
-        args["lora_mmdit_root"] = root
-    if "expected_lora_target_paths" in params:
-        args["expected_lora_target_paths"] = paths
+    # F10-B GREEN: both root and independently supplied toy diagnostic paths
+    # are mandatory, never silently skipped by a compatibility bridge.
+    args["lora_mmdit_root"] = root
+    args["expected_lora_target_paths"] = paths
     return (*base[:5], observer.PhysicalStepProbe(**args))
 
 
@@ -112,6 +109,28 @@ class F10BRealMMDiTTargetIdentity(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, self.ERROR):
             _bound_bundle(base, root, paths)
+
+    def test_all_263_canonical_paths_reach_real_meta_sd35_medium_mmdit_linears(self):
+        # This is the genuine production MMDiT class on the Meta Device.
+        # No 2.9B weights, no fake CUDA and no optimizer qualification.
+        from library import sd3_models
+
+        spec = host.build_sd35_medium_lora_target_spec()
+        paths = observer._reference_sd3_mmdit_target_paths(spec)
+        self.assertEqual(len(paths), 263)
+        with torch.device("meta"):
+            mmdit = sd3_models.MMDiT(
+                depth=24, attn_mode="torch", qk_norm="rms",
+                x_block_self_attn_layers=list(range(13)),
+            )
+        for name, target_path in paths.items():
+            actual = mmdit.get_submodule(target_path)
+            self.assertIs(type(actual), torch.nn.Linear, name)
+            self.assertEqual(
+                (actual.in_features, actual.out_features),
+                (spec[name]["input_features"], spec[name]["output_features"]),
+                name,
+            )
 
     def test_unmodified_real_target_root_training_two_steps_positive(self):
         base, root, paths = _fixture()
