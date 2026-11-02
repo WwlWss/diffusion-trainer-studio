@@ -15,6 +15,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f8_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f9_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f9a_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c3_f9b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -256,7 +257,34 @@ jobs:
           print("C3-F9-A REAL CPU HOOK GREEN: 4 PASS, 0 SKIP, 0 FAIL; NOT CUDA")
           PY
 
-      - name: Strict C3-F9 REAL CPU Tests-only RED (18 tests, ZERO SKIP)
+      - name: Strict C3-F9-B real CPU frozen Group order authority (3; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c3_f9b_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 3:
+              raise SystemExit(
+                  f"C3-F9-B supplemental discovery drift: expected 3, found {discovered}"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 3 or not result.wasSuccessful()
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"C3-F9-B PINNED CPU FAIL: run={result.testsRun}, "
+                  f"failures={len(result.failures)}, errors={len(result.errors)}, "
+                  f"skipped={len(result.skipped)}, "
+                  f"expected_failures={len(result.expectedFailures)}, "
+                  f"unexpected_successes={len(result.unexpectedSuccesses)}"
+              )
+          print("C3-F9-B PINNED CPU GREEN: 3 PASS, 0 SKIP, 0 FAIL; NOT CUDA")
+          PY
+
+      - name: Strict C3-F9 real CPU Forward/Ordered Group qualification (18; ZERO SKIP)
         shell: bash
         run: |
           python - <<'PY'
@@ -276,7 +304,7 @@ jobs:
               or result.unexpectedSuccesses
           ):
               raise SystemExit(
-                  f"C3-F9 PINNED CPU RED/FAIL: run={result.testsRun}, "
+                  f"C3-F9 PINNED CPU FAIL: run={result.testsRun}, "
                   f"failures={len(result.failures)}, errors={len(result.errors)}, "
                   f"skipped={len(result.skipped)}, "
                   f"expected_failures={len(result.expectedFailures)}, "
