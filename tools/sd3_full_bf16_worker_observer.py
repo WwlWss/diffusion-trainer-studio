@@ -1413,6 +1413,16 @@ class PhysicalStepProbe:
             name, role, projection,
             allowed_pre_hooks=self._lora_projection_allowed_pre_hooks,
         )
+        # The outer Linear pre-hook ran before later user hooks. Revalidate
+        # provenance at the ACTUAL child projection invocation so metadata
+        # or real-MMDiT path relinking cannot reach the true Backward.
+        if self._lora_live_target_paths is not None:
+            _audit_real_lora_target_path(
+                name, self._lora_module_refs[name],
+                self._lora_target_refs[name],
+                mmdit_root=self._lora_mmdit_root,
+                expected_path=self._lora_live_target_paths[name],
+            )
 
     def _check_physical_group_lrs(self, *, phase: str) -> dict[str, list[float]]:
         actual: dict[str, list[float]] = {}
