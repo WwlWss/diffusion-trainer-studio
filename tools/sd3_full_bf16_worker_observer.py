@@ -684,6 +684,16 @@ def observe_prepared_ownership(
         session=session, canonical_names_by_id=by_id,
         routing_assignments=assignments,
     )
+    # F9-B: freeze the independently audited RuntimeSpec Group *order*
+    # while still inside the Prepared evidence boundary. Use stable canonical
+    # names in evidence; never serialize process-specific Python object IDs.
+    reference_group_names = {
+        runtime.profile_name: tuple(
+            tuple(parameter.canonical_name for parameter in group.parameters)
+            for group in runtime.groups
+        )
+        for runtime in session.runtime_spec.optimizers
+    }
     rows = {}
     device = accelerator.device
     device_index = device.index if device.index is not None else torch.cuda.current_device()
@@ -753,6 +763,7 @@ def observe_prepared_ownership(
         "reference_child_tensor_counts": reference["child_tensor_counts"],
         "reference_group_learning_rates": reference_lrs,
         "reference_optimizer_group_semantics": reference_semantics,
+        "reference_group_parameter_names": reference_group_names,
     }
 
 
