@@ -1,4 +1,4 @@
-"""C3-F9 Tests-only RED: actual LoRA Forward + ordered optimizer ownership.
+"""C3-F9 RED-to-GREEN: actual LoRA Forward + ordered optimizer ownership.
 
 Pinned real CPU: torch==2.7.0, pytorch-optimizer==3.10.0,
 accelerate==1.6.0. These tiny physical diagnostics NEVER qualify CUDA/C4.
