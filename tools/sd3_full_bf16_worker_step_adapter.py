@@ -303,6 +303,14 @@ class C4StepAdapter:
                 if (self._pending_anchor is None
                         or self._pending_anchor.logical_step != step):
                     _fail("Step-named Save has no one-use real Step Anchor reservation")
+                if self.probe._last_completed_step != step:
+                    _fail("Stale Step Save reservation: physical Step has advanced")
+                # Re-export from the real C3 physical boundary at classification
+                # time; a once-valid reservation is not a perpetual capability.
+                # This does NOT publish checkpoint_saved or mark Save successful.
+                current = self.completed_step_anchor(logical_step=step)
+                if current.anchor_sha256 != self._pending_anchor.anchor_sha256:
+                    _fail("Stale Step Save reservation: Anchor state changed")
                 return f"authoritative_step_{step}"
         _fail("Unknown, cross-phase or unreviewed C4 Save path")
 
