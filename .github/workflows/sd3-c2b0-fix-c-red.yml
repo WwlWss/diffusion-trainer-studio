@@ -26,6 +26,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_host.py"
+      - "tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py"
       - "tools/sd3_full_bf16_worker_step_adapter.py"
       - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -49,6 +50,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_host.py"
+      - "tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py"
       - "tools/sd3_full_bf16_worker_step_adapter.py"
       - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
   workflow_dispatch:

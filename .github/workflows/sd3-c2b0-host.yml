@@ -23,6 +23,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_host.py"
+      - "tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py"
       - "tools/sd3_full_bf16_worker_step_adapter.py"
       - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
       - "tests/test_sd3_full_bf16_worker_c3.py"
@@ -504,4 +505,45 @@ jobs:
                     "missing-contract assertion FAIL, 0 ERROR/SKIP; NO CUDA")
               raise SystemExit(1)
           print("C4-A PINNED CPU GREEN: 12 PASS, 0 FAIL / ERROR / SKIP; NO CUDA")
+          PY
+- name: Compile C4-A-SR1 independent real-CPU strict-review tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py
+
+      - name: C4-A-SR1 exact 8-test pinned CPU RED to GREEN (NO CUDA, no ERROR/SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4a_sr1_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 8:
+              raise SystemExit(f"SR1 INVALID DISCOVERY: {discovered} != 8")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "SR1 INVALID RUN: "
+                  f"run={result.testsRun} fails={len(result.failures)} "
+                  f"errors={len(result.errors)} skips={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unexplained = [
+                  case.id() for case, traceback in result.failures
+                  if "C4-A-SR1" not in traceback
+              ]
+              if unexplained:
+                  raise SystemExit(
+                      "SR1 INVALID RED: unrelated failure(s): "
+                      + repr(unexplained)
+                  )
+              print(f"C4-A-SR1 VALID TESTS-ONLY RED: "
+                    f"{len(result.failures)}/8 target-assertion FAIL, "
+                    "0 ERROR/SKIP, NO CUDA")
+              raise SystemExit(1)
+          print("C4-A-SR1 PINNED REAL CPU GREEN: 8 PASS, "
+                "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
           PY
