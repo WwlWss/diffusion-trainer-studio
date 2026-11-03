@@ -21,6 +21,10 @@ on:
       - "tests/test_sd3_full_bf16_worker_c3_f11a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c3_f11c_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4a_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4a_host.py"
+      - "tools/sd3_full_bf16_worker_step_adapter.py"
+      - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
       - "tests/test_sd3_full_bf16_worker_c3.py"
       - "tools/sd3_full_bf16_worker_observer.py"
       - "tools/sd3_full_bf16_observed_trainer.py"
@@ -108,6 +112,34 @@ jobs:
 
       - name: Run C2 Worker admission/lease GREEN (pure Host, NO CUDA)
         run: python -m unittest tests.test_sd3_full_bf16_worker_c2 -v
+
+      - name: Compile C4-A Pure Host metadata tests (8 discovered, NO CUDA)
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4a_host.py
+
+      - name: C4-A Pure Host exact discovery and metadata-only gate (8; ZERO SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4a_host"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 8:
+              raise SystemExit(f"C4-A INVALID HOST DISCOVERY: {discovered} != 8")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C4-A INVALID HOST: "
+                  f"run={result.testsRun}, failures={len(result.failures)}, "
+                  f"errors={len(result.errors)}, skip={len(result.skipped)}, "
+                  f"xfail={len(result.expectedFailures)}, "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          print("C4-A HOST METADATA BASELINE: 8 PASS / 0 ERROR / 0 SKIP; NOT CUDA")
+          PY
 
       - name: Re-run C2-A and mixed-BF16 R0 Host regression
         run: python -m unittest tests.test_sd3_full_bf16_scope tests.test_sd3_component_gpu_evidence -v
@@ -431,4 +463,45 @@ jobs:
                   f"skipped={len(result.skipped)}"
               )
           print("C3-F11-C PINNED REAL CPU GREEN: 10 PASS, 0 SKIP; NO CUDA")
+          PY
+
+
+      - name: Compile C4-A pinned CPU Tests-only RED candidate
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4a_cpu.py
+
+      - name: C4-A real pinned CPU exact discovery and contract RED gate (12; ZERO ERROR/SKIP)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4a_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(f"C4-A INVALID CPU DISCOVERY: {discovered} != 12")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C4-A INVALID RED: "
+                  f"run={result.testsRun} failures={len(result.failures)} "
+                  f"errors={len(result.errors)} skipped={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unrelated = [
+                  test.id() for test, traceback in result.failures
+                  if "C4-A CONTRACT ABSENT" not in traceback
+              ]
+              if unrelated:
+                  raise SystemExit(
+                      "C4-A INVALID RED: unrelated assertion failures: "
+                      + repr(unrelated)
+                  )
+              print(f"C4-A VALID TESTS-ONLY RED: {len(result.failures)} "
+                    "missing-contract assertion FAIL, 0 ERROR/SKIP; NO CUDA")
+              raise SystemExit(1)
+          print("C4-A PINNED CPU GREEN: 12 PASS, 0 FAIL / ERROR / SKIP; NO CUDA")
           PY
