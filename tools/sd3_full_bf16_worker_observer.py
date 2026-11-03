@@ -1229,6 +1229,12 @@ class PhysicalStepProbe:
         # both physical Children and the actual Scheduler pass validation.
         self._last_completed_step: int | None = None
         self._last_completed_adapter_sha256: str | None = None
+        # C4-A: copy genuine post-Child/post-Scheduler SHA strings at the real
+        # Scheduler boundary. NEVER rebaseline from a mutable live state when
+        # someone later asks to export the historical completed Step.
+        self._last_completed_child_state_sha256: tuple[tuple[str, str], ...] | None = None
+        self._last_completed_scheduler_state_sha256: str | None = None
+        self._last_completed_event_sha256: str | None = None
         required_types = tuple(spec["optimizer_types"])
         physical_types = tuple(entry.optimizer_type for entry in composite_optimizer.entries)
         if sorted(physical_types) != sorted(required_types):
@@ -1652,6 +1658,132 @@ class PhysicalStepProbe:
             for name, parameter in sorted(self.params.items())
         })
 
+    def export_completed_step_anchor(self, step: int):
+        """Read-only C4-A Anchor from an actually completed C3 physical Step.
+
+        Only the most recently completed physical Step is exportable at its
+        real pre-Save boundary. No caller-supplied events or post-mutation
+        snapshots are treated as authority. Resume remains fail-closed until
+        C4-C verifies the genuine prior Fresh Step-1 load.
+        """
+        if type(step) is not int or step not in (1, 2):
+            _fail("C4-A requested an invalid physical logical Step")
+        if self.phase == "fresh":
+            if self.start_step != 0:
+                _fail("C4-A Fresh Step identity/start cursor mismatch")
+        elif self.phase == "resume":
+            if self.start_step != 1 or step != 2:
+                _fail("C4-A Resume can only export logical Step 2")
+            # C4-C will bind authentic post-load state to a Host-accepted
+            # Fresh Step-1 parent. C4-A cannot infer it from Worker metadata.
+            _fail("C4-C authenticated Fresh parent/Resume load is still pending")
+        else:
+            _fail("C4-A unrecognized training phase")
+        if (self._last_completed_step != step or self._current_step != step
+                or self._current_sync is not True or not self._backward_seen):
+            _fail("C4-A Step has no matching genuine synchronized completion")
+        if (self._last_completed_adapter_sha256 is None
+                or self._last_completed_child_state_sha256 is None
+                or self._last_completed_scheduler_state_sha256 is None
+                or self._last_completed_event_sha256 is None):
+            _fail("C4-A missing authoritative physical Scheduler boundary baseline")
+        # This checks all live C3 group, Forward and Backward-hook invariants,
+        # including no retained R2 accumulation or unfinished Child/Scheduler.
+        self.assert_step_complete()
+        if self._backwards != (step - self.start_step) * self.accumulation:
+            _fail("C4-A physical Backward/Step count differs from fixed geometry")
+        if host._json_sha256(self.events) != self._last_completed_event_sha256:
+            _fail("C4-A physical event stream changed after Scheduler completion")
+        self._assert_step(step)
+
+        required_identity = {
+            "case_id": self.case_id, "run_id": self.run_id,
+            "phase_id": self.phase_id, "source_commit": self.source_commit,
+        }
+        for sequence, row in enumerate(self.events, 1):
+            if (not isinstance(row, dict)
+                    or type(row.get("event_seq")) is not int
+                    or row["event_seq"] != sequence
+                    or any(row.get(name) != value
+                           for name, value in required_identity.items())):
+                _fail("C4-A untrusted physical event sequence or Phase identity")
+        rows = [row for row in self.events if row.get("logical_step") == step]
+        expected_count = self.accumulation * 2 + len(self.child_profiles) + 1
+        if len(rows) != expected_count:
+            _fail("C4-A current physical Step has missing/extra events")
+        samples: list[str] = []
+        for micro in range(1, self.accumulation + 1):
+            batch, backward = rows[(micro - 1) * 2:micro * 2]
+            expected_sync = micro == self.accumulation
+            if (batch.get("event_type") != "batch_started"
+                    or backward.get("event_type") != "backward_completed"
+                    or type(batch.get("microbatch_index")) is not int
+                    or batch["microbatch_index"] != micro
+                    or backward.get("microbatch_index") != micro
+                    or batch.get("sync_gradients") is not expected_sync
+                    or backward.get("sync_gradients") is not expected_sync
+                    or batch.get("sample_identity") != backward.get("sample_identity")
+                    or not isinstance(batch.get("sample_identity"), str)
+                    or re.fullmatch(r"dts_c2b_sample_[0-9]{4}",
+                                    batch["sample_identity"]) is None):
+                _fail("C4-A physical Batch/Backward order or accumulation drift")
+            samples.append(batch["sample_identity"])
+        if (len(set(samples)) != self.accumulation
+                or set(samples) != self._sample_names.get(step)):
+            _fail("C4-A physical microbatch sample identities differ from C3")
+
+        child_events = rows[self.accumulation * 2:-1]
+        child_names = tuple(row.get("optimizer_profile") for row in child_events)
+        if (any(row.get("event_type") != "physical_child_stepped"
+                or row.get("physical_step") != step
+                for row in child_events)
+                or len(set(child_names)) != len(self.child_profiles)
+                or set(child_names) != set(self.child_profiles)):
+            _fail("C4-A missing/duplicated/unknown actual physical Child step")
+        scheduler_event = rows[-1]
+        if (scheduler_event.get("event_type") != "physical_scheduler_stepped"
+                or scheduler_event.get("scheduler_after")
+                != self._last_completed_scheduler_state_sha256):
+            _fail("C4-A Scheduler event does not match physical completion")
+        by_profile = {row["optimizer_profile"]: row for row in child_events}
+        frozen = self._last_completed_child_state_sha256
+        if tuple(name for name, _ in frozen) != self.child_profiles:
+            _fail("C4-A historical Child order differs from C3 Prepared identity")
+        for name, accepted_sha in frozen:
+            if by_profile[name].get("optimizer_state_after") != accepted_sha:
+                _fail("C4-A Child event SHA differs from real physical Step")
+
+        self._check_physical_group_lrs(phase="c4_completed_step")
+        self._check_physical_group_semantics(phase="c4_completed_step")
+        if self._adapter_parameter_sha256() != self._last_completed_adapter_sha256:
+            _fail("C4-A trained BF16 Adapter bytes drifted after physical Step")
+        for entry, (name, accepted_sha) in zip(self.optimizer.entries, frozen):
+            if (entry.profile_name != name
+                    or fingerprint_state_tree(entry.optimizer.state_dict()) != accepted_sha):
+                _fail("C4-A Child optimizer moments drifted after physical Step: " + name)
+        if (fingerprint_state_tree(self.scheduler.state_dict())
+                != self._last_completed_scheduler_state_sha256):
+            _fail("C4-A Scheduler state drifted after physical Step")
+
+        from tools.sd3_full_bf16_worker_step_adapter import (
+            C4PhysicalStepAnchor, canonical_c4_anchor_sha256,
+        )
+        payload = {
+            "case_id": self.case_id, "phase": self.phase,
+            "run_id": self.run_id, "phase_id": self.phase_id,
+            "source_commit": self.source_commit, "logical_step": step,
+            "accumulation": self.accumulation, "samples": tuple(samples),
+            "child_profiles": self.child_profiles,
+            "physical_scheduler_event_seq": scheduler_event["event_seq"],
+            "trained_adapter_parameter_sha256": self._last_completed_adapter_sha256,
+            "child_optimizer_state_sha256": frozen,
+            "scheduler_state_sha256": self._last_completed_scheduler_state_sha256,
+        }
+        return C4PhysicalStepAnchor(
+            **payload,
+            anchor_sha256=canonical_c4_anchor_sha256(payload),
+        )
+
     def _snapshot(self) -> dict[str, str]:
         return {
             "network": fingerprint_state_tree({name: p.detach() for name,p in sorted(self.params.items())}),
@@ -1881,6 +2013,31 @@ class PhysicalStepProbe:
             self._record("physical_scheduler_stepped", details={
                 "scheduler_before": before, "scheduler_after": after,
             })
+            # The real Scheduler has returned; the C3 events already hold
+            # Child state digests computed after the genuine Optimizer steps.
+            # Copy primitives NOW, before any Save/Load or next Batch. C4-A
+            # cannot accept a later mutable Optimizer as its own reference.
+            physical_children = [
+                event for event in self.events
+                if (event["logical_step"] == step
+                    and event["event_type"] == "physical_child_stepped")
+            ]
+            if (len(physical_children) != len(self.child_profiles)
+                    or {row["optimizer_profile"] for row in physical_children}
+                    != set(self.child_profiles)):
+                _fail("Missing C4-A physical Child fingerprint at Scheduler")
+            child_by_profile = {
+                row["optimizer_profile"]: row for row in physical_children
+            }
+            accepted_children = []
+            for profile in self.child_profiles:
+                child_sha = child_by_profile[profile].get("optimizer_state_after")
+                host._require_sha(child_sha, name="C4-A physical Child state SHA")
+                accepted_children.append((profile, child_sha))
+            host._require_sha(after, name="C4-A physical Scheduler state SHA")
+            self._last_completed_child_state_sha256 = tuple(accepted_children)
+            self._last_completed_scheduler_state_sha256 = after
+            self._last_completed_event_sha256 = host._json_sha256(self.events)
             self._last_completed_step = step
             self._last_completed_adapter_sha256 = accepted_adapter_sha
             return result

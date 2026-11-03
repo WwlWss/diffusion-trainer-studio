@@ -63,6 +63,7 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
         self._c3_build_saved = None
         self._c3_build_count = 0
         self._c3_probe: PhysicalStepProbe | None = None
+        self._c4_step_adapter = None  # C4-A only; NO Save/Load observation yet
         self._c3_expected_samples = set()
         self.observer: C3PhaseEvidence | None = None
 
@@ -232,6 +233,22 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             probe=probe, parameter_ownership=ownership,
         )
         probe.install()
+        # C4-A: attach the same read-only Step Adapter to the genuine C3
+        # prepared identities AFTER all original production hooks and C3
+        # Probe installation. No save_state/load_state wrapper is installed;
+        # C4-B/C will add real post-return file/Resume attestation separately.
+        try:
+            from tools.sd3_full_bf16_worker_step_adapter import C4StepAdapter
+            adapter = C4StepAdapter(
+                probe=probe, accelerator=accelerator, network=network,
+                scheduler=scheduler, invocation=self._c3_invocation,
+                manifest_payload=self._c3_invocation.manifest_payload,
+            )
+            adapter.install()
+            self._c4_step_adapter = adapter
+        except BaseException:
+            probe.close()
+            raise
 
     def on_step_start(
         self, args, accelerator, network, text_encoders, unet,
@@ -272,6 +289,8 @@ class ObservedSd3NetworkTrainer(Sd3NetworkTrainer):
             self.observer.training_completed = True
             return result
         finally:
+            if self._c4_step_adapter is not None:
+                self._c4_step_adapter.close()
             if self._c3_probe is not None:
                 self._c3_probe.close()
             if self._c3_session is not None and self._c3_build_original is not None:
