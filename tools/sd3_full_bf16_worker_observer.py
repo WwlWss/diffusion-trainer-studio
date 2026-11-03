@@ -1242,6 +1242,10 @@ class PhysicalStepProbe:
         if len({entry.profile_name for entry in composite_optimizer.entries}) != len(required_types):
             _fail("Duplicate Profile name in physical optimizer")
         self.child_profiles = tuple(entry.profile_name for entry in composite_optimizer.entries)
+        # SR1 Fix C: hold the exact ordered original runtime Child entries.
+        # A temporary mutation of CompositeOptimizer.entries must not change
+        # which physical Child is called first during a claimed real Step.
+        self._prepared_optimizer_entries = tuple(composite_optimizer.entries)
         # Genuine CUDA reference ownership must supply an independently
         # checked Policy LR contract. Tiny diagnostic CPU Probes instead pin
         # their own immutable initial LR baseline (NOT CUDA qualification).
@@ -1490,8 +1494,16 @@ class PhysicalStepProbe:
                 _fail("Prepared Parameter identity drift at " + phase + ": " + name)
 
     def _check_physical_group_order(self, *, phase: str) -> None:
+        """Check all physical Child order and Groups against original Prepared."""
         self._assert_prepared_parameter_binding(phase=phase)
-        """Check full ordered identity against immutable Prepared RuntimeSpec."""
+        original = self._prepared_optimizer_entries
+        current = self.optimizer.entries
+        if (not isinstance(current, tuple)
+                or len(current) != len(original)
+                or any(actual is not frozen
+                       for actual, frozen in zip(current, original))
+                or tuple(entry.profile_name for entry in current) != self.child_profiles):
+            _fail("Physical Child entry order drift from Prepared at " + phase)
         for entry in self.optimizer.entries:
             actual_groups = entry.optimizer.param_groups
             if any(not isinstance(group.get("params"), list) for group in actual_groups):
@@ -1758,8 +1770,7 @@ class PhysicalStepProbe:
         if (any(row.get("event_type") != "physical_child_stepped"
                 or row.get("physical_step") != step
                 for row in child_events)
-                or len(set(child_names)) != len(self.child_profiles)
-                or set(child_names) != set(self.child_profiles)):
+                or child_names != self.child_profiles):
             _fail("C4-A missing/duplicated/unknown actual physical Child step")
         scheduler_event = rows[-1]
         if (scheduler_event.get("event_type") != "physical_scheduler_stepped"
@@ -2044,8 +2055,8 @@ class PhysicalStepProbe:
                     and event["event_type"] == "physical_child_stepped")
             ]
             if (len(physical_children) != len(self.child_profiles)
-                    or {row["optimizer_profile"] for row in physical_children}
-                    != set(self.child_profiles)):
+                    or tuple(row["optimizer_profile"] for row in physical_children)
+                    != self.child_profiles):
                 _fail("Missing C4-A physical Child fingerprint at Scheduler")
             child_by_profile = {
                 row["optimizer_profile"]: row for row in physical_children
