@@ -506,7 +506,7 @@ jobs:
               raise SystemExit(1)
           print("C4-A PINNED CPU GREEN: 12 PASS, 0 FAIL / ERROR / SKIP; NO CUDA")
           PY
-- name: Compile C4-A-SR1 independent real-CPU strict-review tests
+      - name: Compile C4-A-SR1 independent real-CPU strict-review tests
         run: python -m py_compile tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py
 
       - name: C4-A-SR1 exact 8-test pinned CPU RED to GREEN (NO CUDA, no ERROR/SKIP)
