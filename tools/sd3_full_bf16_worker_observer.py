@@ -1330,6 +1330,10 @@ class PhysicalStepProbe:
         if seen != set(named_ids):
             _fail("Probe misses actual Optimizer-owned Parameters")
         self.child_params = owners
+        # SR1 Fix A: retain the true Prepared Parameter OBJECTS by canonical
+        # name, not just a mutable working dictionary. This tuple retains
+        # references (no CUDA/CPU Tensor copies) and is never rebased.
+        self._prepared_parameter_refs = tuple(sorted(self.params.items()))
         self.profile_by_name = {}
         for name, param in self.params.items():
             profiles = [
@@ -1470,7 +1474,23 @@ class PhysicalStepProbe:
             self._lora_projection_weight_refs = frozen_weights
             self._check_lora_forward_semantics(phase="probe_init")
 
+    def _assert_prepared_parameter_binding(self, *, phase: str) -> None:
+        """Every live name must still designate its original owned Parameter.
+
+        A same-value BF16 clone is *not* an authorized source of Step evidence.
+        This validates object identity, never captures another weight baseline.
+        """
+        frozen = self._prepared_parameter_refs
+        if (type(self.params) is not dict
+                or len(self.params) != len(frozen)
+                or set(self.params) != {name for name, _ in frozen}):
+            _fail("Canonical Parameter inventory drift at " + phase)
+        for name, original in frozen:
+            if self.params[name] is not original:
+                _fail("Prepared Parameter identity drift at " + phase + ": " + name)
+
     def _check_physical_group_order(self, *, phase: str) -> None:
+        self._assert_prepared_parameter_binding(phase=phase)
         """Check full ordered identity against immutable Prepared RuntimeSpec."""
         for entry in self.optimizer.entries:
             actual_groups = entry.optimizer.param_groups
@@ -1652,10 +1672,11 @@ class PhysicalStepProbe:
         self.events.append(row)
 
     def _adapter_parameter_sha256(self) -> str:
-        """One-Tensor-at-a-time hash of all canonical real BF16 LoRA weights."""
+        """Hash the original Prepared BF16 Parameters, never mapped clones."""
+        self._assert_prepared_parameter_binding(phase="adapter_parameter_digest")
         return fingerprint_state_tree({
             name: parameter.detach()
-            for name, parameter in sorted(self.params.items())
+            for name, parameter in self._prepared_parameter_refs
         })
 
     def export_completed_step_anchor(self, step: int):
