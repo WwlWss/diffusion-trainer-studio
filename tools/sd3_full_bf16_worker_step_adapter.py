@@ -64,6 +64,13 @@ class C4StepAdapter:
 
         if type(probe) is not PhysicalStepProbe:
             _fail("PhysicalStepProbe must be the exact C3 physical authority")
+        # SR1 Fix B: pin the class-defined exporter rather than an overridable
+        # instance-bound attribute. The physical C3 implementation remains
+        # the sole producer of Step evidence.
+        reviewed_exporter = PhysicalStepProbe.export_completed_step_anchor
+        if ("export_completed_step_anchor" in vars(probe)
+                or not callable(reviewed_exporter)):
+            _fail("Unreviewed Probe exporter override at C4 binding")
         if (probe.accelerator is not accelerator
                 or probe.scheduler is not scheduler
                 or probe.optimizer is not scheduler.optimizer):
@@ -147,6 +154,9 @@ class C4StepAdapter:
         self._invocation = invocation
         self._identity_fields = identity_fields
         self._identity = identity
+        self._reviewed_exporter = reviewed_exporter
+        self._expected_profiles = tuple(probe.child_profiles)
+        self._expected_accumulation = probe.accumulation
         self._output_dir = actual_output
         self._output_name = output_name
         self._phase = probe.phase
@@ -171,6 +181,12 @@ class C4StepAdapter:
             _fail("C4 external invocation identity changed after binding")
         if tuple(getattr(self.probe, key) for key in self._identity_fields) != self._identity:
             _fail("C4 C3 Probe identity changed after binding")
+        if (tuple(self.probe.child_profiles) != self._expected_profiles
+                or self.probe.accumulation != self._expected_accumulation):
+            _fail("C4 physical Child/accumulation geometry changed after binding")
+        if ("export_completed_step_anchor" in vars(self.probe)
+                or type(self.probe).export_completed_step_anchor is not self._reviewed_exporter):
+            _fail("Unreviewed Probe exporter override")
         # C4-A owns no save/load patches; reject an unreviewed replacement,
         # rather than silently delegating to an arbitrary method.
         for method, (had_instance, original) in self._original_accelerator_slots.items():
@@ -192,17 +208,76 @@ class C4StepAdapter:
             _fail("C4 Step Adapter is not attached to a live C3 Probe")
         self._check_bound_identity()
 
+    def _validate_anchor(
+        self, anchor: C4PhysicalStepAnchor, *, logical_step: int,
+    ) -> None:
+        """Independently validate immutable payload, geometry and canonical SHA.
+
+        This validator does not mint physical Step evidence; only the pinned
+        C3 class exporter is allowed to produce it.
+        """
+        if type(logical_step) is not int or logical_step not in (1, 2):
+            _fail("Unreviewed logical Step requested")
+        if type(anchor) is not C4PhysicalStepAnchor:
+            _fail("C4 exporter returned an unreviewed Anchor type")
+        if ((anchor.case_id, anchor.phase, anchor.run_id,
+             anchor.phase_id, anchor.source_commit) != self._identity):
+            _fail("C4 Anchor Phase Ticket identity mismatch")
+        if (type(anchor.logical_step) is not int
+                or anchor.logical_step != logical_step):
+            _fail("C4 Anchor logical Step mismatch")
+        if (type(anchor.accumulation) is not int
+                or anchor.accumulation != self._expected_accumulation
+                or anchor.child_profiles != self._expected_profiles
+                or type(anchor.child_profiles) is not tuple):
+            _fail("C4 Anchor physical Child/accumulation geometry mismatch")
+        if ((anchor.phase == "fresh" and anchor.logical_step not in (1, 2))
+                or (anchor.phase == "resume" and anchor.logical_step != 2)):
+            _fail("C4 Anchor has an impossible phase/Step pair")
+        if (type(anchor.samples) is not tuple
+                or len(anchor.samples) != self._expected_accumulation
+                or len(set(anchor.samples)) != len(anchor.samples)
+                or any(type(sample) is not str
+                       or re.fullmatch(r"dts_c2b_sample_[0-9]{4}", sample) is None
+                       for sample in anchor.samples)):
+            _fail("C4 Anchor physical sample/microbatch identity mismatch")
+        if (type(anchor.physical_scheduler_event_seq) is not int
+                or anchor.physical_scheduler_event_seq < 1):
+            _fail("C4 Anchor genuine Scheduler event sequence is missing")
+        if (type(anchor.child_optimizer_state_sha256) is not tuple
+                or len(anchor.child_optimizer_state_sha256) != len(self._expected_profiles)):
+            _fail("C4 Anchor physical Child state inventory mismatch")
+        for expected, record in zip(
+            self._expected_profiles, anchor.child_optimizer_state_sha256
+        ):
+            if (type(record) is not tuple or len(record) != 2
+                    or record[0] != expected):
+                _fail("C4 Anchor ordered Child Profile state mismatch")
+            host._require_sha(record[1], name="C4 Anchor Child state digest")
+        host._require_sha(
+            anchor.trained_adapter_parameter_sha256, name="C4 Anchor Adapter digest"
+        )
+        host._require_sha(
+            anchor.scheduler_state_sha256, name="C4 Anchor Scheduler digest"
+        )
+        host._require_sha(anchor.anchor_sha256, name="C4 Anchor digest")
+        from dataclasses import fields
+        payload = {
+            field.name: getattr(anchor, field.name)
+            for field in fields(C4PhysicalStepAnchor)
+            if field.name != "anchor_sha256"
+        }
+        if canonical_c4_anchor_sha256(payload) != anchor.anchor_sha256:
+            _fail("C4 Anchor digest mismatch")
+
     def completed_step_anchor(self, *, logical_step: int) -> C4PhysicalStepAnchor:
         self._require_installed()
         if type(logical_step) is not int:
             _fail("Logical Step must be an integer")
-        # The C3 exporter independently checks all completed physical events,
-        # frozen optimizer/scheduler state, runtime/LoRA identity, and BF16 bytes.
-        anchor = self.probe.export_completed_step_anchor(logical_step)
-        if (type(anchor) is not C4PhysicalStepAnchor
-                or (anchor.case_id, anchor.phase, anchor.run_id,
-                    anchor.phase_id, anchor.source_commit) != self._identity):
-            _fail("C4 exporter returned a foreign or unreviewed Step Anchor")
+        # Call the exact reviewed C3 class method; never resolve a mutable
+        # instance attribute or treat caller metadata as a physical Step.
+        anchor = self._reviewed_exporter(self.probe, logical_step)
+        self._validate_anchor(anchor, logical_step=logical_step)
         return anchor
 
     def reserve_step_save(self, *, logical_step: int) -> C4PhysicalStepAnchor:
