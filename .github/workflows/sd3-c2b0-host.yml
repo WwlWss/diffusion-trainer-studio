@@ -27,6 +27,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4b_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_guards_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu.py"
       - "docs/d1-sd3c2b-c4b-fsr-contract.md"
       - "tools/sd3_full_bf16_worker_save_verifier.py"
       - "docs/d1-sd3c2b-c4b-save-contract.md"
@@ -678,4 +679,26 @@ jobs:
               "C4-B-FSR PINNED REAL CPU GREEN: 12 PASS, "
               "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA"
           )
+          PY
+
+      - name: Compile C4-B-FSR-G3 LoRA Epoch tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu.py
+
+      - name: C4-B-FSR-G3 exact 3 real CPU RED to GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu")
+          n = suite.countTestCases()
+          if n != 3: raise SystemExit(f"G3 INVALID DISCOVERY: {n} != 3")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if result.testsRun != 3 or result.errors or result.skipped or result.expectedFailures or result.unexpectedSuccesses:
+              raise SystemExit("G3 INVALID RUN: ERROR/SKIP/xfail/xpass present")
+          if result.failures:
+              bad = [test.id() for test, tb in result.failures if "C4-B-FSR-G3 CONTRACT ABSENT" not in tb]
+              if bad: raise SystemExit(f"G3 INVALID RED unrelated failures: {bad}")
+              print(f"G3 VALID RED: {len(result.failures)}/3 assertion FAIL, {3-len(result.failures)} baseline PASS")
+              raise SystemExit(1)
+          print("G3 PINNED REAL CPU GREEN: 3 PASS, 0 FAIL/ERROR/SKIP")
           PY
