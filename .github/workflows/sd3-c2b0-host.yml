@@ -550,7 +550,7 @@ jobs:
                 "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
           PY
 
-- name: Compile C4-B real pinned CPU Tests-only RED suite
+      - name: Compile C4-B real pinned CPU Tests-only RED suite
         run: python -m py_compile tests/test_sd3_full_bf16_worker_c4b_cpu.py
 
       - name: C4-B exact 12 real-CPU Save Tests-only RED gate (ZERO ERROR/SKIP; NO CUDA)
