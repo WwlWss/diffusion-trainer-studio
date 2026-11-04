@@ -421,6 +421,12 @@ class C4StepAdapter:
                     _fail("C4-B unreviewed Step Save path before original write")
             if step is not None and step in self._attempted_steps:
                 _fail("C4-B original Save already attempted: retry/duplicate prohibited")
+            if self._phase == "fresh" and step == 2:
+                # A completed *physical* Step-1 is not a saved parent. Fresh
+                # Step-2 requires the authentic, still-byte-valid Step-1
+                # post-return receipt. Checking the saved bytes AGAIN also
+                # rejects Step-1 files tampered with before Step-2 Save.
+                self.verified_step_save(logical_step=1)
         except BaseException as exc:
             self._last_save_attempt = C4BSaveAttempt(
                 classification=label, logical_step=step,
@@ -557,11 +563,13 @@ class C4StepAdapter:
         if receipt is None:
             _fail("C4-B unqualified: no genuine post-return verified Step Save")
         state = Path(receipt.state_dir)
+        if not state.is_dir() or state.is_symlink():
+            _fail("Previously verified Step state directory was replaced/linked")
         now = host._checkpoint_file_inventory(state)
         if tuple(sorted(now.items())) != receipt.state_file_sha256:
             _fail("Verified state-file inventory drifted after Save")
         adapter_file = Path(receipt.adapter_path)
-        if (not adapter_file.is_file()
+        if (not adapter_file.is_file() or adapter_file.is_symlink()
                 or host._sha256_file(adapter_file)
                 != receipt.adapter_file_sha256):
             _fail("Verified Step Adapter file drifted after Save")
