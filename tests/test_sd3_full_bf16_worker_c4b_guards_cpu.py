@@ -77,6 +77,39 @@ class C4BG1IndependentRealCpu(unittest.TestCase):
                 row["event_type"] == "checkpoint_saved" for row in probe.events
             ))
 
+    def test_g03_fresh_step_two_cannot_save_without_verified_step_one(self):
+        # BOTH real physical optimizer Steps have run, but no real Step-1
+        # original Save or full verified receipt exists. A Step-2 candidate
+        # must not advance a missing Fresh Step-1 checkpoint lineage.
+        bundle = _r1_real_step(self, count=2)
+        accelerator, probe = bundle[1], bundle[5]
+        self.assertEqual(probe._last_completed_step, 2)
+        with tempfile.TemporaryDirectory() as dirname:
+            root = Path(dirname)
+            adapter = _bound_adapter(bundle, root, self)
+            adapter.reserve_step_save(logical_step=2)
+            calls, handle = _diagnostic_pre_save_hook(accelerator)
+            self.addCleanup(handle.remove)
+            path = root / "fresh" / "dts_c4a_cpu-step00000002-state"
+            try:
+                accelerator.save_state(str(path), safe_serialization=True)
+            except ValueError as error:
+                self.assertRegex(
+                    str(error), "Step-1|Fresh Step-2|prerequisite|verified",
+                )
+            else:
+                self.fail(
+                    "C4-B-G2 CONTRACT ABSENT: physical Fresh Step-2 saved "
+                    "without a verified original Step-1 checkpoint"
+                )
+            self.assertEqual(calls, [], "Step-2 refusal must precede original")
+            self.assertFalse(path.exists())
+            self.assertFalse(any(
+                event["event_type"] == "checkpoint_saved"
+                for event in probe.events
+            ))
+
+
 
 if __name__ == "__main__":
     unittest.main()
