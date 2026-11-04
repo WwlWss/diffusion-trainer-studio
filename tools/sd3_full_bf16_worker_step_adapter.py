@@ -229,6 +229,11 @@ class C4StepAdapter:
         # All other replacements and ANY Load override remain fail-closed.
         if type(self.accelerator).save_state is not self._reviewed_save_method:
             _fail("Original Accelerator.save_state implementation drift")
+        # Fixed Accelerate 1.6.0 otherwise redirects to checkpoints/checkpoint_N
+        # and returns a location different from the authorized Step directory.
+        if (getattr(self.accelerator.project_configuration,
+                    "automatic_checkpoint_naming", None) is not False):
+            _fail("C4-B automatic checkpoint naming is not an authorized Save")
         for method, (had_instance, original) in self._original_accelerator_slots.items():
             expected_present = had_instance
             expected_obj = original
@@ -421,6 +426,8 @@ class C4StepAdapter:
                     _fail("C4-B unreviewed Step Save path before original write")
             if step is not None and step in self._attempted_steps:
                 _fail("C4-B original Save already attempted: retry/duplicate prohibited")
+            if step is not None and state_dir.exists():
+                _fail("C4-B authoritative Step destination already exists before Save")
             if self._phase == "fresh" and step == 2:
                 # A completed *physical* Step-1 is not a saved parent. Fresh
                 # Step-2 requires the authentic, still-byte-valid Step-1
@@ -489,6 +496,22 @@ class C4StepAdapter:
                 qualified=False, failure_reason=type(exc).__name__,
             )
             raise
+        # Accelerate 1.6.0 returns the *actual* location (and can redirect it).
+        # The real original return must match the approved destination, even
+        # when the current run is only a non-authoritative CPU diagnostic.
+        self._last_save_attempt = C4BSaveAttempt(
+            classification=label, logical_step=step,
+            original_call_count=1, original_returned=True,
+            qualified=False, failure_reason="pending actual-location verification",
+        )
+        if not isinstance(result, (str, Path)):
+            _fail("C4-B original Save returned no actual save_location")
+        actual_return_dir = host._real_path(
+            str(result), name="C4-B actual original Save location",
+            must_exist=True,
+        )
+        if actual_return_dir != state_dir:
+            _fail("C4-B actual Save destination differs from approved Step directory")
         self._last_save_attempt = C4BSaveAttempt(
             classification=label, logical_step=step,
             original_call_count=1, original_returned=True,
