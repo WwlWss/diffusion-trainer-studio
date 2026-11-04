@@ -74,6 +74,19 @@ class C4BVerifiedStepSave:
     state_file_sha256: tuple[tuple[str, str], ...]
 
 
+@dataclass(frozen=True)
+class _CommittedStepSave:
+    """Private genuine original-Save transaction; receipt alone is not proof."""
+
+    receipt: C4BVerifiedStepSave
+    physical_anchor: C4PhysicalStepAnchor
+    writer_observation: Any
+    actual_return_dir: str
+    original_call_sequence: int
+    checkpoint_event_seq: int
+    checkpoint_event_prefix_sha256: str
+
+
 class C4StepAdapter:
     """Instance-bound physical Step + genuine Save, with no Resume admission.
 
@@ -215,6 +228,10 @@ class C4StepAdapter:
         self._attempted_steps: set[int] = set()
         self._last_save_attempt: C4BSaveAttempt | None = None
         self._verified_step_records: dict[int, C4BVerifiedStepSave] = {}
+        # Immutable completed transactions are a separate authority from the
+        # display-only, mutable receipt index. CPU Saves never populate these.
+        self._committed_step_saves: dict[int, _CommittedStepSave] = {}
+        self._original_returned_steps: set[int] = set()
 
     def _check_bound_identity(self) -> None:
         if (self.probe.accelerator is not self.accelerator
@@ -561,6 +578,8 @@ class C4StepAdapter:
         )
         if actual_return_dir != state_dir:
             _fail("C4-B actual Save destination differs from approved Step directory")
+        if step is not None:
+            self._original_returned_steps.add(step)
         self._last_save_attempt = C4BSaveAttempt(
             classification=label, logical_step=step,
             original_call_count=1, original_returned=True,
@@ -615,6 +634,14 @@ class C4StepAdapter:
                     anchor_sha256=anchor.anchor_sha256,
                 )
             )
+            self._committed_step_saves[step] = _CommittedStepSave(
+                receipt=receipt, physical_anchor=anchor,
+                writer_observation=before["writer"],
+                actual_return_dir=str(actual_return_dir),
+                original_call_sequence=self._save_call_count,
+                checkpoint_event_seq=committed_seq,
+                checkpoint_event_prefix_sha256=committed_prefix_sha,
+            )
             self._verified_step_records[step] = receipt
             self._pending_anchor = None
             self._last_save_attempt = C4BSaveAttempt(
@@ -642,7 +669,13 @@ class C4StepAdapter:
                 or len(events) != before_count + 1):
             _fail("C4-B genuine checkpoint_saved event was not appended exactly once")
         row = events[-1]
-        values = dict(zip(self._identity_fields, self._identity))
+        # Physical Probe events carry run_id/phase_id/case_id/source_commit,
+        # but NOT the separate phase string; Phase is frozen by the Anchor.
+        values = {
+            name: value for name, value in zip(
+                self._identity_fields, self._identity
+            ) if name != "phase"
+        }
         if (type(row) is not dict
                 or row.get("event_type") != "checkpoint_saved"
                 or type(row.get("event_seq")) is not int
@@ -667,23 +700,82 @@ class C4StepAdapter:
         return self._last_save_attempt
 
     def verified_step_save(self, *, logical_step: int) -> C4BVerifiedStepSave:
-        """Read-only authenticated receipt; late file tamper invalidates it."""
-        if type(logical_step) is not int:
+        """Revalidate an AUTHENTIC committed original Save, never a row alone.
+
+        For Fresh Step-2, the Step-1 weights are historical; recheck the
+        originally recorded file hashes and physical event *prefix* only,
+        not current live Adapter weights which necessarily advanced.
+        """
+        self._require_installed()
+        if type(logical_step) is not int or logical_step not in (1, 2):
             _fail("Invalid verified Step request")
+        committed = self._committed_step_saves.get(logical_step)
         receipt = self._verified_step_records.get(logical_step)
-        if receipt is None:
-            _fail("C4-B unqualified: no genuine post-return verified Step Save")
+        if (type(committed) is not _CommittedStepSave
+                or type(receipt) is not C4BVerifiedStepSave
+                or committed.receipt is not receipt
+                or logical_step not in self._original_returned_steps
+                or logical_step not in self._attempted_steps
+                or committed.original_call_sequence < 1
+                or committed.original_call_sequence > self._save_call_count):
+            _fail("C4-B no authenticated original Save transaction for receipt")
+        self._validate_anchor(committed.physical_anchor, logical_step=logical_step)
+        anchor = committed.physical_anchor
+        if (receipt.logical_step != logical_step
+                or receipt.anchor_sha256 != anchor.anchor_sha256
+                or (receipt.case_id, receipt.phase, receipt.run_id,
+                    receipt.phase_id, receipt.source_commit) != self._identity):
+            _fail("C4-B receipt differs from frozen original physical Step identity")
         state = Path(receipt.state_dir)
-        if not state.is_dir() or state.is_symlink():
-            _fail("Previously verified Step state directory was replaced/linked")
+        expected_state = (
+            self._output_dir /
+            f"{self._output_name}-step{logical_step:08d}-state"
+        )
+        if (state != expected_state
+                or committed.actual_return_dir != str(expected_state)
+                or not state.is_dir() or state.is_symlink()):
+            _fail("C4-B committed original Save returned a foreign/linked path")
+        seq = committed.checkpoint_event_seq
+        events = self.probe.events
+        if (type(seq) is not int or seq < 1 or len(events) < seq
+                or host._json_sha256(events[:seq])
+                   != committed.checkpoint_event_prefix_sha256):
+            _fail("C4-B genuine checkpoint_saved event prefix drift")
+        row = events[seq - 1]
+        if (type(row) is not dict
+                or row.get("event_type") != "checkpoint_saved"
+                or row.get("logical_step") != logical_step
+                or row.get("checkpoint_id") != receipt.checkpoint_id
+                or row.get("anchor_sha256") != anchor.anchor_sha256
+                or row.get("event_seq") != seq):
+            _fail("C4-B committed checkpoint_saved event is missing or forged")
         now = host._checkpoint_file_inventory(state)
         if tuple(sorted(now.items())) != receipt.state_file_sha256:
-            _fail("Verified state-file inventory drifted after Save")
+            _fail("C4-B genuinely saved state file SHA inventory drift")
+        progress = host._read_json(
+            state / "dts_parameter_policy_progress.json"
+        )
+        if (not isinstance(progress, dict)
+                or progress.get("checkpoint_id") != receipt.checkpoint_id):
+            _fail("C4-B on-disk real checkpoint_id drift after original Save")
+        observed = committed.writer_observation
+        if self._lora_writer is None or (
+            self._lora_writer.completed_step_write(logical_step=logical_step)
+            != observed
+        ):
+            _fail("C4-B original LoRA Writer observation drift")
         adapter_file = Path(receipt.adapter_path)
-        if (not adapter_file.is_file() or adapter_file.is_symlink()
+        expected_adapter = (
+            self._output_dir /
+            f"{self._output_name}-step{logical_step:08d}.safetensors"
+        )
+        if (adapter_file != expected_adapter
+                or not adapter_file.is_file() or adapter_file.is_symlink()
+                or observed.output_path != str(expected_adapter)
+                or observed.file_sha256 != receipt.adapter_file_sha256
                 or host._sha256_file(adapter_file)
-                != receipt.adapter_file_sha256):
-            _fail("Verified Step Adapter file drifted after Save")
+                   != receipt.adapter_file_sha256):
+            _fail("C4-B genuinely written Step Adapter bytes/path drift")
         return receipt
 
     def close(self) -> None:
