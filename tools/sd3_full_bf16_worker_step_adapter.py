@@ -95,6 +95,9 @@ class C4StepAdapter:
         # instance-bound attribute. The physical C3 implementation remains
         # the sole producer of Step evidence.
         reviewed_exporter = PhysicalStepProbe.export_completed_step_anchor
+        reviewed_recorder = PhysicalStepProbe._record
+        if ("_record" in vars(probe) or not callable(reviewed_recorder)):
+            _fail("Unreviewed Probe event recorder at C4 binding")
         if ("export_completed_step_anchor" in vars(probe)
                 or not callable(reviewed_exporter)):
             _fail("Unreviewed Probe exporter override at C4 binding")
@@ -182,6 +185,7 @@ class C4StepAdapter:
         self._identity_fields = identity_fields
         self._identity = identity
         self._reviewed_exporter = reviewed_exporter
+        self._reviewed_recorder = reviewed_recorder
         self._expected_profiles = tuple(probe.child_profiles)
         self._expected_accumulation = probe.accumulation
         self._output_dir = actual_output
@@ -230,6 +234,9 @@ class C4StepAdapter:
         if ("export_completed_step_anchor" in vars(self.probe)
                 or type(self.probe).export_completed_step_anchor is not self._reviewed_exporter):
             _fail("Unreviewed Probe exporter override")
+        if ("_record" in vars(self.probe)
+                or type(self.probe)._record is not self._reviewed_recorder):
+            _fail("Unreviewed Probe checkpoint event recorder override")
         # Only our exact managed Save wrapper is a trusted instance override.
         # All other replacements and ANY Load override remain fail-closed.
         if type(self.accelerator).save_state is not self._reviewed_save_method:
@@ -596,10 +603,18 @@ class C4StepAdapter:
             # Publish a Save receipt ONLY after the real Probe lifecycle
             # append succeeds. If _record rejects, no receipt can escape.
             # C4-C/D still gate the entire Phase / worker_complete.
-            self.probe._record("checkpoint_saved", details={
+            previous_events = len(self.probe.events)
+            self._reviewed_recorder(self.probe, "checkpoint_saved", details={
                 "checkpoint_id": proof["checkpoint_id"],
                 "anchor_sha256": anchor.anchor_sha256,
             })
+            committed_seq, committed_prefix_sha = (
+                self._assert_checkpoint_saved_event_appended(
+                    before_count=previous_events, logical_step=step,
+                    checkpoint_id=proof["checkpoint_id"],
+                    anchor_sha256=anchor.anchor_sha256,
+                )
+            )
             self._verified_step_records[step] = receipt
             self._pending_anchor = None
             self._last_save_attempt = C4BSaveAttempt(
@@ -615,6 +630,36 @@ class C4StepAdapter:
             )
             raise
         return result
+
+    def _assert_checkpoint_saved_event_appended(
+        self, *, before_count: int, logical_step: int,
+        checkpoint_id: str, anchor_sha256: str,
+    ) -> tuple[int, str]:
+        """Prove one genuine, sequence-correct checkpoint_saved event append."""
+        self._require_installed()
+        events = self.probe.events
+        if (type(before_count) is not int or before_count < 0
+                or len(events) != before_count + 1):
+            _fail("C4-B genuine checkpoint_saved event was not appended exactly once")
+        row = events[-1]
+        values = dict(zip(self._identity_fields, self._identity))
+        if (type(row) is not dict
+                or row.get("event_type") != "checkpoint_saved"
+                or type(row.get("event_seq")) is not int
+                or row["event_seq"] != len(events)
+                or row.get("logical_step") != logical_step
+                or row.get("checkpoint_id") != checkpoint_id
+                or row.get("anchor_sha256") != anchor_sha256
+                or any(row.get(k) != value for k, value in values.items())):
+            _fail("C4-B checkpoint_saved event content/Phase identity mismatch")
+        for index, item in enumerate(events, 1):
+            if (type(item) is not dict
+                    or type(item.get("event_seq")) is not int
+                    or item["event_seq"] != index
+                    or any(item.get(k) != value
+                           for k, value in values.items())):
+                _fail("C4-B checkpoint event prefix is not source-bound")
+        return len(events), host._json_sha256(events[:len(events)])
 
     def save_attempt_observation(self) -> C4BSaveAttempt:
         if self._last_save_attempt is None:
