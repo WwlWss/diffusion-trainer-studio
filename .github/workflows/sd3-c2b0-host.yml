@@ -29,6 +29,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4c_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_c1_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4c_host.py"
       - "docs/d1-sd3c2b-c4c-load-resume-contract.md"
       - "tools/sd3_full_bf16_worker_resume_verifier.py"
@@ -728,6 +729,41 @@ jobs:
               print(f"G3 VALID RED: {len(result.failures)}/3 assertion FAIL, {3-len(result.failures)} baseline PASS")
               raise SystemExit(1)
           print("G3 PINNED REAL CPU GREEN: 3 PASS, 0 FAIL/ERROR/SKIP")
+          PY
+
+      - name: Compile C4-C1 original Load boundary CPU RED
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_c1_cpu.py
+
+      - name: C4-C1 exact 10 original Load boundary RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          target = ["test_c03_resume_installs_managed_load_on_same_accelerator",
+                    "test_c04_unapproved_parent_does_not_enter_original_load_prehooks",
+                    "test_c05_fresh_phase_cannot_load_resume_state",
+                    "test_c06_load_observation_cannot_be_claimed_before_real_original_return"]
+          names = [
+              "tests.test_sd3_full_bf16_worker_c4c_c1_cpu.C4C1SourceBoundaryCpu",
+          ] + [
+              "tests.test_sd3_full_bf16_worker_c4c_cpu.C4CRealCPULoadContractRED." + t
+              for t in target
+          ]
+          suite = unittest.TestSuite(
+              unittest.defaultTestLoader.loadTestsFromName(name) for name in names
+          )
+          discovered = suite.countTestCases()
+          if discovered != 10: raise SystemExit(f"C4-C1 INVALID DISCOVERY: {discovered} != 10")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 10 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(f"C4-C1 INVALID RUN: ERROR={len(result.errors)} SKIP={len(result.skipped)} xfail={len(result.expectedFailures)} xpass={len(result.unexpectedSuccesses)}")
+          if result.failures:
+              bad = [t.id() for t, tb in result.failures if not ("C4-C CONTRACT ABSENT" in tb or "C4-C1 CONTRACT ABSENT" in tb)]
+              if bad: raise SystemExit(f"C4-C1 INVALID RED unrelated failures: {bad}")
+              print(f"C4-C1 VALID RED: {len(result.failures)} targeted FAIL, {10-len(result.failures)} baseline PASS; 0 ERROR/SKIP")
+              raise SystemExit(1)
+          print("C4-C1 PINNED CPU GREEN: 10 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
           PY
 
       - name: Compile C4-C real pinned CPU Load/Resume RED
