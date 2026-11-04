@@ -24,6 +24,8 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4a_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4a_host.py"
       - "tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4b_cpu.py"
+      - "docs/d1-sd3c2b-c4b-save-contract.md"
       - "tools/sd3_full_bf16_worker_step_adapter.py"
       - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
       - "tests/test_sd3_full_bf16_worker_c3.py"
@@ -545,5 +547,48 @@ jobs:
                     "0 ERROR/SKIP, NO CUDA")
               raise SystemExit(1)
           print("C4-A-SR1 PINNED REAL CPU GREEN: 8 PASS, "
+                "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
+          PY
+
+- name: Compile C4-B real pinned CPU Tests-only RED suite
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4b_cpu.py
+
+      - name: C4-B exact 12 real-CPU Save Tests-only RED gate (ZERO ERROR/SKIP; NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4b_cpu"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(f"C4-B INVALID DISCOVERY: {discovered} != 12")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "C4-B INVALID RUN: "
+                  f"run={result.testsRun} fails={len(result.failures)} "
+                  f"errors={len(result.errors)} skips={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unrelated = [
+                  test.id() for test, trace in result.failures
+                  if "C4-B CONTRACT ABSENT" not in trace
+              ]
+              if unrelated:
+                  raise SystemExit(
+                      "C4-B INVALID RED: unrelated assertion failures: "
+                      + repr(unrelated)
+                  )
+              print(f"C4-B VALID TESTS-ONLY RED: {len(result.failures)}/12 "
+                    "missing Save-contract assertion FAIL, "
+                    f"{12-len(result.failures)} baseline PASS, "
+                    "0 ERROR/SKIP, NO CUDA")
+              raise SystemExit(1)
+          print("C4-B PINNED REAL CPU GREEN: 12 PASS, "
                 "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
           PY
