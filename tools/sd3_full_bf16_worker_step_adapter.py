@@ -203,6 +203,7 @@ class C4StepAdapter:
             _fail("C4-B requires unshadowed original Accelerator.save_state")
         self._managed_save_wrapper = None
         self._save_call_count = 0
+        self._attempted_steps: set[int] = set()
         self._last_save_attempt: C4BSaveAttempt | None = None
         self._verified_step_records: dict[int, C4BVerifiedStepSave] = {}
 
@@ -379,6 +380,9 @@ class C4StepAdapter:
     def _observed_save_state(self, *args, **kwargs):
         """Original Save exactly once; authority only after post-return proof."""
         self._require_installed()
+        # Never return an earlier Step's success record for a new failing
+        # attempt, including a failure in the pre-original authorization.
+        self._last_save_attempt = None
         if not args and "output_dir" not in kwargs:
             _fail("C4-B Save requires an explicit original output_dir")
         if args and "output_dir" in kwargs:
@@ -386,6 +390,13 @@ class C4StepAdapter:
         location = args[0] if args else kwargs["output_dir"]
         if not isinstance(location, (str, Path)):
             _fail("C4-B cannot bind unreviewed output_dir type")
+        # Resolve is used by the C4-A path classifier, but a symlink alias
+        # must NEVER become authorization for the original filesystem write.
+        # Reject both linked target and linked parent / traversal aliases.
+        literal_path = Path(location).expanduser().absolute()
+        resolved_path = literal_path.resolve(strict=False)
+        if (literal_path != resolved_path or literal_path.is_symlink()):
+            _fail("C4-B linked/symlink/noncanonical Save path before original")
         state_dir = host._real_path(str(location), name="C4-B Save directory")
         label = "unclassified"
         step = None
@@ -408,6 +419,8 @@ class C4StepAdapter:
                         break
                 if step is None:
                     _fail("C4-B unreviewed Step Save path before original write")
+            if step is not None and step in self._attempted_steps:
+                _fail("C4-B original Save already attempted: retry/duplicate prohibited")
         except BaseException as exc:
             self._last_save_attempt = C4BSaveAttempt(
                 classification=label, logical_step=step,
@@ -452,6 +465,8 @@ class C4StepAdapter:
                     "rng": snapshot_rng_fingerprint(),
                 }
 
+        if step is not None:
+            self._attempted_steps.add(step)
         self._save_call_count += 1
         self._last_save_attempt = C4BSaveAttempt(
             classification=label, logical_step=step,
@@ -506,14 +521,15 @@ class C4StepAdapter:
             )
             if step in self._verified_step_records:
                 _fail("C4-B duplicate verified Step")
-            self._verified_step_records[step] = receipt
-            self._pending_anchor = None
-            # Only the genuine post-return verifier may append this narrow
-            # lifecycle event. C4-C/D still gate overall phase completion.
+            # Publish a Save receipt ONLY after the real Probe lifecycle
+            # append succeeds. If _record rejects, no receipt can escape.
+            # C4-C/D still gate the entire Phase / worker_complete.
             self.probe._record("checkpoint_saved", details={
                 "checkpoint_id": proof["checkpoint_id"],
                 "anchor_sha256": anchor.anchor_sha256,
             })
+            self._verified_step_records[step] = receipt
+            self._pending_anchor = None
             self._last_save_attempt = C4BSaveAttempt(
                 classification=label, logical_step=step,
                 original_call_count=1, original_returned=True,
