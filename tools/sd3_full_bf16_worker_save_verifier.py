@@ -354,7 +354,9 @@ def verify_saved_rng_payload(
         # torch.load(weights_only=True) rejects its safe NumPy reconstruction
         # objects, so allow exactly those types for this trusted in-process
         # original Save output, NEVER a general Python class loader.
-        multiarray = getattr(np, "_core", np.core).multiarray
+        multiarray = getattr(getattr(np, "_core", None), "multiarray", None)
+        if multiarray is None:
+            multiarray = np.core.multiarray
         allowlist = [
             multiarray._reconstruct,
             np.ndarray,
