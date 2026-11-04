@@ -28,6 +28,10 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4b_guards_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_host.py"
+      - "docs/d1-sd3c2b-c4c-load-resume-contract.md"
+      - "tools/sd3_full_bf16_worker_resume_verifier.py"
       - "docs/d1-sd3c2b-c4b-fsr-contract.md"
       - "tools/sd3_full_bf16_worker_save_verifier.py"
       - "docs/d1-sd3c2b-c4b-save-contract.md"
@@ -147,6 +151,29 @@ jobs:
                   f"xpass={len(result.unexpectedSuccesses)}"
               )
           print("C4-A HOST METADATA BASELINE: 8 PASS / 0 ERROR / 0 SKIP; NOT CUDA")
+          PY
+
+      - name: Compile C4-C pure Host loaded-parent timeline RED
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_host.py
+
+      - name: C4-C Host exact 8 metadata-parent RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_sd3_full_bf16_worker_c4c_host")
+          discovered = suite.countTestCases()
+          if discovered != 8: raise SystemExit(f"C4-C HOST INVALID DISCOVERY: {discovered} != 8")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(f"C4-C HOST INVALID RUN: ERROR={len(result.errors)}, SKIP={len(result.skipped)}")
+          if result.failures:
+              unrelated = [t.id() for t, tb in result.failures if "C4-C HOST CONTRACT ABSENT" not in tb]
+              if unrelated: raise SystemExit(f"C4-C HOST INVALID RED unrelated: {unrelated}")
+              print(f"C4-C HOST VALID RED: {len(result.failures)} targeted FAIL, {8-len(result.failures)} baseline PASS; 0 ERROR/SKIP")
+              raise SystemExit(1)
+          print("C4-C HOST GREEN: 8 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; NOT CUDA")
           PY
 
       - name: Re-run C2-A and mixed-BF16 R0 Host regression
@@ -701,4 +728,27 @@ jobs:
               print(f"G3 VALID RED: {len(result.failures)}/3 assertion FAIL, {3-len(result.failures)} baseline PASS")
               raise SystemExit(1)
           print("G3 PINNED REAL CPU GREEN: 3 PASS, 0 FAIL/ERROR/SKIP")
+          PY
+
+      - name: Compile C4-C real pinned CPU Load/Resume RED
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_cpu.py
+
+      - name: C4-C exact 12 pinned real CPU Restore RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_sd3_full_bf16_worker_c4c_cpu")
+          discovered = suite.countTestCases()
+          if discovered != 12: raise SystemExit(f"C4-C CPU INVALID DISCOVERY: {discovered} != 12")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(f"C4-C CPU INVALID RUN: ERROR={len(result.errors)}, SKIP={len(result.skipped)}, xfail={len(result.expectedFailures)}, xpass={len(result.unexpectedSuccesses)}")
+          if result.failures:
+              unrelated = [t.id() for t, tb in result.failures if "C4-C CONTRACT ABSENT" not in tb]
+              if unrelated: raise SystemExit(f"C4-C CPU INVALID RED unrelated: {unrelated}")
+              print(f"C4-C CPU VALID RED: {len(result.failures)} targeted FAIL, {12-len(result.failures)} baseline PASS; 0 ERROR/SKIP")
+              raise SystemExit(1)
+          print("C4-C CPU GREEN: 12 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; NOT CUDA")
           PY
