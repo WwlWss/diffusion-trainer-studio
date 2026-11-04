@@ -718,7 +718,7 @@ class C4StepAdapter:
                 or logical_step not in self._attempted_steps
                 or committed.original_call_sequence < 1
                 or committed.original_call_sequence > self._save_call_count):
-            _fail("C4-B no authenticated original Save transaction for receipt")
+            _fail("C4-B no verified original Save transaction for receipt")
         self._validate_anchor(committed.physical_anchor, logical_step=logical_step)
         anchor = committed.physical_anchor
         if (receipt.logical_step != logical_step
