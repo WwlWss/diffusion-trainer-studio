@@ -7,6 +7,7 @@ torch.load here is an in-process check of the just-produced trusted files.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import re
@@ -109,6 +110,191 @@ def snapshot_serialized_tensor_inventory(
     elif len(result) != 3 * len(modules):
         _fail("CPU diagnostic lost a LoRA Tensor or Alpha Buffer")
     return dict(sorted(result.items()))
+
+
+@dataclass(frozen=True)
+class C4BObservedLoRAWrite:
+    logical_step: int
+    output_path: str
+    file_sha256: str
+    ss_steps: int
+    ss_epoch: int
+    original_returned: bool
+
+
+def verify_lora_step_metadata(
+    path: Path | str, *, expected_step: int, expected_epoch: int | None = None,
+) -> dict[str, Any]:
+    """Read the *actual* safetensors metadata; Tensor bytes are checked later.
+
+    Original train_network.save_model stamps ss_steps and ss_epoch immediately
+    before calling LoRANetwork.save_weights. Equal Tensor bytes alone do not
+    prove a correct checkpoint Step.
+    """
+    actual = Path(path)
+    if (not actual.is_file() or actual.is_symlink()
+            or type(expected_step) is not int or expected_step not in (1, 2)):
+        _fail("C4-B invalid original LoRA Step file or physical Step")
+    header, _data_start = host._safetensors_header(actual)
+    metadata = header.get("__metadata__")
+    if not isinstance(metadata, dict):
+        _fail("Original LoRA Step metadata is missing")
+    step_s, epoch_s = metadata.get("ss_steps"), metadata.get("ss_epoch")
+    if (type(step_s) is not str or type(epoch_s) is not str
+            or re.fullmatch(r"(0|[1-9][0-9]*)", step_s) is None
+            or re.fullmatch(r"(0|[1-9][0-9]*)", epoch_s) is None
+            or int(step_s) != expected_step):
+        _fail("Original LoRA ss_steps/ss_epoch metadata mismatch")
+    if expected_epoch is not None and (
+        type(expected_epoch) is not int or int(epoch_s) != expected_epoch
+    ):
+        _fail("Original LoRA ss_epoch differs from actual physical progress")
+    return {
+        "ss_steps": int(step_s),
+        "ss_epoch": int(epoch_s),
+        "file_sha256": host._sha256_file(actual),
+    }
+
+
+class C4BLoRAWriteObserver:
+    """Observe the original per-instance LoRANetwork.save_weights once.
+
+    This class is only a *writer observation*; even a genuine one-module CPU
+    result cannot mint a C4-B production Saved Checkpoint receipt.
+    """
+
+    def __init__(
+        self, *, network: Any, output_dir: Path | str,
+        output_name: str, step_provider: Any,
+    ) -> None:
+        from networks.lora_sd3 import LoRANetwork
+
+        if type(network) is not LoRANetwork:
+            _fail("Original LoRA writer requires exact production LoRANetwork")
+        if ("save_weights" in vars(network)
+                or type(network).save_weights is not LoRANetwork.save_weights):
+            _fail("Unreviewed or shadowed original LoRA save_weights method")
+        if (type(output_name) is not str
+                or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", output_name) is None
+                or not callable(step_provider)):
+            _fail("Unreviewed original LoRA writer output / step source")
+        self.network = network
+        self.output_dir = host._real_path(
+            str(output_dir), name="C4-B LoRA writer directory",
+        )
+        self.output_name = output_name
+        self._step_provider = step_provider
+        self._original = network.save_weights
+        self._reviewed_method = LoRANetwork.save_weights
+        self._original_slot = ("save_weights" in vars(network),
+                               vars(network).get("save_weights"))
+        self._installed = False
+        self._closed = False
+        self._wrapper = None
+        self._attempted: set[int] = set()
+        self._completed: dict[int, C4BObservedLoRAWrite] = {}
+
+    def _check_method(self):
+        if (type(self.network).save_weights is not self._reviewed_method
+                or ("save_weights" in vars(self.network)) != self._installed):
+            _fail("Original LoRA writer was replaced or detached")
+        if self._installed and vars(self.network)["save_weights"] is not self._wrapper:
+            _fail("Unreviewed LoRA instance writer override")
+
+    def install(self) -> None:
+        if self._closed or self._installed:
+            _fail("LoRA writer observer cannot be installed twice")
+        self._check_method()
+
+        def wrapped(*args, **kwargs):
+            return self._observe(*args, **kwargs)
+
+        self._wrapper = wrapped
+        try:
+            vars(self.network)["save_weights"] = wrapped
+            self._installed = True
+            self._check_method()
+        except BaseException:
+            self.close()
+            raise
+
+    def _observe(self, *args, **kwargs):
+        if not self._installed or self._closed:
+            _fail("LoRA writer observer is not installed")
+        self._check_method()
+        if not args and "file" not in kwargs:
+            _fail("LoRA writer called without output path")
+        if args and "file" in kwargs:
+            _fail("LoRA writer has duplicate file argument")
+        if len(args) > 3:
+            _fail("Unreviewed LoRA writer argument count")
+        file = args[0] if args else kwargs["file"]
+        if not isinstance(file, (str, Path)):
+            _fail("Unreviewed original LoRA output path type")
+        literal = Path(file).expanduser().absolute()
+        if literal != literal.resolve(strict=False):
+            _fail("Unreviewed LoRA writer linked or noncanonical output")
+        if literal.parent != self.output_dir:
+            _fail("LoRA output outside approved Phase directory")
+        if literal.suffix != ".safetensors":
+            _fail("Authoritative LoRA must use original safetensors writer")
+        if literal.name in (self.output_name + ".safetensors",
+                            self.output_name + "-last.safetensors"):
+            # Genuine ancillary last still delegates original once, but
+            # cannot create an additional Step-N observation.
+            return self._original(*args, **kwargs)
+        step = self._step_provider()
+        if (type(step) is not int or step not in (1, 2)
+                or literal != self.output_dir /
+                   f"{self.output_name}-step{step:08d}.safetensors"):
+            _fail("Original LoRA output is not the authorized physical Step")
+        if step in self._attempted or literal.exists():
+            _fail("Original LoRA Step file already exists or was attempted")
+        metadata = args[2] if len(args) >= 3 else kwargs.get("metadata")
+        if (not isinstance(metadata, dict)
+                or str(metadata.get("ss_steps")) != str(step)
+                or type(metadata.get("ss_epoch")) is not str
+                or re.fullmatch(r"[0-9]+", metadata["ss_epoch"]) is None):
+            _fail("Original LoRA ss_steps/ss_epoch metadata is unbound")
+        self._attempted.add(step)
+        result = self._original(*args, **kwargs)
+        if not literal.is_file() or literal.is_symlink():
+            _fail("Original LoRA writer returned without a regular Step file")
+        meta = verify_lora_step_metadata(literal, expected_step=step)
+        observation = C4BObservedLoRAWrite(
+            logical_step=step, output_path=str(literal),
+            file_sha256=meta["file_sha256"],
+            ss_steps=meta["ss_steps"], ss_epoch=meta["ss_epoch"],
+            original_returned=True,
+        )
+        self._completed[step] = observation
+        return result
+
+    def completed_step_write(self, *, logical_step: int) -> C4BObservedLoRAWrite:
+        if not self._installed or self._closed:
+            _fail("LoRA writer observer is not active")
+        self._check_method()
+        observation = self._completed.get(logical_step)
+        if (observation is None or not observation.original_returned
+                or observation.logical_step != logical_step
+                or host._sha256_file(Path(observation.output_path))
+                   != observation.file_sha256):
+            _fail("No authentic original Step LoRA writer completion")
+        verify_lora_step_metadata(
+            observation.output_path, expected_step=logical_step,
+            expected_epoch=observation.ss_epoch,
+        )
+        return observation
+
+    def close(self) -> None:
+        had, original = self._original_slot
+        if had:
+            vars(self.network)["save_weights"] = original
+        else:
+            vars(self.network).pop("save_weights", None)
+        self._installed = False
+        self._closed = True
+        self._wrapper = None
 
 
 def _json_file(path: Path) -> dict[str, Any]:
@@ -264,4 +450,5 @@ def verify_original_post_save(
     }
 
 
-__all__ = ["snapshot_serialized_tensor_inventory", "verify_original_post_save"]
+__all__ = ["snapshot_serialized_tensor_inventory", "verify_original_post_save",
+           "verify_lora_step_metadata", "C4BObservedLoRAWrite", "C4BLoRAWriteObserver"]

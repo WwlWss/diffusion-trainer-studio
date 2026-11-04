@@ -202,6 +202,11 @@ class C4StepAdapter:
                 or "save_state" in vars(accelerator)):
             _fail("C4-B requires unshadowed original Accelerator.save_state")
         self._managed_save_wrapper = None
+        self._production_save = (
+            self.accelerator.device.type == "cuda"
+            and len(self.probe.params) == 526
+        )
+        self._lora_writer = None
         self._save_call_count = 0
         self._attempted_steps: set[int] = set()
         self._last_save_attempt: C4BSaveAttempt | None = None
@@ -229,6 +234,10 @@ class C4StepAdapter:
         # All other replacements and ANY Load override remain fail-closed.
         if type(self.accelerator).save_state is not self._reviewed_save_method:
             _fail("Original Accelerator.save_state implementation drift")
+        if self._production_save and self._installed:
+            if self._lora_writer is None:
+                _fail("C4-B production original LoRA Writer observer missing")
+            self._lora_writer._check_method()
         # Fixed Accelerate 1.6.0 otherwise redirects to checkpoints/checkpoint_N
         # and returns a location different from the authorized Step directory.
         if (getattr(self.accelerator.project_configuration,
@@ -255,11 +264,30 @@ class C4StepAdapter:
             return self._observed_save_state(*args, **kwargs)
         self._managed_save_wrapper = managed_save_state
         try:
+            if self._production_save:
+                from tools.sd3_full_bf16_worker_save_verifier import (
+                    C4BLoRAWriteObserver,
+                )
+                def actual_writer_step():
+                    step = self.probe._last_completed_step
+                    if type(step) is not int:
+                        _fail("Original LoRA Writer before real physical Step")
+                    self.completed_step_anchor(logical_step=step)
+                    return step
+                self._lora_writer = C4BLoRAWriteObserver(
+                    network=self.network, output_dir=self._output_dir,
+                    output_name=self._output_name,
+                    step_provider=actual_writer_step,
+                )
+                self._lora_writer.install()
             vars(self.accelerator)["save_state"] = managed_save_state
             self._installed = True
             self._check_bound_identity()
         except BaseException:
             self._restore_save_slot()
+            if self._lora_writer is not None:
+                self._lora_writer.close()
+            self._lora_writer = None
             self._installed = False
             self._managed_save_wrapper = None
             raise
@@ -463,7 +491,17 @@ class C4StepAdapter:
                 # immediate pre-save reject; no fabricated artifact is allowed.
                 if not adapter_path.is_file() or adapter_path.is_symlink():
                     _fail("C4-B production Step LoRA Adapter missing before Save")
+                if self._lora_writer is None:
+                    _fail("C4-B genuine original LoRA Writer not installed")
+                observed_write = self._lora_writer.completed_step_write(
+                    logical_step=step,
+                )
+                if (observed_write.output_path != str(adapter_path)
+                        or observed_write.file_sha256
+                           != host._sha256_file(adapter_path)):
+                    _fail("C4-B original LoRA Writer path/bytes do not match Step")
                 before = {
+                    "writer": observed_write,
                     "anchor": anchor,
                     "adapter_path": adapter_path,
                     "tensors": snapshot_serialized_tensor_inventory(
@@ -602,6 +640,9 @@ class C4StepAdapter:
         # Restore *exactly* the prior per-instance Save slot shape. Do not
         # mask a real original Save error in Trainer's outer finally.
         self._restore_save_slot()
+        if self._lora_writer is not None:
+            self._lora_writer.close()
+        self._lora_writer = None
         self._managed_save_wrapper = None
         self._pending_anchor = None
         self._installed = False
