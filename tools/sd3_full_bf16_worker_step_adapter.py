@@ -592,6 +592,7 @@ class C4StepAdapter:
         try:
             from tools.sd3_full_bf16_worker_save_verifier import (
                 verify_original_post_save,
+                verify_lora_writer_progress,
             )
             proof = verify_original_post_save(
                 network=self.network, probe=self.probe,
@@ -602,6 +603,12 @@ class C4StepAdapter:
                 before_scheduler_sha=before["scheduler"],
                 before_rng=before["rng"],
                 before_rng_expectation=before["rng_expectation"],
+            )
+            # Original LoRA ss_epoch must match the real on-disk training
+            # progress produced by the original Save hook, not merely be
+            # a plausible integer alongside correct BF16 tensor bytes.
+            verify_lora_writer_progress(
+                before["writer"], expected_epoch=proof["current_epoch"],
             )
             if self.completed_step_anchor(logical_step=step).anchor_sha256 != anchor.anchor_sha256:
                 _fail("C4-B physical Step drift after original Save")

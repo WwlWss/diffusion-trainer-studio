@@ -156,6 +156,34 @@ def verify_lora_step_metadata(
     }
 
 
+
+def verify_lora_writer_progress(
+    observation: C4BObservedLoRAWrite, *, expected_epoch: int,
+) -> dict[str, Any]:
+    """Bind a real original LoRA Writer return to actual saved train_state Epoch.
+
+    This is byte/metadata consistency only; no CPU diagnostic may become
+    a full-reference physical CUDA checkpoint or cross-process admission.
+    """
+    if (type(observation) is not C4BObservedLoRAWrite
+            or not observation.original_returned
+            or type(observation.logical_step) is not int
+            or type(expected_epoch) is not int
+            or expected_epoch < 0):
+        _fail("C4-B untrusted original LoRA Writer/Progress Epoch source")
+    details = verify_lora_step_metadata(
+        observation.output_path,
+        expected_step=observation.logical_step,
+        expected_epoch=expected_epoch,
+    )
+    if (details["file_sha256"] != observation.file_sha256
+            or details["ss_steps"] != observation.ss_steps
+            or details["ss_epoch"] != observation.ss_epoch):
+        _fail("C4-B original LoRA Writer metadata/bytes differ from Progress")
+    return details
+
+
+
 class C4BLoRAWriteObserver:
     """Observe the original per-instance LoRANetwork.save_weights once.
 
@@ -538,6 +566,7 @@ def verify_original_post_save(
     return {
         "status": "original_save_post_return_files_verified",
         "checkpoint_id": checkpoint_id,
+        "current_epoch": train["current_epoch"],
         "adapter_file_sha256": actual_adapter["file_sha256"],
         "tensor_inventory_sha256": actual_adapter["tensor_inventory_sha256"],
         "state_file_sha256": files,
@@ -546,4 +575,5 @@ def verify_original_post_save(
 
 __all__ = ["snapshot_serialized_tensor_inventory", "verify_original_post_save",
            "verify_lora_step_metadata", "C4BObservedLoRAWrite", "C4BLoRAWriteObserver",
-           "snapshot_accelerate_rng_expectation", "verify_saved_rng_payload"]
+           "snapshot_accelerate_rng_expectation", "verify_saved_rng_payload",
+           "verify_lora_writer_progress"]
