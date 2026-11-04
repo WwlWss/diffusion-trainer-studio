@@ -25,6 +25,7 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4a_host.py"
       - "tests/test_sd3_full_bf16_worker_c4a_sr1_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4b_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4b_guards_cpu.py"
       - "docs/d1-sd3c2b-c4b-save-contract.md"
       - "tools/sd3_full_bf16_worker_step_adapter.py"
       - "docs/d1-sd3c2b-c4-step-adapter-contract.md"
@@ -591,4 +592,41 @@ jobs:
               raise SystemExit(1)
           print("C4-B PINNED REAL CPU GREEN: 12 PASS, "
                 "0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
+          PY
+
+      - name: Compile C4-B-G1 independent physical CPU Save guard tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4b_guards_cpu.py
+
+      - name: C4-B-G1 exact two pinned CPU authorization RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4b_guards_cpu"
+          )
+          if suite.countTestCases() != 2:
+              raise SystemExit(
+                  f"C4-B-G1 INVALID DISCOVERY: {suite.countTestCases()} != 2"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 2 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"C4-B-G1 INVALID RUN: {result.testsRun} executed; "
+                  f"{len(result.errors)} ERROR, {len(result.skipped)} SKIP"
+              )
+          if result.failures:
+              invalid = [
+                  test.id() for test, trace in result.failures
+                  if "C4-B-G1 CONTRACT ABSENT" not in trace
+              ]
+              if invalid:
+                  raise SystemExit(
+                      "C4-B-G1 INVALID RED unrelated failure: " + repr(invalid)
+                  )
+              print(f"C4-B-G1 VALID RED: {len(result.failures)}/2 targeted "
+                    "auth-boundary FAIL, 0 ERROR/SKIP, NO CUDA")
+              raise SystemExit(1)
+          print("C4-B-G1 GREEN: 2 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
           PY
