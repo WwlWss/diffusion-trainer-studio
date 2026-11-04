@@ -1,10 +1,10 @@
-"""C4-A read-only bridge for an independently observed real physical Step.
+"""C4-A physical Step Anchor and C4-B same-instance real Save observation.
 
-C4-A does not wrap Accelerator.save_state/load_state, publish checkpoint files,
-emit checkpoint_saved/checkpoint_loaded/train_completed, certify a Resume parent,
-or release the C3PhaseEvidence.finalize() fail-closed barrier. C4-B/C/D must
-supply authentic same-process Save/Load and cross-process acceptance evidence.
-Importing this module never imports the production SD3 Trainer or Torch.
+C4-B may certify only after original Accelerator.save_state returns AND
+complete same-Step on-disk production evidence verifies. Tiny pinned CPU
+diagnostics deliberately never receive a production Step receipt.
+C4-C Resume and C4-D/finalize/worker_complete remain fail-closed.
+Importing this module never eagerly imports the production SD3 Trainer.
 """
 from __future__ import annotations
 
@@ -47,12 +47,39 @@ class C4PhysicalStepAnchor:
     anchor_sha256: str
 
 
-class C4StepAdapter:
-    """An instance-bound, fail-closed pending-save classifier (C4-A only).
+@dataclass(frozen=True)
+class C4BSaveAttempt:
+    classification: str
+    logical_step: int | None
+    original_call_count: int
+    original_returned: bool
+    qualified: bool
+    failure_reason: str | None
 
-    The only Step proof is the already-installed C3 PhysicalStepProbe. No
-    caller-provided metadata or manually emitted checkpoint event is accepted.
-    This class intentionally performs NO save/load I/O or method replacement.
+
+@dataclass(frozen=True)
+class C4BVerifiedStepSave:
+    case_id: str
+    phase: str
+    run_id: str
+    phase_id: str
+    source_commit: str
+    logical_step: int
+    anchor_sha256: str
+    checkpoint_id: str
+    adapter_path: str
+    adapter_file_sha256: str
+    tensor_inventory_sha256: str
+    state_dir: str
+    state_file_sha256: tuple[tuple[str, str], ...]
+
+
+class C4StepAdapter:
+    """Instance-bound physical Step + genuine Save, with no Resume admission.
+
+    Only the true C3 Probe establishes a physical Step. Only the pinned original
+    Accelerator.save_state can create a disk-backed Save attempt. Caller data
+    cannot mint a Step Anchor, an accepted checkpoint ID or worker_complete.
     """
 
     def __init__(
@@ -168,6 +195,16 @@ class C4StepAdapter:
         self._closed = False
         self._reserved_steps: set[int] = set()
         self._pending_anchor: C4PhysicalStepAnchor | None = None
+        self._reviewed_save_method = type(accelerator).save_state
+        self._original_save_state = getattr(accelerator, "save_state")
+        if (not callable(self._original_save_state)
+                or not callable(self._reviewed_save_method)
+                or "save_state" in vars(accelerator)):
+            _fail("C4-B requires unshadowed original Accelerator.save_state")
+        self._managed_save_wrapper = None
+        self._save_call_count = 0
+        self._last_save_attempt: C4BSaveAttempt | None = None
+        self._verified_step_records: dict[int, C4BVerifiedStepSave] = {}
 
     def _check_bound_identity(self) -> None:
         if (self.probe.accelerator is not self.accelerator
@@ -187,12 +224,19 @@ class C4StepAdapter:
         if ("export_completed_step_anchor" in vars(self.probe)
                 or type(self.probe).export_completed_step_anchor is not self._reviewed_exporter):
             _fail("Unreviewed Probe exporter override")
-        # C4-A owns no save/load patches; reject an unreviewed replacement,
-        # rather than silently delegating to an arbitrary method.
+        # Only our exact managed Save wrapper is a trusted instance override.
+        # All other replacements and ANY Load override remain fail-closed.
+        if type(self.accelerator).save_state is not self._reviewed_save_method:
+            _fail("Original Accelerator.save_state implementation drift")
         for method, (had_instance, original) in self._original_accelerator_slots.items():
-            if (method in vars(self.accelerator)) != had_instance:
+            expected_present = had_instance
+            expected_obj = original
+            if method == "save_state" and self._installed:
+                expected_present = True
+                expected_obj = self._managed_save_wrapper
+            if (method in vars(self.accelerator)) != expected_present:
                 _fail("Accelerator " + method + " was replaced after C4 binding")
-            if had_instance and vars(self.accelerator)[method] is not original:
+            if expected_present and vars(self.accelerator)[method] is not expected_obj:
                 _fail("Accelerator " + method + " instance method drift")
 
     def install(self) -> None:
@@ -201,7 +245,25 @@ class C4StepAdapter:
         if not self.probe._installed:
             _fail("C3 Probe must be installed before the Step Adapter")
         self._check_bound_identity()
-        self._installed = True
+        def managed_save_state(*args, **kwargs):
+            return self._observed_save_state(*args, **kwargs)
+        self._managed_save_wrapper = managed_save_state
+        try:
+            vars(self.accelerator)["save_state"] = managed_save_state
+            self._installed = True
+            self._check_bound_identity()
+        except BaseException:
+            self._restore_save_slot()
+            self._installed = False
+            self._managed_save_wrapper = None
+            raise
+
+    def _restore_save_slot(self) -> None:
+        had, original = self._original_accelerator_slots["save_state"]
+        if had:
+            vars(self.accelerator)["save_state"] = original
+        else:
+            vars(self.accelerator).pop("save_state", None)
 
     def _require_installed(self) -> None:
         if not self._installed or self._closed or not self.probe._installed:
@@ -314,12 +376,192 @@ class C4StepAdapter:
                 return f"authoritative_step_{step}"
         _fail("Unknown, cross-phase or unreviewed C4 Save path")
 
+    def _observed_save_state(self, *args, **kwargs):
+        """Original Save exactly once; authority only after post-return proof."""
+        self._require_installed()
+        if not args and "output_dir" not in kwargs:
+            _fail("C4-B Save requires an explicit original output_dir")
+        if args and "output_dir" in kwargs:
+            _fail("C4-B duplicate original Save output_dir")
+        location = args[0] if args else kwargs["output_dir"]
+        if not isinstance(location, (str, Path)):
+            _fail("C4-B cannot bind unreviewed output_dir type")
+        state_dir = host._real_path(str(location), name="C4-B Save directory")
+        label = "unclassified"
+        step = None
+        try:
+            # Classification must precede ORIGINAL pre-save hooks or filesystem
+            # writes: even a genuine Accelerator cannot write an unknown path.
+            if state_dir == self._output_dir / f"{self._output_name}-state":
+                label = self.classify_state_save(state_dir=state_dir)
+            else:
+                permitted = (1, 2) if self._phase == "fresh" else (2,)
+                for candidate in permitted:
+                    exact = (self._output_dir /
+                             f"{self._output_name}-step{candidate:08d}-state")
+                    if state_dir == exact:
+                        step = candidate
+                        if (self._pending_anchor is None
+                                and candidate not in self._reserved_steps):
+                            self.reserve_step_save(logical_step=candidate)
+                        label = self.classify_state_save(state_dir=state_dir)
+                        break
+                if step is None:
+                    _fail("C4-B unreviewed Step Save path before original write")
+        except BaseException as exc:
+            self._last_save_attempt = C4BSaveAttempt(
+                classification=label, logical_step=step,
+                original_call_count=0, original_returned=False,
+                qualified=False, failure_reason=type(exc).__name__,
+            )
+            raise
+
+        production = (self.accelerator.device.type == "cuda"
+                      and len(self.probe.params) == 526)
+        before = None
+        if step is not None:
+            anchor = self.completed_step_anchor(logical_step=step)
+            if anchor.anchor_sha256 != self._pending_anchor.anchor_sha256:
+                _fail("C4-B Anchor changed before original Save")
+            if production:
+                from tools.sd3_full_bf16_worker_save_verifier import (
+                    snapshot_serialized_tensor_inventory,
+                )
+                from tools.sd3_full_bf16_worker_observer import (
+                    fingerprint_state_tree, snapshot_rng_fingerprint,
+                )
+                adapter_path = (self._output_dir /
+                                f"{self._output_name}-step{step:08d}.safetensors")
+                # The production Trainer writes the external LoRA Step file
+                # BEFORE it calls accelerator.save_state. Missing file is an
+                # immediate pre-save reject; no fabricated artifact is allowed.
+                if not adapter_path.is_file() or adapter_path.is_symlink():
+                    _fail("C4-B production Step LoRA Adapter missing before Save")
+                before = {
+                    "anchor": anchor,
+                    "adapter_path": adapter_path,
+                    "tensors": snapshot_serialized_tensor_inventory(
+                        self.network, diagnostic_cpu=False,
+                    ),
+                    "optimizer": fingerprint_state_tree(
+                        self.probe.optimizer.state_dict(),
+                    ),
+                    "scheduler": fingerprint_state_tree(
+                        self.probe.scheduler.state_dict(),
+                    ),
+                    "rng": snapshot_rng_fingerprint(),
+                }
+
+        self._save_call_count += 1
+        self._last_save_attempt = C4BSaveAttempt(
+            classification=label, logical_step=step,
+            original_call_count=1, original_returned=False,
+            qualified=False, failure_reason=None,
+        )
+        try:
+            # Preserve exact original args/kwargs and its original exceptions.
+            result = self._original_save_state(*args, **kwargs)
+        except BaseException as exc:
+            self._last_save_attempt = C4BSaveAttempt(
+                classification=label, logical_step=step,
+                original_call_count=1, original_returned=False,
+                qualified=False, failure_reason=type(exc).__name__,
+            )
+            raise
+        self._last_save_attempt = C4BSaveAttempt(
+            classification=label, logical_step=step,
+            original_call_count=1, original_returned=True,
+            qualified=False, failure_reason="ancillary or CPU unqualified",
+        )
+        if step is None or not production:
+            # A genuine CPU Save can prove the original four-file operation
+            # but NEVER the full 263-target 789-tensor/9-file CUDA reference.
+            return result
+        try:
+            from tools.sd3_full_bf16_worker_save_verifier import (
+                verify_original_post_save,
+            )
+            proof = verify_original_post_save(
+                network=self.network, probe=self.probe,
+                anchor=before["anchor"], state_dir=state_dir,
+                adapter_path=before["adapter_path"],
+                before_tensors=before["tensors"],
+                before_optimizer_sha=before["optimizer"],
+                before_scheduler_sha=before["scheduler"],
+                before_rng=before["rng"],
+            )
+            if self.completed_step_anchor(logical_step=step).anchor_sha256 != anchor.anchor_sha256:
+                _fail("C4-B physical Step drift after original Save")
+            receipt = C4BVerifiedStepSave(
+                case_id=anchor.case_id, phase=anchor.phase,
+                run_id=anchor.run_id, phase_id=anchor.phase_id,
+                source_commit=anchor.source_commit, logical_step=step,
+                anchor_sha256=anchor.anchor_sha256,
+                checkpoint_id=proof["checkpoint_id"],
+                adapter_path=str(before["adapter_path"]),
+                adapter_file_sha256=proof["adapter_file_sha256"],
+                tensor_inventory_sha256=proof["tensor_inventory_sha256"],
+                state_dir=str(state_dir),
+                state_file_sha256=tuple(sorted(proof["state_file_sha256"].items())),
+            )
+            if step in self._verified_step_records:
+                _fail("C4-B duplicate verified Step")
+            self._verified_step_records[step] = receipt
+            self._pending_anchor = None
+            # Only the genuine post-return verifier may append this narrow
+            # lifecycle event. C4-C/D still gate overall phase completion.
+            self.probe._record("checkpoint_saved", details={
+                "checkpoint_id": proof["checkpoint_id"],
+                "anchor_sha256": anchor.anchor_sha256,
+            })
+            self._last_save_attempt = C4BSaveAttempt(
+                classification=label, logical_step=step,
+                original_call_count=1, original_returned=True,
+                qualified=True, failure_reason=None,
+            )
+        except BaseException as exc:
+            self._last_save_attempt = C4BSaveAttempt(
+                classification=label, logical_step=step,
+                original_call_count=1, original_returned=True,
+                qualified=False, failure_reason=type(exc).__name__,
+            )
+            raise
+        return result
+
+    def save_attempt_observation(self) -> C4BSaveAttempt:
+        if self._last_save_attempt is None:
+            _fail("No original Accelerator.save_state attempt was observed")
+        return self._last_save_attempt
+
+    def verified_step_save(self, *, logical_step: int) -> C4BVerifiedStepSave:
+        """Read-only authenticated receipt; late file tamper invalidates it."""
+        if type(logical_step) is not int:
+            _fail("Invalid verified Step request")
+        receipt = self._verified_step_records.get(logical_step)
+        if receipt is None:
+            _fail("C4-B unqualified: no genuine post-return verified Step Save")
+        state = Path(receipt.state_dir)
+        now = host._checkpoint_file_inventory(state)
+        if tuple(sorted(now.items())) != receipt.state_file_sha256:
+            _fail("Verified state-file inventory drifted after Save")
+        adapter_file = Path(receipt.adapter_path)
+        if (not adapter_file.is_file()
+                or host._sha256_file(adapter_file)
+                != receipt.adapter_file_sha256):
+            _fail("Verified Step Adapter file drifted after Save")
+        return receipt
+
     def close(self) -> None:
-        # No Save/Load hooks are installed until C4-B/C. In particular this
-        # method never replaces accelerator methods or publishes success.
+        # Restore *exactly* the prior per-instance Save slot shape. Do not
+        # mask a real original Save error in Trainer's outer finally.
+        self._restore_save_slot()
+        self._managed_save_wrapper = None
         self._pending_anchor = None
         self._installed = False
         self._closed = True
 
 
-__all__ = ["C4PhysicalStepAnchor", "C4StepAdapter"]
+__all__ = [
+    "C4PhysicalStepAnchor", "C4BSaveAttempt",
+    "C4BVerifiedStepSave", "C4StepAdapter",
+]
