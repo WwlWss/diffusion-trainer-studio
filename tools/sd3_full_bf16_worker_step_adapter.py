@@ -480,6 +480,7 @@ class C4StepAdapter:
             if production:
                 from tools.sd3_full_bf16_worker_save_verifier import (
                     snapshot_serialized_tensor_inventory,
+                    snapshot_accelerate_rng_expectation,
                 )
                 from tools.sd3_full_bf16_worker_observer import (
                     fingerprint_state_tree, snapshot_rng_fingerprint,
@@ -514,6 +515,9 @@ class C4StepAdapter:
                         self.probe.scheduler.state_dict(),
                     ),
                     "rng": snapshot_rng_fingerprint(),
+                    "rng_expectation": snapshot_accelerate_rng_expectation(
+                        self.accelerator
+                    ),
                 }
 
         if step is not None:
@@ -571,6 +575,7 @@ class C4StepAdapter:
                 before_optimizer_sha=before["optimizer"],
                 before_scheduler_sha=before["scheduler"],
                 before_rng=before["rng"],
+                before_rng_expectation=before["rng_expectation"],
             )
             if self.completed_step_anchor(logical_step=step).anchor_sha256 != anchor.anchor_sha256:
                 _fail("C4-B physical Step drift after original Save")

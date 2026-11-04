@@ -297,6 +297,90 @@ class C4BLoRAWriteObserver:
         self._wrapper = None
 
 
+def snapshot_accelerate_rng_expectation(accelerator: Any) -> dict[str, Any]:
+    """Capture the actual pinned Accelerate 1.6.0 Save RNG source before I/O.
+
+    Accelerator.step is its INTERNAL counter, not necessarily C3 logical_step.
+    Only typed digests are returned; there are no long-lived GPU RNG clones.
+    """
+    import random
+    import numpy as np
+    import torch
+    from tools.sd3_full_bf16_worker_observer import fingerprint_state_tree
+
+    step = accelerator.step
+    if type(step) is not int or step < 0:
+        _fail("Accelerate internal RNG Step is not an integer")
+    states = {
+        "random_state": random.getstate(),
+        "numpy_random_seed": np.random.get_state(),
+        "torch_manual_seed": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        states["torch_cuda_manual_seed"] = torch.cuda.get_rng_state_all()
+    return {
+        "step": step,
+        "field_sha256": {
+            key: fingerprint_state_tree(value)
+            for key, value in states.items()
+        },
+    }
+
+
+def verify_saved_rng_payload(
+    path: Path | str, *, expected: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate actual original Accelerate RNG file with restricted loading.
+
+    Never call this on untrusted Host inputs. The caller must have observed
+    the original Save of this exact path in its own active process. NumPy's
+    small pinned 1.x/2.x array pickle helpers are allowlisted in a scoped
+    weights-only loader, never as global unsafe pickle permissions.
+    """
+    import numpy as np
+    import torch
+    from tools.sd3_full_bf16_worker_observer import fingerprint_state_tree
+
+    file = Path(path)
+    if (not file.is_file() or file.is_symlink()
+            or file.stat().st_size <= 0 or file.stat().st_size > 16 * 1024 * 1024):
+        _fail("Missing/linked/oversized original RNG state file")
+    if (not isinstance(expected, Mapping)
+            or type(expected.get("step")) is not int
+            or not isinstance(expected.get("field_sha256"), Mapping)):
+        _fail("Original Accelerate RNG expectation is not typed")
+    try:
+        # NumPy's RNG state is a tuple including a uint32 ndarray. A plain
+        # torch.load(weights_only=True) rejects its safe NumPy reconstruction
+        # objects, so allow exactly those types for this trusted in-process
+        # original Save output, NEVER a general Python class loader.
+        multiarray = getattr(np, "_core", np.core).multiarray
+        allowlist = [
+            multiarray._reconstruct,
+            np.ndarray,
+            np.dtype,
+            type(np.dtype("uint32")),
+        ]
+        with torch.serialization.safe_globals(allowlist):
+            payload = torch.load(
+                str(file), map_location="cpu", weights_only=True,
+            )
+    except Exception as exc:
+        _fail("Cannot safely decode original RNG payload (weights_only): "
+              + type(exc).__name__)
+    required_fields = {"step", *expected["field_sha256"]}
+    if not isinstance(payload, dict) or set(payload) != required_fields:
+        _fail("Actual RNG payload missing/extra Accelerate state fields")
+    if type(payload["step"]) is not int or payload["step"] != expected["step"]:
+        _fail("Actual saved Accelerate internal RNG Step mismatch")
+    for key in sorted(required_fields - {"step"}):
+        digest = expected["field_sha256"][key]
+        host._require_sha(digest, name="expected original RNG " + key)
+        if fingerprint_state_tree(payload[key]) != digest:
+            _fail("Actual original RNG payload state drift: " + key)
+    return {"step": payload["step"], "file_sha256": host._sha256_file(file)}
+
+
 def _json_file(path: Path) -> dict[str, Any]:
     payload = host._read_json(path)
     if not isinstance(payload, dict):
@@ -309,6 +393,7 @@ def verify_original_post_save(
     adapter_path: Path, before_tensors: Mapping[str, Any],
     before_optimizer_sha: str, before_scheduler_sha: str,
     before_rng: Mapping[str, str],
+    before_rng_expectation: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Validate exact trusted production post-save files and same-Step bytes.
 
@@ -351,6 +436,13 @@ def verify_original_post_save(
     for key in files:
         if (state_dir / key).stat().st_size <= 0:
             _fail("Empty actual checkpoint state file: " + key)
+    verified_rng = verify_saved_rng_payload(
+        state_dir / "random_states_0.pkl", expected=before_rng_expectation,
+    )
+    if verified_rng["file_sha256"] != files["random_states_0.pkl"]:
+        _fail("Original RNG file drifted during the same Save verification")
+    if snapshot_accelerate_rng_expectation(probe.accelerator) != dict(before_rng_expectation):
+        _fail("Original Accelerate Step/RNG expectation drift after Save")
 
     adapter_sha = host._sha256_file(adapter_path)
     actual_adapter = host.verify_b0_reference_adapter(
@@ -451,4 +543,5 @@ def verify_original_post_save(
 
 
 __all__ = ["snapshot_serialized_tensor_inventory", "verify_original_post_save",
-           "verify_lora_step_metadata", "C4BObservedLoRAWrite", "C4BLoRAWriteObserver"]
+           "verify_lora_step_metadata", "C4BObservedLoRAWrite", "C4BLoRAWriteObserver",
+           "snapshot_accelerate_rng_expectation", "verify_saved_rng_payload"]
