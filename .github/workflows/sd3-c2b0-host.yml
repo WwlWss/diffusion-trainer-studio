@@ -30,6 +30,10 @@ on:
       - "tests/test_sd3_full_bf16_worker_c4b_fsr_epoch_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4c_cpu.py"
       - "tests/test_sd3_full_bf16_worker_c4c_c1_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_c2_cpu.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_c2_host.py"
+      - "docs/d1-sd3c2b-c4c-c2-parent-admission-contract.md"
+      - "tools/sd3_full_bf16_worker_parent_admission.py"
       - "tests/test_sd3_full_bf16_worker_c4c_host.py"
       - "docs/d1-sd3c2b-c4c-load-resume-contract.md"
       - "tools/sd3_full_bf16_worker_resume_verifier.py"
@@ -152,6 +156,50 @@ jobs:
                   f"xpass={len(result.unexpectedSuccesses)}"
               )
           print("C4-A HOST METADATA BASELINE: 8 PASS / 0 ERROR / 0 SKIP; NOT CUDA")
+          PY
+
+      - name: Compile C4-C2 independent Runner-parent Host tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_c2_host.py
+
+      - name: C4-C2 Host exact 10 independent parent admission RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_c2_host"
+          )
+          n = suite.countTestCases()
+          if n != 10:
+              raise SystemExit(f"C4-C2 HOST INVALID DISCOVERY: {n} != 10")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 10 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"C4-C2 HOST INVALID RUN: run={result.testsRun},"
+                  f" ERROR={len(result.errors)}, SKIP={len(result.skipped)},"
+                  f" xfail={len(result.expectedFailures)},"
+                  f" xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2 HOST CONTRACT ABSENT" not in trace
+              ]
+              if unrelated:
+                  raise SystemExit(
+                      "C4-C2 HOST INVALID RED unrelated: " + repr(unrelated)
+                  )
+              print(
+                  f"C4-C2 HOST VALID RED: {len(result.failures)} targeted FAIL,"
+                  f" {10-len(result.failures)} baseline PASS;"
+                  " 0 ERROR/SKIP/xfail/xpass; NOT CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "C4-C2 HOST GREEN: 10 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass;"
+              " NOT independently CUDA-qualified"
+          )
           PY
 
       - name: Compile C4-C pure Host loaded-parent timeline RED
@@ -764,6 +812,50 @@ jobs:
               print(f"C4-C1 VALID RED: {len(result.failures)} targeted FAIL, {10-len(result.failures)} baseline PASS; 0 ERROR/SKIP")
               raise SystemExit(1)
           print("C4-C1 PINNED CPU GREEN: 10 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; NO CUDA")
+          PY
+
+      - name: Compile C4-C2 independent Fresh-parent pinned CPU tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_c2_cpu.py
+
+      - name: C4-C2 exact 12 Runner-authorized Load boundary CPU RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_c2_cpu"
+          )
+          n = suite.countTestCases()
+          if n != 12:
+              raise SystemExit(f"C4-C2 CPU INVALID DISCOVERY: {n} != 12")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"C4-C2 CPU INVALID RUN: run={result.testsRun},"
+                  f" ERROR={len(result.errors)}, SKIP={len(result.skipped)},"
+                  f" xfail={len(result.expectedFailures)},"
+                  f" xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2 CONTRACT ABSENT" not in trace
+              ]
+              if unrelated:
+                  raise SystemExit(
+                      "C4-C2 CPU INVALID RED unrelated: " + repr(unrelated)
+                  )
+              print(
+                  f"C4-C2 CPU VALID RED: {len(result.failures)} targeted FAIL,"
+                  f" {12-len(result.failures)} baseline PASS;"
+                  " 0 ERROR/SKIP/xfail/xpass; NOT CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "C4-C2 PINNED CPU GREEN: 12 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass;"
+              " NOT full production Load"
+          )
           PY
 
       - name: Compile C4-C real pinned CPU Load/Resume RED
