@@ -58,6 +58,18 @@ class C4BSaveAttempt:
 
 
 @dataclass(frozen=True)
+class C4CLoadAttempt:
+    """Observed original Load attempt; NOT a verified Resume-parent receipt."""
+
+    classification: str
+    requested_parent: str | None
+    original_call_count: int
+    original_returned: bool
+    qualified: bool
+    failure_reason: str | None
+
+
+@dataclass(frozen=True)
 class C4BVerifiedStepSave:
     case_id: str
     phase: str
@@ -218,6 +230,27 @@ class C4StepAdapter:
                 or not callable(self._reviewed_save_method)
                 or "save_state" in vars(accelerator)):
             _fail("C4-B requires unshadowed original Accelerator.save_state")
+        # Pin the class-owned Accelerate 1.6.0 Load method independently
+        # of the Save method; only this exact prepared instance may be wrapped.
+        self._reviewed_load_method = type(accelerator).load_state
+        self._original_load_state = getattr(accelerator, "load_state")
+        if (not callable(self._reviewed_load_method)
+                or not callable(self._original_load_state)
+                or "load_state" in vars(accelerator)):
+            _fail("C4-C1 requires unshadowed original Accelerator.load_state")
+        self._managed_load_wrapper = None
+        self._load_attempt_consumed = False
+        self._last_load_attempt: C4CLoadAttempt | None = None
+        self._load_original_calls = 0
+        # This path is a DECLARATION only; no Host-accepted Fresh parent
+        # authority exists until C4-C2. Never delegate original Load merely
+        # because the declared path or Ticket matches.
+        declared_parent = manifest.get("fresh_checkpoint_dir")
+        self._declared_resume_parent = (
+            host._real_path(
+                str(declared_parent), name="C4-C1 declared Fresh Step-1 parent",
+            ) if isinstance(declared_parent, str) and declared_parent else None
+        )
         self._managed_save_wrapper = None
         self._production_save = (
             self.accelerator.device.type == "cuda"
@@ -254,10 +287,12 @@ class C4StepAdapter:
         if ("_record" in vars(self.probe)
                 or type(self.probe)._record is not self._reviewed_recorder):
             _fail("Unreviewed Probe checkpoint event recorder override")
-        # Only our exact managed Save wrapper is a trusted instance override.
-        # All other replacements and ANY Load override remain fail-closed.
+        # Only exact Adapter-owned Save+Load wrappers are permitted instance
+        # overrides. The class-defined original of each is frozen separately.
         if type(self.accelerator).save_state is not self._reviewed_save_method:
             _fail("Original Accelerator.save_state implementation drift")
+        if type(self.accelerator).load_state is not self._reviewed_load_method:
+            _fail("C4-C1 original Accelerator.load_state implementation drift")
         if self._production_save and self._installed:
             if self._lora_writer is None:
                 _fail("C4-B production original LoRA Writer observer missing")
@@ -270,9 +305,12 @@ class C4StepAdapter:
         for method, (had_instance, original) in self._original_accelerator_slots.items():
             expected_present = had_instance
             expected_obj = original
-            if method == "save_state" and self._installed:
+            if self._installed and method in ("save_state", "load_state"):
                 expected_present = True
-                expected_obj = self._managed_save_wrapper
+                expected_obj = (
+                    self._managed_save_wrapper if method == "save_state"
+                    else self._managed_load_wrapper
+                )
             if (method in vars(self.accelerator)) != expected_present:
                 _fail("Accelerator " + method + " was replaced after C4 binding")
             if expected_present and vars(self.accelerator)[method] is not expected_obj:
@@ -286,7 +324,10 @@ class C4StepAdapter:
         self._check_bound_identity()
         def managed_save_state(*args, **kwargs):
             return self._observed_save_state(*args, **kwargs)
+        def managed_load_state(*args, **kwargs):
+            return self._observed_load_state(*args, **kwargs)
         self._managed_save_wrapper = managed_save_state
+        self._managed_load_wrapper = managed_load_state
         try:
             if self._production_save:
                 from tools.sd3_full_bf16_worker_save_verifier import (
@@ -305,15 +346,18 @@ class C4StepAdapter:
                 )
                 self._lora_writer.install()
             vars(self.accelerator)["save_state"] = managed_save_state
+            vars(self.accelerator)["load_state"] = managed_load_state
             self._installed = True
             self._check_bound_identity()
         except BaseException:
             self._restore_save_slot()
+            self._restore_load_slot()
             if self._lora_writer is not None:
                 self._lora_writer.close()
             self._lora_writer = None
             self._installed = False
             self._managed_save_wrapper = None
+            self._managed_load_wrapper = None
             raise
 
     def _restore_save_slot(self) -> None:
@@ -322,6 +366,13 @@ class C4StepAdapter:
             vars(self.accelerator)["save_state"] = original
         else:
             vars(self.accelerator).pop("save_state", None)
+
+    def _restore_load_slot(self) -> None:
+        had, original = self._original_accelerator_slots["load_state"]
+        if had:
+            vars(self.accelerator)["load_state"] = original
+        else:
+            vars(self.accelerator).pop("load_state", None)
 
     def _require_installed(self) -> None:
         if not self._installed or self._closed or not self.probe._installed:
@@ -701,6 +752,55 @@ class C4StepAdapter:
                 _fail("C4-B checkpoint event prefix is not source-bound")
         return len(events), host._json_sha256(events[:len(events)])
 
+    def _observed_load_state(self, *args, **kwargs):
+        """C4-C1: intercept the real prepared Accelerator before ANY Load hook.
+
+        C4-C2 must first supply independently accepted Fresh-parent proof.
+        In this stage there is deliberately NO authorized Load delegation:
+        matching a manifest path or a caller-provided checkpoint ID is not
+        sufficient to call the pinned original or publish Resume evidence.
+        """
+        self._require_installed()
+        if self._load_attempt_consumed:
+            _fail("C4-C1 repeated Load attempt prohibited, even after rejection")
+        self._load_attempt_consumed = True
+        parent = None
+        classification = "rejected_before_original"
+        try:
+            if self._phase != "resume":
+                _fail("C4-C1 Fresh Phase cannot call Accelerator.load_state")
+            # The fixed Trainer calls the original with exactly one explicit
+            # path; no automatic naming or arbitrary load kwargs are allowed.
+            if (len(args) != 1 or kwargs
+                    or not isinstance(args[0], (str, Path))):
+                _fail("C4-C1 Load requires one explicit original input_dir")
+            supplied = Path(args[0]).expanduser().absolute()
+            if supplied != supplied.resolve(strict=False) or supplied.is_symlink():
+                _fail("C4-C1 linked/noncanonical Fresh parent before original Load")
+            parent = str(host._real_path(
+                str(supplied), name="C4-C1 original Load source",
+            ))
+            if (self._declared_resume_parent is None
+                    or supplied != self._declared_resume_parent):
+                _fail("C4-C1 Load parent differs from frozen Fresh declaration")
+            # C4-C2 must independently bind a HOST-ACCEPTED source/checkpoint
+            # ID and all actual saved bytes before any production prehook.
+            # No publicly writable flag/receipt can pass this authorization.
+            _fail("C4-C2 accepted Fresh Step-1 proof required before Load")
+        except BaseException as exc:
+            self._last_load_attempt = C4CLoadAttempt(
+                classification=classification, requested_parent=parent,
+                original_call_count=0, original_returned=False,
+                qualified=False, failure_reason=type(exc).__name__,
+            )
+            raise
+
+    def resume_load_observation(self) -> C4CLoadAttempt:
+        """Read-only failed preflight until C4-C2 original Load authority."""
+        if self._last_load_attempt is None:
+            _fail("No original Accelerator.load_state attempt was observed")
+        return self._last_load_attempt
+
     def save_attempt_observation(self) -> C4BSaveAttempt:
         if self._last_save_attempt is None:
             _fail("No original Accelerator.save_state attempt was observed")
@@ -789,16 +889,18 @@ class C4StepAdapter:
         # Restore *exactly* the prior per-instance Save slot shape. Do not
         # mask a real original Save error in Trainer's outer finally.
         self._restore_save_slot()
+        self._restore_load_slot()
         if self._lora_writer is not None:
             self._lora_writer.close()
         self._lora_writer = None
         self._managed_save_wrapper = None
+        self._managed_load_wrapper = None
         self._pending_anchor = None
         self._installed = False
         self._closed = True
 
 
 __all__ = [
-    "C4PhysicalStepAnchor", "C4BSaveAttempt",
+    "C4PhysicalStepAnchor", "C4BSaveAttempt", "C4CLoadAttempt",
     "C4BVerifiedStepSave", "C4StepAdapter",
 ]
