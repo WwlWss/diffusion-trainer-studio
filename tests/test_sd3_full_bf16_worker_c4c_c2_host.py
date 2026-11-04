@@ -54,8 +54,9 @@ def _verifier(test):
     return verify
 
 
-def _reject(test, claim):
-    verify = _verifier(test)
+def _reject(test, claim, *, verify=None):
+    if verify is None:
+        verify = _verifier(test)
     try:
         verify(
             parent_admission=claim,
@@ -89,13 +90,14 @@ class C4C2IndependentParentHostRED(unittest.TestCase):
         ))
 
     def test_h204_foreign_case_source_or_step_cannot_admit_parent(self):
+        verify = _verifier(self)
         for changed in (
             {"case_id": R1},
             {"source_commit": "b" * 40},
             {"logical_step": 2},
         ):
             with self.subTest(changed=changed):
-                _reject(self, _pretend_acceptance(**changed))
+                _reject(self, _pretend_acceptance(**changed), verify=verify)
 
     def test_h205_matching_worker_ticket_id_does_not_substitute_runner(self):
         _reject(self, _pretend_acceptance(
@@ -147,13 +149,14 @@ class C4C2IndependentParentHostRED(unittest.TestCase):
         self.assertNotIn("parent_admission_issued", summary)
 
     def test_h210_resume_phase_or_wrong_manifest_self_report_is_not_fresh(self):
+        verify = _verifier(self)
         for changed in (
             {"phase": "resume"},
             {"case_manifest_sha256": "0" * 64},
             {"input_identity_sha256": "0" * 64},
         ):
             with self.subTest(changed=changed):
-                _reject(self, _pretend_acceptance(**changed))
+                _reject(self, _pretend_acceptance(**changed), verify=verify)
 
 
 if __name__ == "__main__":

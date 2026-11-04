@@ -63,8 +63,9 @@ def _binder(test, adapter):
     return binder
 
 
-def _reject_untrusted(test, adapter, report):
-    binder = _binder(test, adapter)
+def _reject_untrusted(test, adapter, report, *, binder=None):
+    if binder is None:
+        binder = _binder(test, adapter)
     try:
         binder(parent_admission=report)
     except ValueError:
@@ -97,12 +98,13 @@ class C4C2RunnerParentAuthorityCpuRED(unittest.TestCase):
     def test_c204_foreign_case_or_source_cannot_bind_fresh_parent(self):
         with tempfile.TemporaryDirectory() as td:
             _bundle, adapter = _resume_adapter(self, Path(td))
+            binder = _binder(self, adapter)
             for wrong in (
                 _untrusted_report(case_id="r2-muon-adamw-fallback-accum2"),
                 _untrusted_report(source_commit=_FOREIGN_SOURCE),
             ):
                 with self.subTest(case=wrong["case_id"], sha=wrong["source_commit"]):
-                    _reject_untrusted(self, adapter, wrong)
+                    _reject_untrusted(self, adapter, wrong, binder=binder)
 
     def test_c205_checkpoint_id_from_ticket_and_progress_is_not_runner_proof(self):
         with tempfile.TemporaryDirectory() as td:
