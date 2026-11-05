@@ -26,7 +26,7 @@ def _reject(reason: str) -> None:
 
 
 def _safe_path(raw: Path | str) -> Path:
-    if type(raw) not in (Path, str):
+    if not isinstance(raw, (Path, str)):
         _reject("ledger path must be a Path or string")
     p = Path(raw)
     if not p.is_absolute() or any(part in (".", "..") for part in p.parts):
