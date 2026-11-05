@@ -1,0 +1,107 @@
+name: SD3 C4-C2 P1-B2-C-B OS-protected Runner Host RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-os-protected-runner-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_host.py"
+      - "tools/sd3_full_bf16_runner_os_boundary.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-os-protected-runner-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_host.py"
+      - "tools/sd3_full_bf16_runner_os_boundary.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  b2cb-host:
+    name: P1-B2-C-B protected OS boundary Host RED (NOT authority)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR source without Gitlink submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile OS-boundary Host Tests-only RED
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2cb_host.py
+      - name: B2-C-B exact 12 Host tests-only RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2cb_host"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(
+                  f"B2-C-B INVALID DISCOVERY: {discovered} != 12"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B2-C-B INVALID RUN: run={result.testsRun} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_o304_fake_principal_and_pid_must_not_establish_os_separation",
+              "test_o305_worker_selected_executable_and_hash_not_trusted",
+              "test_o306_inherited_launch_environment_cannot_provision_service",
+              "test_o307_named_pipe_or_unix_path_without_real_handle_not_server_proof",
+              "test_o308_kernel_peer_required_and_same_user_socket_not_accepted",
+              "test_o309_worker_supplied_private_bytes_or_key_path_not_service_key",
+              "test_o310_worker_selected_public_ed25519_key_not_pinned_root",
+              "test_o311_worker_sqlite_ledger_does_not_confer_service_authority",
+              "test_o312_unprovisioned_os_probe_must_not_claim_privileged_service",
+          }
+          actual = {
+              case.id().rsplit(".", 1)[-1] for case, _ in result.failures
+          }
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B2-C-B OS BOUNDARY CONTRACT ABSENT"
+                  not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"B2-C-B INVALID HOST RED: actual={sorted(actual)}, "
+                      f"expected={sorted(expected)}, unrelated={unrelated}"
+                  )
+              print(
+                  "B2-C-B VALID HOST TESTS-ONLY RED: 9 targeted FAIL + "
+                  "3 baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
+                  "NOT a protected Runner service, original Load or CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "B2-C-B SCOPED HOST NEGATIVE GREEN: 12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "Layer O protected OS integration NOT qualified"
+          )
+          PY
