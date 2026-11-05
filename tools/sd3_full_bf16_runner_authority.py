@@ -18,10 +18,8 @@ from __future__ import annotations
 from typing import Any, NoReturn
 
 
-# Constant status is intentionally independent of environment, CLI options,
-# Python module globals, Ticket, manifest, Worker configuration and file paths.
 # No key generation, signing backend, filesystem or credential loading exists.
-_UNPROVISIONED_STATUS = "unprovisioned"
+# The diagnostic is not proof of authority and must never be an admission gate.
 
 
 def _deny_unprovisioned(operation: str) -> NoReturn:
@@ -89,9 +87,9 @@ def inspect_runner_credential_acl(
 
 
 def probe_runner_provisioning_security() -> dict[str, Any]:
-    """Read-only unprovisioned diagnostic. NOT a signed authority receipt."""
+    """Read-only untrusted diagnostic. Never a signing authorization receipt."""
     return {
-        "status": _UNPROVISIONED_STATUS,
+        "status": "unprovisioned",
         "may_issue": False,
         "physical_cuda_qualified": False,
     }
