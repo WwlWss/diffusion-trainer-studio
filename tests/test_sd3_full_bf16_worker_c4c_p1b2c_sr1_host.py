@@ -162,16 +162,17 @@ class C4C2P1B2CSr1Host(unittest.TestCase):
             / "docs/d1-sd3c2b-c4c-p1b2c-protected-issuer-contract.md"
         )
         document = path.read_text(encoding="utf-8")
-        for anchor in (
+        required_anchors = (
             "**Current stage:** P1-B2-C-A-SR1 scoped Host fail-closed",
             "## Historical P1-B2-C Tests-only RED baseline",
             "## P1-B2-C-B: protected executable and import integrity",
-        ):
-            with self.subTest(anchor=anchor):
-                self.assertIn(
-                    anchor, document,
-                    f"{_MISSING}: current contract lacks {anchor}",
-                )
+        )
+        missing = [anchor for anchor in required_anchors if anchor not in document]
+        # One causal document defect must yield exactly one targeted FAIL.
+        self.assertFalse(
+            missing,
+            f"{_MISSING}: current contract missing {missing!r}",
+        )
 
 
 if __name__ == "__main__":
