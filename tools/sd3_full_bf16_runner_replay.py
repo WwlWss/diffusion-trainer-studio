@@ -28,13 +28,29 @@ def _reject(reason: str) -> None:
 def _safe_path(raw: Path | str) -> Path:
     if not isinstance(raw, (Path, str)):
         _reject("ledger path must be a Path or string")
+    text = str(raw)
+    # Path.parts can normalize explicit "." aliases before inspection.
+    if any(part in (".", "..") for part in re.split(r"[/\\]", text)):
+        _reject("ledger path contains relative alias component")
     p = Path(raw)
-    if not p.is_absolute() or any(part in (".", "..") for part in p.parts):
-        _reject("ledger path not absolute/canonical")
-    if p.resolve(strict=False) != p:
-        _reject("ledger path has symlink/reparse/alias components")
+    if not p.is_absolute():
+        _reject("ledger path not absolute")
     if not p.parent.is_dir():
         _reject("ledger parent missing")
+    # Windows Path.resolve() may change a legal volume/8.3 spelling;
+    # compare actual filesystem reparse-point attributes instead.
+    for component in (p, *p.parents):
+        try:
+            info = component.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(info.st_mode) or (
+            getattr(info, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        ):
+            _reject("ledger path has a symlink/junction/reparse component")
+    if os.name != "nt" and p.resolve(strict=False) != p:
+        _reject("ledger path has noncanonical alias components")
     if p.exists():
         info = p.lstat()
         if not stat.S_ISREG(info.st_mode):
