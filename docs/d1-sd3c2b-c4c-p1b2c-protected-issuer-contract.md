@@ -122,7 +122,7 @@ provisioner must audit and lock the *complete* executable/import trust chain.
 1. **Protected installation origin:** Run an explicitly pinned, reviewed Python
    interpreter and Runner code package from a service/controller-owned,
    Worker-nonwritable deployment root, outside repository checkout and
-   \`work_root\`. Verify real filesystem ownership/ACL for every component
+   `work_root`. Verify real filesystem ownership/ACL for every component
    and ancestor directory, interpreter binary, entrypoint, modules and
    dependency directory, and reject symlink/junction/reparse path substitution.
    Service updates and rotation require independently authenticated deployment;
@@ -133,21 +133,21 @@ provisioner must audit and lock the *complete* executable/import trust chain.
    native extension modules and dependency digests against independently
    provisioned manifests. Treat a matching package version string alone
    as insufficient. Validate effective executable and imported file paths
-   after startup, including \`.pth\` execution, \`sitecustomize\`,
-   \`usercustomize\` and native/extension-library loads. The effective module
+   after startup, including `.pth` execution, `sitecustomize`,
+   `usercustomize` and native/extension-library loads. The effective module
    origin must not be under a Worker-editable install or a writable site-packages.
 3. **Sanitized launch:** The service manager, not a Worker child or its shell,
    constructs the command, effective UID/token, cwd, env and import search
-   paths. Reject Worker-controlled \`PYTHONPATH\`, \`PYTHONHOME\`,
-   \`PYTHONUSERBASE\`, \`PYTHONSTARTUP\`, user-site, inherited shell hooks,
-   arbitrary \`sys.path\` or \`PATH\` additions, and unreviewed plugin loaders.
-   Assess Python \`-I\` / isolated mode as defense in depth, but verify actual
+   paths. Reject Worker-controlled `PYTHONPATH`, `PYTHONHOME`,
+   `PYTHONUSERBASE`, `PYTHONSTARTUP`, user-site, inherited shell hooks,
+   arbitrary `sys.path` or `PATH` additions, and unreviewed plugin loaders.
+   Assess Python `-I` / isolated mode as defense in depth, but verify actual
    import resolution and required packages instead of treating the flag as
    independent proof. Worker-selected cwd must never become an import or
    dynamic-loader root.
 4. **Native code / cross-platform boundary:** On Linux, independently verify
    actual service UID/GID and directory modes plus dynamic loader variables
-   (including \`LD_LIBRARY_PATH\` and \`LD_PRELOAD\`) are not Worker-supplied.
+   (including `LD_LIBRARY_PATH` and `LD_PRELOAD`) are not Worker-supplied.
    On Windows, separately verify the service token/SID, executable and parent
    DACL, reparse points, safe DLL search order, known DLL/native extension
    paths and protected service configuration. A self-reported ACL dict,
@@ -155,8 +155,8 @@ provisioner must audit and lock the *complete* executable/import trust chain.
    cannot qualify either platform.
 5. **Actual protected integration acceptance (Linux and Windows separately):**
    From the unprivileged Worker account, attempt to replace the service
-   entrypoint, dependency, \`sitecustomize\`, \`.pth\` payload, a shadow
-   \`cryptography\`/standard library module, cwd and dynamic library.
+   entrypoint, dependency, `sitecustomize`, `.pth` payload, a shadow
+   `cryptography`/standard library module, cwd and dynamic library.
    Confirm the legitimate service refuses contaminated startup or continues
    to use the independently provisioned immutable originals. Independently
    verify the Worker cannot read the private key, modify the pinned verifier
@@ -169,13 +169,13 @@ provisioner must audit and lock the *complete* executable/import trust chain.
    executable/IPC/key does not permit signing Worker-supplied maps. A
    Runner-origin, independently witnessed and protected original physical
    Fresh Step-1 capability is required by P1-C before provisional issuance.
-   Original \`Accelerator.load_state\` and any qualifying
-   \`checkpoint_loaded\`/\`worker_complete\` event remain **HOLD**.
+   Original `Accelerator.load_state` and any qualifying
+   `checkpoint_loaded`/`worker_complete` event remain **HOLD**.
 
 **SR1 review resolution:** F1 adds no-arg/default/alternate-arg, untrusted
 object, secret-leak, I/O-side-effect and poisoned-environment negative Host
-coverage in \`tests/test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host.py\`.
-F3 makes the probe's \`"unprovisioned"\` value literal and diagnostic-only;
+coverage in `tests/test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host.py`.
+F3 makes the probe's `"unprovisioned"` value literal and diagnostic-only;
 this is not Python module integrity or a signed receipt. The SR1 CI gate
 counts exactly eight Host tests and permits only its frozen two-defect
 Tests-only RED parent or an all-eight PASS scoped GREEN. Real protected
