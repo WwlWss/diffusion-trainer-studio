@@ -1,0 +1,77 @@
+name: SD3 C4-C2 B2-B Windows A5 native impersonation-level Strict RED/GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-windows-strict.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_strict.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host.py"
+      - "tools/sd3_full_bf16_runner_windows_boundary.py"
+      - "tools/sd3_full_bf16_runner_windows_service.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-windows-strict.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_strict.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host.py"
+      - "tools/sd3_full_bf16_runner_windows_boundary.py"
+      - "tools/sd3_full_bf16_runner_windows_service.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  token-qos:
+    name: B2-B A5 authentic TokenImpersonationLevel and RevertToSelf (NO CUDA)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile native Windows A5 tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_strict.py
+      - name: A5 exactly 4 strict Windows cases targeted RED to GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2cb_windows_strict"
+          )
+          found = suite.countTestCases()
+          if found != 4:
+              raise SystemExit(f"B2-B A5 INVALID DISCOVERY: {found} != 4")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 4 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B2-B A5 INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              if (len(result.failures) != 1
+                      or result.failures[0][0].id().rsplit(".", 1)[-1]
+                      != "test_s201_client_security_identification_level_must_not_pass"
+                      or "B2-B-A5 LOW_IMPERSONATION_LEVEL MUST BE REJECTED"
+                      not in result.failures[0][1]):
+                  raise SystemExit("B2-B A5 INVALID TARGETED RED")
+              print(
+                  "B2-B A5 VALID WINDOWS STRICT RED: 1 targeted FAIL "
+                  "+ 3 baseline PASS; 0 ERROR/SKIP/xfail/xpass"
+              )
+              raise SystemExit(1)
+          print(
+              "B2-B A5 WINDOWS SCOPED HOST STRICT GREEN: 4/4 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; NOT protected OS Layer O/CUDA"
+          )
+          PY
