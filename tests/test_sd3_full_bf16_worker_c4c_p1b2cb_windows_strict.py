@@ -33,26 +33,7 @@ _MARKER = "B2-B-A5 LOW_IMPERSONATION_LEVEL MUST BE REJECTED"
 
 
 class C4C2B2BWindowsStrict(unittest.TestCase):
-    def test_s201_client_security_identification_level_must_not_pass(self):
-        # Windows SECURITY_IDENTIFICATION: SID readable, but no normal
-        # local impersonation privilege. Do not accept this as an
-        # impersonated client identity eligible for future IPC admission.
-        with _connected_test_pipe(
-            client_impersonation_level=0x00010000
-        ) as (server, _client):
-            try:
-                observed = observe_windows_named_pipe_client_token(server)
-            except ValueError:
-                return
-            self.fail(
-                f"{_MARKER}: accepted {observed.provenance!r}"
-            )
-
-    def test_s202_valid_client_token_observation_restores_native_thread(self):
-        with _connected_test_pipe() as (server, _client):
-            observed = observe_windows_named_pipe_client_token(server)
-        self.assertEqual(observed.sid, observe_windows_process_token_user().sid)
-        # Check actual calling thread: no leaked impersonation token.
+    def _assert_no_native_impersonation_token(self):
         advapi = ctypes.WinDLL("advapi32", use_last_error=True)
         kernel = ctypes.WinDLL("kernel32", use_last_error=True)
         advapi.OpenThreadToken.argtypes = (
@@ -72,6 +53,32 @@ class C4C2B2BWindowsStrict(unittest.TestCase):
             kernel.CloseHandle(token)
         self.assertFalse(bool(got), "impersonation token leaked after return")
         self.assertEqual(ctypes.get_last_error(), 1008)  # ERROR_NO_TOKEN
+
+    def test_s201_client_security_identification_level_must_not_pass(self):
+        # Windows SECURITY_IDENTIFICATION: SID readable, but no normal
+        # local impersonation privilege. Do not accept this as an
+        # impersonated client identity eligible for future IPC admission.
+        with _connected_test_pipe(
+            client_impersonation_level=0x00010000
+        ) as (server, _client):
+            try:
+                observed = observe_windows_named_pipe_client_token(server)
+            except ValueError:
+                # Even a rejected low-level impersonation must restore the
+                # calling thread immediately; otherwise a later request could
+                # inherit the client's token unintentionally.
+                self._assert_no_native_impersonation_token()
+                return
+            self.fail(
+                f"{_MARKER}: accepted {observed.provenance!r}"
+            )
+
+    def test_s202_valid_client_token_observation_restores_native_thread(self):
+        with _connected_test_pipe() as (server, _client):
+            observed = observe_windows_named_pipe_client_token(server)
+        self.assertEqual(observed.sid, observe_windows_process_token_user().sid)
+        # The successful impersonation path must restore thread identity.
+        self._assert_no_native_impersonation_token()
 
     def test_s203_client_end_and_invalid_pipe_handles_not_trusted(self):
         with _connected_test_pipe() as (_server, client):
