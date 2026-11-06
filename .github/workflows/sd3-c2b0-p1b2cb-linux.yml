@@ -1,0 +1,95 @@
+name: SD3 C4-C2 P1-B2-C-B2-A Linux native boundary RED to Host GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-linux.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-linux-boundary-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_host.py"
+      - "tools/sd3_full_bf16_runner_linux_boundary.py"
+      - "tools/sd3_full_bf16_runner_linux_service.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-linux.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-linux-boundary-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_host.py"
+      - "tools/sd3_full_bf16_runner_linux_boundary.py"
+      - "tools/sd3_full_bf16_runner_linux_service.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  linux-native-host:
+    name: B2-A SO_PEERCRED / preflight / denied service Host qualification (NO CUDA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout exact PR source without Gitlink submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile dedicated Linux Tests-only RED
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_host.py
+      - name: Linux A1 12 exact tests RED to GREEN (NO OS authorization or CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2cb_linux_host"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(
+                  f"LINUX B2-A INVALID DISCOVERY: {discovered} != 12"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"LINUX B2-A INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_l104_real_so_peercred_reports_actual_kernel_identity",
+              "test_l105_caller_supplied_claims_cannot_override_kernel_peer",
+              "test_l106_invalid_or_unconnected_socket_fails_closed",
+              "test_l107_same_uid_connected_unix_peer_cannot_authorize",
+              "test_l108_unprovisioned_service_identity_never_proves_auth",
+              "test_l109_inherited_python_and_loader_env_rejected",
+              "test_l110_worker_writable_code_and_symlinks_rejected",
+              "test_l111_worker_selected_key_root_and_ledger_not_trusted",
+              "test_l112_service_probe_and_denied_only_diagnostic",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B2-C-B2-A LINUX CONTRACT ABSENT" not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"LINUX B2-A INVALID RED: actual={sorted(actual)} "
+                      f"expected={sorted(expected)} unrelated={unrelated}"
+                  )
+              print(
+                  "LINUX B2-A VALID TESTS-ONLY RED: 9 targeted FAIL + 3 PASS; "
+                  "0 ERROR/SKIP/xfail/xpass; NO OS service or CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "LINUX B2-A SCOPED HOST GREEN: 12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "genuine Layer O protected service remains HOLD; NO CUDA"
+          )
+          PY
