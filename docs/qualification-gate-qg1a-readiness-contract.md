@@ -1,6 +1,6 @@
 # DTS QG-1A — pure structured ExecutionReadiness source contract
 
-**Reviewed base:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96`. **QG-0 source registry:** [114 gates](https://github.com/WwlWss/diffusion-trainer-studio/blob/docs/qualification-gate-architecture-review/docs/qualification-gate-qg0-inventory-2026-11.md) lives in Draft [PR #66](https://github.com/WwlWss/diffusion-trainer-studio/pull/66), deliberately not merged into this branch. **QG-1A is an isolated Tests-only RED stage**, not a production train/Start modification or CUDA qualification.
+**Reviewed base:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96`. **QG-0 source registry:** [114 gates](https://github.com/WwlWss/diffusion-trainer-studio/blob/docs/qualification-gate-architecture-review/docs/qualification-gate-qg0-inventory-2026-11.md) lives in Draft [PR #66](https://github.com/WwlWss/diffusion-trainer-studio/pull/66), deliberately not merged into this branch. **QG-1A1 valid Tests-only RED has advanced to QG-1A2 scoped pure-module GREEN**; neither stage modifies production train/Start permission or CUDA qualification.
 
 ## 1. Responsibility and threat boundary
 
@@ -99,3 +99,44 @@ New `tests/test_parameter_policy_qg1a_readiness.py`:
 - **QG-1B** only then migrates **E** certificate metadata away from fatal gating; **QG-2** Preview/Start/Direct parity and experimental UX opt-in; **QG-3** actual SD3 Full-BF16 production capability; **QG-4** physical GPU training/Resume. These phases may not be represented as completed by QG-1A RED.
 
 **HOLD:** Running an unqualified training configuration, any user-visible eligibility change, any physical CUDA qualification, replacing PR #65 original independent Runner Load, protected OS B3, merge/promotion. PR remains Draft until actual implementation and review.
+
+## 5. QG-1A2 source and GREEN evidence
+
+**Baseline exact-head RED:** `40178f29fe5a55d5eb64d17a6cc957c482de5bae`,
+[PR + push RED logs](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42264884920):
+Ubuntu and Windows each **12 targeted FAIL + 4 baseline PASS**, 0 ERROR/SKIP/xfail/xpass.
+No source module existed at that commit.
+
+**Pure reducer minimum GREEN implementation:** `65abfab3f78ac808a9492e434d2d9b62eda3e929`,
+`mikazuki/parameter_policy_readiness.py` **added** (191 source lines).
+The diff from RED HEAD contains **only that one module**; legacy
+`parameter_policy_execution.py` / formal evidence registries /
+Preview/Export/Start/direct Trainer / Checkpoint code **unchanged**.
+
+[Actual Ubuntu/Windows scoped GREEN #42275463387](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42275463387):
+**16/16 PASS per OS**, including all 12 behavioral contracts and 4 genuine
+existing-code baselines; 0 FAIL/ERROR/SKIP/xfail/xpass. Tests exercise
+frozen issue types, direct-constructor decision consistency, strict
+capability/evidence enums, duplicate-code rejection, auto-issued unsupported
+hard errors and experimental warnings, source order, defensive copying,
+independent diagnostics, immutable BF16 identity, and no signing/CUDA authority.
+
+**Source isolation:** The new module imports only standard-library
+`collections.abc`, `dataclasses`, `re`, `typing`.
+It does not consult configuration/qualification tables, import torch,
+load model files, read environment, create jobs, sign results, issue GPU
+certificates, or mutate checkpoint identity. Its `can_start` property is
+an **advisory** and does not grant a trainer capability: the caller must
+independently establish `implemented` or `experimental_candidate`
+from real backend support and hard runtime invariants. A claimed
+`formally_qualified` tier is **not authenticated** by this pure reducer.
+
+**Qualification conclusion:** QG-1A2 **SCOPED PURE CONTRACT GREEN**,
+**NOT** Full-BF16 execution GREEN, not a CUDA qualification, not a completed
+product gate migration and not a production-service entitlement.
+
+**Next independent step:** QG-1A3 Strict Code Review of the pure module,
+typed errors, immutable diagnostic ABI and no-proof boundary. Only then
+QG-1B Tests-only RED for turning the legacy `_qualification_blocker`
+into independent runtime capability and evidence warnings. No normal
+user training mode is unlocked by this QG-1A2 implementation.
