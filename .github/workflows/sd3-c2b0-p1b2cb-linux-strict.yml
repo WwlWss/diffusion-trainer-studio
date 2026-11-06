@@ -1,0 +1,75 @@
+name: SD3 C4-C2 B2-A A5 Linux kernel spoof Strict RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-linux-strict.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_strict.py"
+      - "tools/sd3_full_bf16_runner_linux_boundary.py"
+      - "tools/sd3_full_bf16_runner_linux_service.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-linux-strict.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_strict.py"
+      - "tools/sd3_full_bf16_runner_linux_boundary.py"
+      - "tools/sd3_full_bf16_runner_linux_service.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  kernel-spoof:
+    name: B2-A-A5 real SO_PEERCRED spoof-resistance and denied service (NO CUDA)
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile strict-review Linux tests
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_strict.py
+      - name: Strict exact 4-case targeted RED to GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2cb_linux_strict"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 4:
+              raise SystemExit(f"B2-A A5 INVALID DISCOVERY: {discovered} != 4")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 4 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B2-A A5 INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              if (len(result.failures) != 1
+                      or result.failures[0][0].id().rsplit(".", 1)[-1]
+                      != "test_s201_forged_socket_subclass_cannot_supply_kernel_identity"
+                      or "B2-A-A5 FORGED_SOCKET_CLASS MUST BE REJECTED"
+                      not in result.failures[0][1]):
+                  raise SystemExit("B2-A A5 INVALID targeted RED")
+              print(
+                  "B2-A A5 VALID SPOOF TESTS-ONLY RED: "
+                  "1 targeted FAIL + 3 baseline PASS; 0 ERROR/SKIP"
+              )
+              raise SystemExit(1)
+          print(
+              "B2-A A5 SCOPED HOST STRICT GREEN: 4 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; no Layer O/CUDA"
+          )
+          PY

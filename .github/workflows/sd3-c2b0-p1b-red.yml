@@ -1,0 +1,97 @@
+name: SD3 C4-C2 P1-B independent Runner authority Host RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1-runner-trust-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b_host.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1_host.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+      - "tools/sd3_full_bf16_runner_trust.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1-runner-trust-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b_host.py"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1_host.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+      - "tools/sd3_full_bf16_runner_trust.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  p1b-host:
+    name: P1-B Host trust-origin/replay RED (NO CUDA)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact source without Gitlink submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned pure Host requirements
+        run: python -m pip install --disable-pip-version-check "numpy==1.26.4" "safetensors==0.4.5" "pillow==11.1.0" "cryptography==44.0.2"
+      - name: Compile P1-B Host contract
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b_host.py
+      - name: P1-B exact 12 Host tests-only RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b_host"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(
+                  f"P1-B INVALID HOST DISCOVERY: {discovered} != 12"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "P1-B INVALID HOST RUN: "
+                  f"run={result.testsRun}, errors={len(result.errors)}, "
+                  f"skipped={len(result.skipped)}, "
+                  f"xfail={len(result.expectedFailures)}, "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B HOST CONTRACT ABSENT" not in trace
+              ]
+              if unrelated:
+                  raise SystemExit(
+                      "P1-B INVALID HOST RED unrelated: " + repr(unrelated)
+                  )
+              if len(result.failures) != 9:
+                  raise SystemExit(
+                      "P1-B HOST RED count mismatch: "
+                      f"{len(result.failures)} targeted FAIL != 9"
+                  )
+              print(
+                  "P1-B VALID HOST RED: 9 targeted FAIL + 3 baseline PASS; "
+                  "0 ERROR/SKIP/xfail/xpass; NOT CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "P1-B HOST MECHANISM GREEN: 12 PASS; "
+              "0 ERROR/SKIP/xfail/xpass; NOT production Runner authority/CUDA"
+          )
+          PY

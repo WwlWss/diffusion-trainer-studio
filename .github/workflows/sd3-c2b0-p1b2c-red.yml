@@ -1,0 +1,109 @@
+name: SD3 C4-C2 P1-B2-C protected issuer source contract RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2c-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2c-protected-issuer-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2c_host.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+      - "tools/sd3_full_bf16_runner_trust.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/sd3_full_bf16_worker_step_adapter.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2c-red.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2c-protected-issuer-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2c_host.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "tools/sd3_full_bf16_independent_runner.py"
+      - "tools/sd3_full_bf16_runner_replay.py"
+      - "tools/sd3_full_bf16_runner_trust.py"
+      - "tools/sd3_full_bf16_evidence_worker.py"
+      - "tools/sd3_full_bf16_worker_step_adapter.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  protected-issuer-red:
+    name: P1-B2-C protected Runner issuer Host RED (NO CUDA)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR source without Gitlinks
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned Host test dependencies (NO signer secret)
+        run: python -m pip install --disable-pip-version-check "numpy==1.26.4" "safetensors==0.4.5" "pillow==11.1.0" "cryptography==44.0.2"
+      - name: Compile exact new protected issuer Host tests (no CUDA)
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2c_host.py
+      - name: P1-B2-C exactly 12 Host RED to GREEN (no production signing authority)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          prefix = "tests.test_sd3_full_bf16_worker_c4c_p1b2c_host"
+          suite = unittest.defaultTestLoader.loadTestsFromName(prefix)
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(
+                  f"P1-B2-C INVALID DISCOVERY: {discovered} != 12"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"P1-B2-C INVALID RUN: run={result.testsRun}, "
+                  f"ERROR={len(result.errors)}, SKIP={len(result.skipped)}, "
+                  f"xfail={len(result.expectedFailures)}, "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_c204_claimed_uid_sid_pid_cannot_prove_distinct_os_principal",
+              "test_c205_worker_inherited_key_root_issuer_env_cannot_provision",
+              "test_c206_self_declared_ipc_peer_is_not_an_os_authenticated_peer",
+              "test_c207_worker_private_key_and_selected_path_cannot_open_signer",
+              "test_c208_worker_selected_ledger_cannot_be_production_ledger",
+              "test_c209_test_signature_and_caller_key_not_production_proof",
+              "test_c210_worker_claimed_physical_parent_never_mints_sign_capability",
+              "test_c211_self_reported_file_acl_ownership_cannot_protect_secret",
+              "test_c212_unprivileged_ci_must_not_report_real_issuer_ready",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B2-C HOST CONTRACT ABSENT" not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"P1-B2-C INVALID RED: failures={sorted(actual)}, "
+                      f"expected={sorted(expected)}, unrelated={unrelated}"
+                  )
+              print(
+                  "P1-B2-C VALID TESTS-ONLY RED: 9 targeted FAIL, "
+                  "3 baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
+                  "NO production Runner or CUDA authorization"
+              )
+              raise SystemExit(1)
+          print(
+              "P1-B2-C SCOPED HOST CONTRACT GREEN: 12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "NOT OS-provisioned issuer or CUDA qualification"
+          )
+          PY

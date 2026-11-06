@@ -1,0 +1,90 @@
+name: SD3 C4-C2 P1-B2-C-A SR1 source hardening RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2c-sr1.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "docs/d1-sd3c2b-c4c-p1b2c-protected-issuer-contract.md"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2c-sr1.yml"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host.py"
+      - "tools/sd3_full_bf16_runner_authority.py"
+      - "docs/d1-sd3c2b-c4c-p1b2c-protected-issuer-contract.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sr1-host:
+    name: P1-B2-C-A-SR1 Host targeted RED to GREEN (NO CUDA)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    steps:
+      - name: Checkout PR exact source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile hardening source and tests
+        run: python -m py_compile tools/sd3_full_bf16_runner_authority.py tests/test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host.py
+      - name: SR1 exact 8 Host cases and targeted RED/strict GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2c_sr1_host"
+          )
+          n = suite.countTestCases()
+          if n != 8:
+              raise SystemExit(f"SR1 INVALID DISCOVERY: {n} != 8")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "SR1 INVALID RUN: "
+                  f"run={result.testsRun} ERROR={len(result.errors)} "
+                  f"SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_sr107_probe_ignores_spoofed_legacy_module_status",
+              "test_sr108_contract_tracks_current_green_and_freezes_protected_install",
+          }
+          actual = {
+              case.id().rsplit(".", 1)[-1] for case, _ in result.failures
+          }
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B2-C-SR1 CONTRACT MISMATCH" not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"SR1 INVALID RED: actual={sorted(actual)}, "
+                      f"expected={sorted(expected)}, unrelated={unrelated}"
+                  )
+              print(
+                  "SR1 VALID TESTS-ONLY RED: 2 targeted FAIL + 6 baseline "
+                  "PASS; 0 ERROR/SKIP/xfail/xpass; NO CUDA"
+              )
+              raise SystemExit(1)
+          print(
+              "SR1 SCOPED HOST GREEN: 8 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; NO OS signer or CUDA"
+          )
+          PY

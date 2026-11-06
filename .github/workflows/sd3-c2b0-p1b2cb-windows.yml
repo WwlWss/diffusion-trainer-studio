@@ -1,0 +1,93 @@
+name: SD3 C4-C2 B2-B Windows TokenUser/named-pipe Host RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/d1-sd3c2b0-evidence-contract"
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-windows.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-windows-boundary-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host.py"
+      - "tools/sd3_full_bf16_runner_windows_boundary.py"
+      - "tools/sd3_full_bf16_runner_windows_service.py"
+  pull_request:
+    paths:
+      - ".github/workflows/sd3-c2b0-p1b2cb-windows.yml"
+      - "docs/d1-sd3c2b-c4c-p1b2cb-windows-boundary-contract.md"
+      - "tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host.py"
+      - "tools/sd3_full_bf16_runner_windows_boundary.py"
+      - "tools/sd3_full_bf16_runner_windows_service.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-native-host:
+    name: B2-B real Windows TokenUser / named pipe / denial Host (NO CUDA)
+    runs-on: windows-latest
+    timeout-minutes: 12
+    steps:
+      - name: Checkout exact PR source without Gitlink submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile exact Windows test suite
+        run: python -m py_compile tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host.py
+      - name: B2-B exact 12 Host tests-only RED to GREEN (NO CUDA)
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_sd3_full_bf16_worker_c4c_p1b2cb_windows_host"
+          )
+          discovered = suite.countTestCases()
+          if discovered != 12:
+              raise SystemExit(f"B2-B INVALID DISCOVERY: {discovered} != 12")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B2-B INVALID RUN: run={result.testsRun} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_w104_real_win32_process_token_user_sid",
+              "test_w105_worker_supplied_sid_pid_cannot_override_native_token",
+              "test_w106_real_named_pipe_impersonation_token_user_sid",
+              "test_w107_real_same_sid_client_never_authorized",
+              "test_w108_invalid_fake_and_unread_pipe_refused",
+              "test_w109_poisoned_or_clean_startup_never_grants_authority",
+              "test_w110_worker_writable_executable_not_protected_acl",
+              "test_w111_worker_chosen_key_root_ledger_not_protected",
+              "test_w112_service_unprovisioned_and_diagnostic_only",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "C4-C2-P1-B2-C-B2-B WINDOWS CONTRACT ABSENT" not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"B2-B INVALID RED: actual={sorted(actual)} "
+                      f"expected={sorted(expected)} unrelated={unrelated}"
+                  )
+              print(
+                  "B2-B VALID WINDOWS TESTS-ONLY RED: 9 targeted FAIL "
+                  "+ 3 PASS; 0 ERROR/SKIP/xfail/xpass; NO production service"
+              )
+              raise SystemExit(1)
+          print(
+              "B2-B WINDOWS NATIVE HOST SCOPED GREEN: 12/12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "independent service-account Layer O HOLD; NO CUDA"
+          )
+          PY
