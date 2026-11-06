@@ -78,3 +78,16 @@ The independent final QG-1A3 review left F1 unresolved **for production integrat
 - **F1-04** no trained-model/weights-identity signature, original checkpoint manifest, attestation status or CUDA proof is generated from this host-only decision.
 
 QG-1B1 is explicitly **no executable QG-1B migration or partial Full-BF16 acceptance**. QG-2 remains the explicit scope for Preview/Export/Start/direct parity, user-facing experimental acknowledgment and real runtime binding, after a separate source review.
+
+
+## 5. QG-1B1 exact Tests-only RED ledger
+
+**Source-contract + tests + CI freeze HEAD:** `e53caf4811ce8250f5a6ab9f4823b475ef0ae0fb`.
+- [Push Windows+Ubuntu #42293546247](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42293546247): each **16 discovered/run = 12 B101–B112 tagged FAIL + 4 B901–B904 baseline PASS**, zero ERROR/SKIP/xfail/xpass. Every targeted failure included `QG-1B TRUSTED PRODUCER CONTRACT ABSENT`.
+- [Stacked PR Windows+Ubuntu #42293600333](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42293600333): identical results on both OS, confirming RED on PR trigger as well.
+- The red workflows intentionally **conclude FAILURE**; all failures are exact missing-new-module contract failures, not failed existing training functionality. The four baseline tests include prior pure readiness behavior, old SD3 certificate-only blocker, real invalid BF16/strict bool checks and planned CAME rejection.
+- Files introduced in this stage: `docs/qualification-gate-qg1b-trusted-producer-contract.md`, `tests/test_parameter_policy_qg1b_trusted_producer.py`, and `.github/workflows/qg1b-trusted-producer-host.yml`. No `mikazuki/parameter_policy_readiness_producer.py` and no edit to any existing production module or legacy test.
+
+**Next stage:** QG-1B2 implement **only the new host-side trusted producer** against these substantive contracts; require Ubuntu+Windows **16/16 PASS, 0 FAIL/ERROR/SKIP** on exact final HEAD, plus fresh independent Strict Review. The producer must never accept supplied capability/severity from Worker or grant Start. Actual live dtype/device/optimizer/Checkpoint audits remain in existing Trainer and will be regression-gated before the later production entrypoint migration.
+
+**B1 HOLD:** No QG-1B production implementation, no Legacy `_qualification_blocker` migration, no GUI/headless experimental-override entrypoint, no Source-qualified SD3 true Full-BF16 R1/R2 or new CUDA GPU smoke, no external Runner attestation, and no merge. PR #68 remains Draft stacked on PR #67.
