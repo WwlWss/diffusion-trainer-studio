@@ -59,8 +59,8 @@ def _api(test: unittest.TestCase, name: str, *, service: bool = False):
 
 
 @contextmanager
-def _connected_test_pipe():
-    """Test-only local same-user native Win32 pipe; never a protected service."""
+def _connected_test_pipe(*, client_impersonation_level=0x00020000):
+    """Test-only same-user Win32 pipe; controllable client impersonation QoS."""
     kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
     H = wintypes.HANDLE
     kernel32.CreateNamedPipeW.argtypes = (
@@ -101,7 +101,7 @@ def _connected_test_pipe():
     try:
         client = kernel32.CreateFileW(
             path, 0xC0000000, 0, None, 3,
-            0x00100000 | 0x00020000, None,  # explicit SECURITY_IMPERSONATION
+            0x00100000 | client_impersonation_level, None,  # explicit client QoS
         )
         if int(client or 0) in (0, invalid):
             raise AssertionError("CreateFileW test fixture failed")
