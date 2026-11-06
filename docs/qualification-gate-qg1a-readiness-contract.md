@@ -178,3 +178,24 @@ Dedicated `tests/test_parameter_policy_qg1a_sr1.py` freezes **six exact tests**:
 **Tests-only RED must be exact:** 6 discovered/executed, **4 targeted FAIL SR101–SR104 + 2 baseline PASS SR105–SR106**, all targeted failures carry `QG-1A3-SR1 CONTRACT NOT SATISFIED`, 0 ERROR/SKIP/xfail/xpass. The CI gate intentionally exits with failure on valid RED. Original QG-1A 16 tests remain 16/16 GREEN throughout. After minimum F2/F3 change, dedicated SR1 6/6 + existing 16/16 PASS on Ubuntu and Windows, with both PR and push triggers, 0 FAIL/ERROR/SKIP/xfail/xpass. The independent final Strict Review must inspect the exact committed diff, not interpret CI GREEN as actual GPU or training permission.
 
 **QG-1A3-SR1 scope exclusion:** no edits to legacy release qualification registries, `mikazuki/parameter_policy_execution.py`, `parameter_policy.py`, `training_request.py`, `training_api.py`, `parameter_policy_trainer.py`, runtime/optimizer/Checkpoint/SD3 Resume, PR #65, or executable CUDA. QG-1B, QG-2, QG-3, and QG-4 remain distinct later stages.
+
+
+## 7. QG-1A3-SR1 RED → GREEN evidence and bounded change set
+
+**Scope / parent:** source audited at `0f0285daf5393b13a21e45931d341bdd3d99641d`.
+Freeze F1 first-party producer contract in `QG-1B`; repair only F2/F3 in QG-1A3-SR1. No application entrypoint changed.
+
+**Valid Tests-only RED:**
+- QG-1A3-SR1 frozen six-case dedicated test/CI HEAD `3bee351f27f95dd0d11a73f2fa65a7f7151a7581`.
+- [Actual push RED #42290724528](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290724528), [PR RED #42290733938](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290733938): Ubuntu + Windows each **6 run = exactly SR101–SR104 four targeted FAIL + SR105–SR106 two PASS**, with failure marker `QG-1A3-SR1 CONTRACT NOT SATISFIED`, zero ERROR/SKIP/xfail/xpass. Prior frozen QG-1A 16/16 baseline PASS in dedicated CI. The intentional job failure is an accepted RED, not a production regression.
+- SR101/SR102 exercise real custom `Sequence.__len__` / `__getitem__` exceptions; SR103 attempts direct `ExecutionReadiness` with malformed input; SR104 reads actual workflow event-specific paths/branches. SR105 preserves list/tuple and diagnostic immutability; SR106 ensures `MemoryError` and `KeyboardInterrupt` are never converted to ordinary config errors.
+
+**Minimal F2 patch:** `e39b37dca44f5cac6dffc423cf0f6c28c863ffea`, in `mikazuki/parameter_policy_readiness.py` only. Guard `tuple(values)` conversion, preserve `MemoryError` (and unhandled `BaseException` control exceptions), normalize any other ordinary `Exception` into a fixed-message `ValueError from None`. Keep `Sequence` API, type validation, duplicate-code detection, issue order, immutable snapshots, capability/decision/evidence and signature unchanged. Never echo raw exception text or Worker data in the new error.
+
+**Minimal F3 patch:** `9dbd692a8cdbaafcce76638dd03b9e86f571803e`, existing `.github/workflows/qg1a-readiness-host.yml` only. Add `push/main` and, in **both** push / pull_request paths, original B901–B904 dependencies `parameter_policy_execution.py`, `optimizer_profiles.py`, `parameter_policy_runtime_bools.py`; plus new SR1 test, adjacent future integration modules `parameter_policy.py`, `training_request.py`, `parameter_policy_trainer.py` and SR1 workflow. Preserve original sixteen-test count, expected failure identity, 0-SKIP enforcement, Windows+Ubuntu matrix and manual dispatch.
+
+**Actual scoped GREEN at F2/F3 code HEAD `9dbd692a8cdbaafcce76638dd03b9e86f571803e`:**
+- [Dedicated SR1 push #42290866701](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290866701) and [PR #42290877764](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290877764): **Ubuntu and Windows 6/6 PASS** plus prior **16/16 PASS** each, zero FAIL/ERROR/SKIP/xfail/xpass.
+- [Original QG-1A push #42290867531](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290867531) and [PR #42290877382](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42290877382): **Ubuntu 16/16 PASS, Windows 16/16 PASS**, zero FAIL/ERROR/SKIP/xfail/xpass.
+
+**Explicit HOLD:** QG-1B's genuine capability/severity provenance (F1), full legacy fatal blocker migration, Preview/Export/Start/direct Trainer integration, per-job experimental confirmation, SD3 Full-BF16 GPU R1/R2, official evidence signing, PR #65 OS Runner, Checkpoint original independent Load, and merging PR #67. The reducer's `can_start` remains pure advisory, **never** trusted as an authorization signal from the client. No external certificate promotion or production runtime unlock occurred. QG-1A3-SR1 Final Strict Review must be anchored to a fresh exact final HEAD after this evidence record.
