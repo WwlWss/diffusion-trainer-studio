@@ -229,3 +229,51 @@
 6. QG-5：独立 Strict Review；PR #65 外部独立签发 B3/P1-C 暂缓，不作为本地训练的发布前置条件。
 
 **QG-0 完成条件**：本审查登记源代码位置、作用域、真实原因、分类、现有测试归属和 QG-1 迁移方向；验证 PR #66 diff 只增文档；任何具体实验性组合的正向开关都等待新的 Tests-only RED→GREEN 和实机审查。本阶段不执行 GPU、不宣称新的训练功能已通过。
+
+
+## 附录 A：23 个 SD3 参考资格禁用开关逐字段复核
+
+准确来源 `S:72–100`：共 **23 个** `_UNQUALIFIED_SWITCHES`；本表是 `S21–S25` 的精确拆分，不新增更高层的 runtime 决策。**所有当前 blocker 均保留至 QG-1/QG-3 实施**。
+
+| 开关 | 后续能力裁决 | 不可由缺证书直接推导的事项 |
+| --- | --- | --- |
+| `enable_bucket` | **W*** | SD3 Trainer 已有 bucket 计算；须匹配真实 batch、位置编码与恢复几何 |
+| `gradient_checkpointing` | **A** | 对 trainable adapter / TE 梯度身份、AMP 与 checkpoint hook 有影响 |
+| `fp8_base` | **A** | 浮点类型转换、参数驻留与 MMDiT forward 需做独立实证 |
+| `fp8_base_unet` | **A** | 运行时代码会同时激活 fp8_base；不可仅看 UI 字段 |
+| `full_fp16` | **A** | Full-FP16 + GradScaler 与 BF16 不同执行契约 |
+| `no_half_vae` | **W*/A** | FP32 VAE、latents 输入与资源影响，不能假装等同 BF16 参考运行 |
+| `deepspeed` | **A** | optimizer/distributed ownership 由 DeepSpeed 接管 |
+| `torch_compile` | **A** | Dynamo/AOT 包装和参数身份 |
+| `compile` | **A** | 后端单独 DiT block compile，训练身份变化 |
+| `fused_backward_pass` | **H** | Composite optimizer 不拥有对应等价 step runtime |
+| `blockwise_fused_optimizers` | **H** | block 内多 optimizer 语义没有 Component v1 映射 |
+| `cpu_offload_checkpointing` | **A** | 参数/device 与反向图变化 |
+| `unsloth_offload_checkpointing` | **A** | 参数/device 与反向图变化 |
+| `enable_scaled_pos_embed` | **W*/A** | 位置编码计算路径真实支持与对应梯度需要审查 |
+| `cache_text_encoder_outputs_to_disk` | **W*/A** | 仅数据路径变化不等于不支持，但可能触发 T5 train/cache 硬冲突 |
+| `cache_latents_to_disk` | **W*/A** | 真实数据/文件流程可运行性与状态；注意区分 latent cache 和 TE cache |
+| `lowram` | **A** | 参数/offload 模式与内存/参数所有权变化；Anima Full 已明确未实现时为 H |
+| `network_train_text_encoder_only` | **A** | 与 MMDiT/CLIP/T5 Route 训练归属相互制约 |
+| `persistent_data_loader_workers` | **W*/A** | Worker 创建/生命周期及恢复游标/样本序列 |
+| `apply_lg_attn_mask` | **W*/A** | SD3 条件化 Forward 与额外注意力行为需审查 |
+| `apply_t5_attn_mask` | **W*/A** | SD3 T5 条件化 Forward 与输入 mask 语义 |
+| `masked_loss` | **W*/A** | 训练输入 mask、有效 loss/gradient 构造 |
+| `resume_from_huggingface` | **A** | 不同恢复来源及 state 格式/可信 checkpoint 身份 |
+
+对应 `M:69–105` 还有资格字段 `fused_optimizer_groups`、`blocks_to_swap`、`double_blocks_to_swap`、`single_blocks_to_swap` 和 `full_bf16`，其中 `full_bf16` 应进入纯诊断能力模块而不是取消精度检查；前三类 fused/block-swap 按 `C07/C11` 保留真实实现审查。`M:92–105` 的 9 个 `PARAMETER_POLICY_SEMANTIC_BLOCKER_FEATURES` 均在 `C14–C20/C12/C13/C23` 登记：`lora_plus`、`regex_lr`、`sd_lora_block_lr`、`sdxl_full_block_lr`、`scale_weight_norms`、`dreambooth_dynamic_text_encoder_stop`、`preloaded_adapter_text_encoder_cache`、`anima_qwen_only`、`unreviewed_network_module`。它们不是「从未跑过 CUDA」那么简单。
+
+## 附录 B：14 种 Full-BF16 优化器资格状态与真实构造通路
+
+| 现有证书状态 | Optimizer Type | Component 构造情况 | 运行决策 |
+| --- | --- | --- | --- |
+| `qualified` | AdamW | Torch 原生；已验证共享 D0 | **ALLOW**（满足真实 runtime invariant） |
+| `qualified` | Muon | 固定依赖、独立参数 eligibility / 显式 fallback | **ALLOW**（正确路由的参考配置） |
+| `pending` | AdamW8bit, PagedAdamW8bit, PagedAdamW, PagedAdamW32bit | BNB `optim` 命名类；依赖存在时可构造 | **A** → 逐案 BF16/State 审查后才允许实验 |
+| `pending` | Lion, Lion8bit, PagedLion8bit | lion_pytorch / bitsandbytes | **A** → 逐案 BF16/State 审查 |
+| `pending` | SGDNesterov, SGDNesterov8bit | torch SGD / BNB SGD8bit，额外要求 Nesterov 语义 | **A** → 逐案 BF16/State 审查 |
+| `pending` | RAdamScheduleFree, AdamWScheduleFree, SGDScheduleFree | 有 train/eval lifecycle 的优化器托管调度 | **A** → 逐案 BF16/State 审查 |
+
+`O:80–195` 的 **restricted** DAdaptation/Prodigy/AdaFactor/ProdigyPlusScheduleFree 以及 **planned** CAME/Custom 属独立能力层，不能作为「有 14 个证书类型」的一部分误计为已经可构造。以上「可构造」仅代表代码有相应分支，**不宣称依赖已实际安装、BF16 已通过、恢复正确或 CUDA 已跑**。
+
+**登记完整性计数：** 主体 **114 个稳定门槛 ID**（G15 + E15 + C25 + S28 + O12 + R19），附录交叉核验 SD3 23 个禁用开关、Feature Matrix 15 个资格字段与 9 个语义特性、Full-BF16 14 种优化器状态。分类可交叉出现，不能把混合行强行当成一条「已经解锁」。QG-0 只有源码/契约审查，没有执行新训练代码和没有物理 CUDA 验收。
