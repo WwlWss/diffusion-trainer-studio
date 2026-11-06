@@ -78,6 +78,8 @@ The **stable execution identity/checkpoint compatibility schema must not depend 
 | `AdamW8bit`, Paged variants, Lion and ScheduleFree Full-BF16 | **Per-optimizer capability audit** | `component_support=supported` does not prove BF16 optimizer state/step/resume, yet missing certificate alone is not a failure |
 | SD3 ordinary mixed-BF16 Fresh→Resume | **ALLOW** when existing PR #60/#61 conditions hold | Actual production GPU path already passed; unrelated evidence-worker signature must not gate it |
 
+**QG-0 审查登记已完成：** [114 条完整门槛清单、23 个 SD3 禁用开关和 14 种优化器资格交叉表](qualification-gate-qg0-inventory-2026-11.md)。这份清单是 QG-1 测试契约的冻结基准；仅分类，不暗示现有运行限制已经移除或新的 Full-BF16 组合已通过实机验收。
+
 ## 5. New roadmap: independent from Draft PR #65
 
 | Step | Work | Required acceptance |
