@@ -1,6 +1,6 @@
 # DTS QG-1A — pure structured ExecutionReadiness source contract
 
-**Reviewed base:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96`. **QG-0 source registry:** [114 gates](qualification-gate-qg0-inventory-2026-11.md) lives in Draft [PR #66](https://github.com/WwlWss/diffusion-trainer-studio/pull/66), deliberately not merged into this branch. **QG-1A is an isolated Tests-only RED stage**, not a production train/Start modification or CUDA qualification.
+**Reviewed base:** `main@1dc4f56fb862aade574add48c4f1bea2c54f3e96`. **QG-0 source registry:** [114 gates](https://github.com/WwlWss/diffusion-trainer-studio/blob/docs/qualification-gate-architecture-review/docs/qualification-gate-qg0-inventory-2026-11.md) lives in Draft [PR #66](https://github.com/WwlWss/diffusion-trainer-studio/pull/66), deliberately not merged into this branch. **QG-1A is an isolated Tests-only RED stage**, not a production train/Start modification or CUDA qualification.
 
 ## 1. Responsibility and threat boundary
 
