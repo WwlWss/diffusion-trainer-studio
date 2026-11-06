@@ -209,12 +209,15 @@ class QG1APureReadinessContract(unittest.TestCase):
         self.assertEqual(result.hard_errors, (hard,))
 
     def test_qg107_unimplemented_and_known_incompatible_never_upgrade(self):
+        # Resolve the new module once outside subTests: when it is absent,
+        # this entire independent contract must be ONE targeted RED case.
+        evaluator = self._module().evaluate_execution_readiness
         for cap, expected in (
             ("not_implemented", "capability.not_implemented"),
             ("known_incompatible", "capability.known_incompatible"),
         ):
             with self.subTest(capability=cap):
-                result = self._eval(
+                result = evaluator(
                     capability=cap,
                     evidence_tier="formally_qualified",
                 )
