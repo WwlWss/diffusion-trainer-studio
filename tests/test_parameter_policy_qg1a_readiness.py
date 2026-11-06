@@ -78,10 +78,10 @@ class QG1AExistingBaseline(unittest.TestCase):
 
     def test_b904_planned_optimizer_remains_unimplemented(self):
         self.assertEqual(
-            get_optimizer_capability("CAME").component_support, "planned"
+            get_optimizer_capability("pytorch_optimizer.CAME").component_support, "planned"
         )
         with self.assertRaises(ValueError):
-            require_unrestricted_component_optimizer("CAME")
+            require_unrestricted_component_optimizer("pytorch_optimizer.CAME")
 
 
 class QG1APureReadinessContract(unittest.TestCase):
