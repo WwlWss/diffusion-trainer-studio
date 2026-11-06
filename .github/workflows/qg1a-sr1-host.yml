@@ -1,0 +1,119 @@
+name: DTS QG-1A3 SR1 malformed Sequence and CI trigger RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/qualification-gate-qg1a-readiness-contract"
+    paths:
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - "docs/qualification-gate-qg1a-readiness-contract.md"
+      - "tests/test_parameter_policy_qg1a_sr1.py"
+      - "tests/test_parameter_policy_qg1a_readiness.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - "docs/qualification-gate-qg1a-readiness-contract.md"
+      - "tests/test_parameter_policy_qg1a_sr1.py"
+      - "tests/test_parameter_policy_qg1a_readiness.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qg1a-sr1-host:
+    name: QG-1A3-SR1 6 target+baseline tests / prior 16 baseline GREEN (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact source
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile frozen tests before execution
+        run: python -m py_compile tests/test_parameter_policy_qg1a_readiness.py tests/test_parameter_policy_qg1a_sr1.py
+      - name: Preserve original 16-case QG1A GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1a_readiness"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit("QG-1A3 INVALID BASELINE DISCOVERY: must be 16")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit("QG-1A3 INVALID BASELINE: prior 16 must PASS")
+          print("QG-1A3 PRIOR 16/16 BASELINE GREEN; 0 FAIL/ERROR/SKIP/xfail/xpass")
+          PY
+      - name: Exactly 6 SR1 cases expected targeted RED then 6-case GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1a_sr1"
+          )
+          if suite.countTestCases() != 6:
+              raise SystemExit("QG-1A3-SR1 INVALID DISCOVERY: not 6")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 6 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "QG-1A3-SR1 INVALID RUN: "
+                  f"run={result.testsRun} ERROR={len(result.errors)} "
+                  f"SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_sr101_custom_sequence_len_failure_has_stable_value_error",
+              "test_sr102_custom_sequence_getitem_failure_has_stable_value_error",
+              "test_sr103_direct_readiness_construction_rejects_malformed_sequence",
+              "test_sr104_push_and_pr_paths_watch_all_legacy_baseline_dependencies",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "QG-1A3-SR1 CONTRACT NOT SATISFIED" not in trace
+              ]
+              if len(result.failures) != 4 or actual != expected or unrelated:
+                  raise SystemExit(
+                      f"QG-1A3-SR1 INVALID RED: {len(result.failures)=} "
+                      f"actual={sorted(actual)} unrelated={unrelated}"
+                  )
+              print(
+                  "QG-1A3-SR1 VALID TESTS-ONLY RED: 4 targeted FAIL + "
+                  "2 baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
+                  "prior 16/16 GREEN"
+              )
+              raise SystemExit(1)
+          print(
+              "QG-1A3-SR1 SCOPED HOST GREEN: 6/6 PASS; "
+              "prior 16/16 PASS; 0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "F1 is QG-1B producer HOLD, no CUDA or execution unlock"
+          )
+          PY
