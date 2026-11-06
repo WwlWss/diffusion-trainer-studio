@@ -140,3 +140,41 @@ typed errors, immutable diagnostic ABI and no-proof boundary. Only then
 QG-1B Tests-only RED for turning the legacy `_qualification_blocker`
 into independent runtime capability and evidence warnings. No normal
 user training mode is unlocked by this QG-1A2 implementation.
+
+
+## 6. QG-1A3-SR1: scoped findings, fixes and QG-1B trust boundary
+
+**Independent review baseline:** `0f0285daf5393b13a21e45931d341bdd3d99641d`; [review #5806131245](https://github.com/WwlWss/diffusion-trainer-studio/pull/67#pullrequestreview-5806131245). **Scope:** repair only (F2) host input-exception contract and (F3) regression CI triggers. **F1** is explicitly a QG-1B integration precondition, not a QG-1A reducer algorithm change. Neither QG-1A3 nor any experimental result may grant production Start, signed evidence, CUDA qualification or Checkpoint original Load.
+
+### F1: trusted classification ownership (QG-1B HOLD)
+
+The QG-1A pure reducer's `hard_errors` and `warnings` are **caller-classified**. `ReadinessIssue.code` and `source` are diagnostic strings, **not authenticated severity claims**. Passing `runtime.dtype.mismatch` (R03) as a warning with `capability="implemented"` can yield `warn/can_start=True`; passing `qualification.backend.pending` (E02) as a hard error can yield `block`. Both are expected consequences of an upstream-owned severity contract, **not evidence of a production bypass** because QG-1A is not integrated into application Start or direct Trainer.
+
+QG-1B MUST create a **first-party trusted classification producer** from concrete implementation, optimizer routing, target/asset, runtime dtype/device/parameter identity, and Checkpoint semantics. It must never trust client/Worker-provided `capability`, `severity`, `decision`, `can_start` or claims of `formally_qualified`. The producer maps actual R03 BF16 dtype mismatch to a hard error regardless of misbucketed client input; maps E02 absent formal certificate to an advisory only **when executable capability has been independently established**. Unknown or structurally unsupported backend/optimizer and currently unsupported multi-process ownership remain blocked. Preview and Start/direct Trainer must recheck genuine invariants. A code prefix (`runtime.*`) is not a severity authority; avoid duplicating a second broad backend classifier inside this pure QG-1A reducer.
+
+Freeze these in later QG-1B Tests-only RED: `QG1B-F1-01` fake warning for real R03 must still block; `QG1B-F1-02` fake hard E02 must not block a proven implemented candidate; `QG1B-F1-03` untrusted `implemented/formally_qualified` cannot convert a planned or unsafe feature into a runnable one. Do not falsely mark these tests as complete in QG-1A3.
+
+### F2: malformed custom Sequence conversion (fix within QG-1A3)
+
+`_issue_tuple()` accepts `collections.abc.Sequence` then invokes `tuple(values)`, which can execute third-party `__len__/__getitem__/__iter__`. For an otherwise valid custom Sequence whose method raises `RuntimeError`, this leaks the exception type despite the frozen contract that malformed issue lists raise `ValueError`.
+
+Preserve the public `Sequence[ReadinessIssue]` ABI, element validation, duplicate-code rules, immutable tuples, issue ordering, and existing decisions. Wrap **only** `result = tuple(values)` in a narrow `try/except`: explicitly re-raise `MemoryError`; convert other ordinary `Exception` failures to a static, non-echoing `ValueError` from `None`. Do not catch `KeyboardInterrupt/SystemExit` or make an invalid sequence into an empty sequence. No change to `_expected_decision` or capability logic.
+
+### F3: CI coverage of imported legacy baselines (fix within QG-1A3)
+
+Existing `.github/workflows/qg1a-readiness-host.yml` watches the new module/test/doc only, but B901–B904 import `parameter_policy_execution.py`, `optimizer_profiles.py` and `parameter_policy_runtime_bools.py`. Add those to **both** push and PR `paths`, and include `parameter_policy.py`, `training_request.py` and `parameter_policy_trainer.py` for the incoming QG-1B training-adapter regressions. Also watch the new `tests/test_parameter_policy_qg1a_sr1.py`, support `push` on `main` and keep `workflow_dispatch`. Preserve existing 16-case discovery/fail identity/0-SKIP gate, especially the old four baselines. If this workflow becomes a required GitHub branch-protection check, separately review the risk of path-filtered required checks remaining pending.
+
+### Staged RED → GREEN acceptance
+
+Dedicated `tests/test_parameter_policy_qg1a_sr1.py` freezes **six exact tests**:
+
+- SR101: custom `Sequence.__len__` throws `RuntimeError`; reducer must raise `ValueError` without reflecting any sensitive exception text.
+- SR102: custom `Sequence.__getitem__` throws `RuntimeError`; same required behavior.
+- SR103: direct `ExecutionReadiness` construction with malformed sequence must fail with `ValueError` (not silently ALLOW).
+- SR104: both `push` and `pull_request` paths include existing B901–B904 dependencies and the SR1 test, while push covers `main` and the dev branch.
+- SR105 baseline: ordinary list/tuple inputs preserve decisions, frozen diagnostics and independent copies.
+- SR106 baseline: `MemoryError` and `KeyboardInterrupt` are **not** normalized into configuration `ValueError`.
+
+**Tests-only RED must be exact:** 6 discovered/executed, **4 targeted FAIL SR101–SR104 + 2 baseline PASS SR105–SR106**, all targeted failures carry `QG-1A3-SR1 CONTRACT NOT SATISFIED`, 0 ERROR/SKIP/xfail/xpass. The CI gate intentionally exits with failure on valid RED. Original QG-1A 16 tests remain 16/16 GREEN throughout. After minimum F2/F3 change, dedicated SR1 6/6 + existing 16/16 PASS on Ubuntu and Windows, with both PR and push triggers, 0 FAIL/ERROR/SKIP/xfail/xpass. The independent final Strict Review must inspect the exact committed diff, not interpret CI GREEN as actual GPU or training permission.
+
+**QG-1A3-SR1 scope exclusion:** no edits to legacy release qualification registries, `mikazuki/parameter_policy_execution.py`, `parameter_policy.py`, `training_request.py`, `training_api.py`, `parameter_policy_trainer.py`, runtime/optimizer/Checkpoint/SD3 Resume, PR #65, or executable CUDA. QG-1B, QG-2, QG-3, and QG-4 remain distinct later stages.
