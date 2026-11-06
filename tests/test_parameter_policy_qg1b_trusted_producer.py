@@ -315,7 +315,11 @@ class QG1BTrustedProducerContract(unittest.TestCase):
         self.assertEqual(extras.evidence_tier, base.evidence_tier)
         self.assertEqual(extras.capability, base.capability)
         with self.subTest("referenced pending unsupported audited optimizer"):
-            changed = self._classify(policy=_policy(fallback="AdamW8bit"))
+            # Fallback is structurally valid only for a primary optimizer
+            # with parameter-eligibility routing (Muon), not ordinary AdamW.
+            changed = self._classify(policy=_policy(
+                optimizer="Muon", fallback="AdamW8bit"
+            ))
             self.assertEqual(changed.decision, "block")
             self.assertFalse(changed.can_start)
             self.assertIn(
