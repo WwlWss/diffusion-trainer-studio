@@ -3,18 +3,35 @@ name: DTS QG-1A pure ExecutionReadiness tests-only RED to GREEN (NO CUDA)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1a-readiness-contract"
     paths:
       - ".github/workflows/qg1a-readiness-host.yml"
       - "docs/qualification-gate-qg1a-readiness-contract.md"
       - "tests/test_parameter_policy_qg1a_readiness.py"
       - "mikazuki/parameter_policy_readiness.py"
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - "tests/test_parameter_policy_qg1a_sr1.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/parameter_policy_trainer.py"
   pull_request:
     paths:
       - ".github/workflows/qg1a-readiness-host.yml"
       - "docs/qualification-gate-qg1a-readiness-contract.md"
       - "tests/test_parameter_policy_qg1a_readiness.py"
       - "mikazuki/parameter_policy_readiness.py"
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - "tests/test_parameter_policy_qg1a_sr1.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/parameter_policy_trainer.py"
   workflow_dispatch:
 
 permissions:
