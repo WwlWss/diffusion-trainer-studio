@@ -63,8 +63,10 @@ def read_linux_connected_peer_credentials(
 ) -> LinuxPeerCredentials:
     """Read real SO_PEERCRED from a connected AF_UNIX stream socket only."""
     _linux_required()
-    if not isinstance(connected_socket, socket.socket):
-        _deny("native socket handle required")
+    # Do not accept socket.socket subclasses: Python overrides of
+    # getpeername()/getsockopt() could fabricate a supposed kernel identity.
+    if type(connected_socket) is not socket.socket:
+        _deny("exact native socket handle required")
     if (connected_socket.family != socket.AF_UNIX
             or (connected_socket.type & socket.SOCK_STREAM)
             != socket.SOCK_STREAM):
