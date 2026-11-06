@@ -141,3 +141,40 @@ design, not merely chmod on a socket after binding.
   by normal GitHub same-user CI. Original `Accelerator.load_state`, P1-C
   genuine nine-file/789-BF16 Fresh Step-1, `checkpoint_loaded`,
   `worker_complete` and full CUDA qualification remain HOLD.
+
+## A5 independent Strict Review and forged native Socket fix
+
+**Security finding B2-A-F1 (scoped, resolved):** The first Linux observer
+accepted `isinstance(connected_socket, socket.socket)`. A subclass can
+override Python `getpeername()`/`getsockopt()` and return fabricated
+`SO_PEERCRED` bytes, so a result could be **falsely called a kernel
+observation**, despite all signing gates remaining closed. The fix uses
+`type(connected_socket) is socket.socket` to require the exact native
+Socket type. No Worker-supplied peer map, wrapper or subclass is promoted.
+
+- [A5 tests-only RED #42186189981](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42186189981) at `e458c942457ee0025eba8ffa0ee26639e5ad0886`: four tests executed, exactly **S201 spoofed-socket FAIL + S202–S204 baseline PASS**, zero ERROR/SKIP/xfail/xpass. Test file:
+  `tests/test_sd3_full_bf16_worker_c4c_p1b2cb_linux_strict.py`.
+- A5 minimum correction `e651edc821577ad9cd7545cbf58fef5ddeae0dab` changes only native socket type validation and rejects overridden Python accessor methods.
+- [A5 strict GREEN #42186253367](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42186253367): **4/4 PASS**; [A2–A4 same HEAD #42186253372](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42186253372): **12/12 PASS**, zero FAIL/ERROR/SKIP/xfail/xpass. Both are unprivileged Linux Host qualifications.
+
+**Review coverage:** Real native connected `SO_PEERCRED` positive observation
+and non-Linux/wrong-type/unconnected failures; forged subclass refusal;
+actual `getresuid/getresgid` observation and permanent deny without service
+policy; inherited env contamination; conservative source-path red flags;
+fixed unprovisioned CLI and bounded read-only socket diagnostic for malformed,
+oversized and signing requests; rejection of `--serve` before bind/listen;
+prior Runner signer, root and original Load fail-closed.
+
+**Known conditional risks (explicit HOLD, not misreported as solved):**
+- The `lstat` code-path scan is not an ACL/mount-namespace/TOCTOU-safe
+  privileged file handle. It must remain unqualified and cannot protect a
+  future production key, trust root or executable by itself.
+- `SO_PEERCRED` identifies a real connection peer at connect time but does
+  not prove protected service-manager origin, secure filesystem state,
+  or parent Checkpoint source. Application-layer Python monkeypatches in
+  an untrusted same-process test cannot create a legitimate protected
+  principal. No direct positive authorization follows either observation.
+- The service module has no working listener in unprovisioned mode.
+  B2-A Host Scoped GREEN must never be labeled deployed protected
+  Linux Service GREEN. Real cross-account Linux Layer O integration,
+  Windows B2-B and physical P1-C remain **HOLD**. PR #65 stays Draft.
