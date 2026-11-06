@@ -63,7 +63,17 @@ class ReadinessIssue:
 def _issue_tuple(values: Sequence[ReadinessIssue], *, name: str) -> tuple[ReadinessIssue, ...]:
     if isinstance(values, (str, bytes, bytearray)) or not isinstance(values, Sequence):
         raise ValueError(f"Readiness {name} must be a sequence of ReadinessIssue.")
-    result = tuple(values)
+    # Sequence may be an application-defined object: len/iter/getitem can
+    # fail with arbitrary ordinary exceptions during tuple conversion.
+    # Keep the public Sequence ABI and normalize malformed input only.
+    try:
+        result = tuple(values)
+    except MemoryError:
+        raise
+    except Exception:
+        raise ValueError(
+            f"Readiness {name} must be a valid sequence of ReadinessIssue."
+        ) from None
     if any(type(issue) is not ReadinessIssue for issue in result):
         raise ValueError(f"Readiness {name} must contain only ReadinessIssue.")
     return result
