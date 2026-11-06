@@ -1,0 +1,102 @@
+name: DTS QG-1A pure ExecutionReadiness tests-only RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1a-readiness-contract"
+    paths:
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - "docs/qualification-gate-qg1a-readiness-contract.md"
+      - "tests/test_parameter_policy_qg1a_readiness.py"
+      - "mikazuki/parameter_policy_readiness.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - "docs/qualification-gate-qg1a-readiness-contract.md"
+      - "tests/test_parameter_policy_qg1a_readiness.py"
+      - "mikazuki/parameter_policy_readiness.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qg1a-pure-host:
+    name: QG-1A pure readiness 12 RED / 4 baseline PASS (NO CUDA) - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact PR source without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new tests (no runtime deps)
+        run: python -m py_compile tests/test_parameter_policy_qg1a_readiness.py
+      - name: Exact 16-case QG-1A source contract RED-to-GREEN gate
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1a_readiness"
+          )
+          found = suite.countTestCases()
+          if found != 16:
+              raise SystemExit(f"QG-1A INVALID DISCOVERY: {found} != 16")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1A INVALID TEST EXECUTION: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+
+          expected = {
+              "test_qg101_frozen_public_types_and_pure_evaluator_are_present",
+              "test_qg102_issue_has_stable_code_source_and_immutable_fields",
+              "test_qg103_implemented_and_verified_no_errors_is_allow",
+              "test_qg104_evidence_status_alone_never_changes_execution_or_permission",
+              "test_qg105_experimental_candidate_is_warn_and_can_start",
+              "test_qg106_true_runtime_error_overrides_formal_certificate",
+              "test_qg107_unimplemented_and_known_incompatible_never_upgrade",
+              "test_qg108_missing_certificate_is_a_warning_not_a_blocker",
+              "test_qg109_failed_evidence_alone_does_not_prove_broken_implementation",
+              "test_qg110_malformed_enums_issues_and_duplicate_codes_fail",
+              "test_qg111_results_are_frozen_and_snapshots_do_not_alias_inputs",
+              "test_qg112_pure_host_module_never_exposes_signing_or_cuda_authority",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "QG-1A PURE READINESS CONTRACT ABSENT" not in trace
+              ]
+              if actual != expected or unrelated:
+                  raise SystemExit(
+                      f"QG-1A INVALID RED: actual={sorted(actual)} "
+                      f"expected={sorted(expected)} unrelated={unrelated}"
+                  )
+              print(
+                  "QG-1A VALID TESTS-ONLY RED: 12 targeted FAIL + "
+                  "4 legacy baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
+                  "source module intentionally absent"
+              )
+              raise SystemExit(1)
+
+          print(
+              "QG-1A SCOPED PURE CONTRACT GREEN: 16/16 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; no Start integration, "
+              "no real CUDA, no certificate promotion"
+          )
+          PY
