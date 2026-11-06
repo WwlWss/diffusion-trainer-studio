@@ -1,6 +1,6 @@
 # DTS C4-C2-P1-B2-C-B2-B: Windows native token / connected named-pipe boundary
 
-**Parent:** `4d0ef4e032c16e051cc8376b0e52ad204df4090c`; PR #65 Draft/unmerged. **Stage:** B2-B0 source contract, B2-B1 Windows Tests-only RED, B2-B2 Win32 process-token / connected named-pipe observation, B2-B3 ACL/startup and service denial, B2-B4 independent native spoof/cleanup Strict Review. Windows **Host native observations and negative tests only**, NEVER protected OS Layer O qualification.
+**Reviewed parent:** `4d0ef4e032c16e051cc8376b0e52ad204df4090c`; PR #65 Draft/unmerged. **Current stage:** Windows B2-B0/B1/B2/B3/B4 implemented; independent A5 Final Strict Review pending. Scope is only real Win32 **Host token observation and fail-closed negative qualification**, NEVER protected OS Layer O authorization.
 
 ## 1. Roles and source separation
 
@@ -69,3 +69,60 @@ Test false handles and lack of prior client read must fail safely, and a same-SI
 - https://learn.microsoft.com/en-us/windows/win32/api/securitybaseapi/nf-securitybaseapi-gettokeninformation
 - https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createnamedpipew
 - https://learn.microsoft.com/en-us/windows/win32/secauthz/impersonation-levels
+
+
+## 5. Implemented Windows stages and independently observed evidence
+
+**B0 source contract:** `f545f1b79c893c2c161d9de247733f63d32bcc6b`.
+**B1 frozen Tests-only RED:** `8970fda43951e81838267053387b6bebf135e100` and CI `4043beaa0030224946a8c53b66987360c7b2957b`. [Exact RED #42236100602](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42236100602) executed 12 Windows tests = **W104–W112 nine targeted FAIL + W101–W103 three baseline PASS**, 0 ERROR/SKIP/xfail/xpass. Failure cause was missing Windows-specific source, not API invocation.
+**B2 native source:** `459a3776812803bb6f67f40e1facea8c7336b73b`, `tools/sd3_full_bf16_runner_windows_boundary.py`. Real `OpenProcessToken(GetCurrentProcess)`, `GetTokenInformation(TokenUser)`, `ConvertSidToStringSidW`, real same-user named-pipe impersonation and thread token, fixed deny-only startup/credentials. All token and allocated SID handles are cleaned up. **No principal is provisioned.**
+**B3 service shell:** `77a11e0da7b57369c67c1e0111eaa4fa3e3313a4`, `tools/sd3_full_bf16_runner_windows_service.py`. Public `--probe-unprovisioned` and offline read-only denial formatter; `--serve` intentionally refuses before opening a named pipe or signer. [Initial native GREEN #42236563596](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42236563596): **12/12 PASS**, no ERROR/SKIP. A dedicated Windows service has not been installed or started.
+
+### A5 independent native security finding: reject insufficient impersonation level
+
+The first version read `TokenUser` after `ImpersonateNamedPipeClient` without
+checking `TokenImpersonationLevel`. A client connecting with
+`SECURITY_IDENTIFICATION` can have a readable SID yet cannot provide the
+`SecurityImpersonation` level required by the planned local privileged service.
+Its observation **must not** be labelled eligible for future IPC admission.
+
+- A5 test-only fixture allows independently setting client QoS. `tests/test_sd3_full_bf16_worker_c4c_p1b2cb_windows_strict.py` and `.github/workflows/sd3-c2b0-p1b2cb-windows-strict.yml` freeze four tests, including native same-user impersonation success and absence of leaked thread token after `RevertToSelf`.
+- [Valid A5 RED #42237070965](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42237070965): exactly S201 (`SECURITY_IDENTIFICATION`) targeted FAIL + S202–S204 three baseline PASS, zero ERROR/SKIP/xfail/xpass.
+- Minimal fix `fa187dfd63305391b9bca7fbc4a3f3e774ad0abd`: after `OpenThreadToken`, require actual `TokenType=TokenImpersonation` and `TokenImpersonationLevel >= SecurityImpersonation` using native `GetTokenInformation` before returning any client SID. On rejection, `CloseHandle` and `RevertToSelf` still execute from `finally`.
+- [A5 strict GREEN #42237229356](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42237229356): **4/4 PASS**; [same HEAD B2 Windows native #42237229623](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42237229623): **12/12 PASS**, both 0 FAIL/ERROR/SKIP. **These are Host-negative/native-observation results, not an independent protected production service.**
+
+### Protected Windows service configuration: HOLD, not a deployable artifact
+
+Real Layer O **cannot** be satisfied by running this code under the current
+Windows CI account or creating a local same-user test pipe. A controller must
+independently provision a Windows Service Control Manager service with a
+genuinely distinct `TokenUser` SID, a trusted immutable installed Python
+interpreter/modules/native DLL dependencies and an ACL-protected code tree.
+The protected controller must provision the signer private key, pinned root,
+SQLite ledger and IPC security descriptor separately, outside Worker paths,
+with independently verified actual effective DACL, reparse-point/native
+DLL origin checks and protected service configuration.
+
+The current `--serve` intentionally exits 2 before `CreateNamedPipeW`.
+Only after privileged installation and an independently reviewed protocol
+may a server create an explicitly restrictive named pipe, including
+`PIPE_REJECT_REMOTE_CLIENTS` and an appropriate protected security descriptor.
+Every authenticated client request still requires an actual prior read,
+`ImpersonateNamedPipeClient` with verified success, `OpenThreadToken`,
+`TokenType` and `TokenImpersonationLevel`, guaranteed `RevertToSelf` and
+server-owned policy. A native failure to restore service identity must trigger
+a **fatal no-continue condition** in a future privileged service; this
+Host-only observer is not such a service.
+
+Actual worker-account denied-read/write tests for signing key, pinned root,
+ledger (including SQLite WAL/shm), executable/DLL/`sitecustomize`/`.pth`,
+and real cross-SID positive/negative connected IPC must be run on a
+**separately administered** Windows protected test executor. A fake SID in
+a Python dictionary, `icacls` text supplied by Worker or a Test Ed25519 key
+must never qualify. Windows B2-B Host GREEN does not complete B3; the
+generic OS boundary remains deliberately absent and its prior two-OS B1
+contract must remain intentionally RED until a reviewed integration.
+
+P1-C nine original checkpoint files / 789 BF16 tensors, original
+`Accelerator.load_state`, Phase completion, CUDA R1/R2, worker_complete and
+merge remain HOLD.
