@@ -20,6 +20,10 @@ from typing import Any, NoReturn
 
 _TOKEN_QUERY = 0x0008
 _TOKEN_USER_CLASS = 1
+_TOKEN_TYPE_CLASS = 8
+_TOKEN_IMPERSONATION_LEVEL_CLASS = 9
+_TOKEN_IMPERSONATION_TYPE = 2
+_SECURITY_IMPERSONATION_LEVEL = 2
 _ERROR_INSUFFICIENT_BUFFER = 122
 _FILE_TYPE_PIPE = 3
 _PIPE_SERVER_END = 0x00000001
@@ -185,6 +189,23 @@ def observe_windows_named_pipe_client_token(
         ):
             _deny("impersonated client thread token unavailable")
         try:
+            # A low-privilege SecurityIdentification token can reveal SID
+            # text without being sufficient for local impersonation. Require
+            # actual TokenImpersonation and SecurityImpersonation+ before
+            # reporting this as a genuine authenticated client observation.
+            token_type = wintypes.DWORD()
+            level = wintypes.DWORD()
+            obtained = wintypes.DWORD()
+            if not a.GetTokenInformation(
+                token, _TOKEN_TYPE_CLASS, ctypes.byref(token_type),
+                ctypes.sizeof(token_type), ctypes.byref(obtained)
+            ) or token_type.value != _TOKEN_IMPERSONATION_TYPE:
+                _deny("native client token is not an impersonation token")
+            if not a.GetTokenInformation(
+                token, _TOKEN_IMPERSONATION_LEVEL_CLASS, ctypes.byref(level),
+                ctypes.sizeof(level), ctypes.byref(obtained)
+            ) or level.value < _SECURITY_IMPERSONATION_LEVEL:
+                _deny("client impersonation level too low")
             sid = _sid_from_native_token(k, a, token)
         finally:
             k.CloseHandle(token)
