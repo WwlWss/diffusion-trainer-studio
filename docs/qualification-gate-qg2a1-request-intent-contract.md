@@ -73,32 +73,32 @@ This section describes the implemented **Request Host** scope after the original
 dual-OS Tests-only RED. Sections 1–4 above remain the historical frozen
 contract; they do not grant direct Trainer or GUI admission.
 
-- In \`mikazuki/training_config.py\`, \`RequestAdmissionIntent\` is frozen and
-  slotted, uses strictly typed \`bool\`, and accepts only \`default\` /
-  \`webui_start\` origins. \`True\` requires \`webui_start\`. Two appended
-  \`PreparedTrainingConfig\` fields carry typed host \`admission\` and one
-  request's \`admission_intent\` outside the Trainer config/sidecars, preserving
+- In `mikazuki/training_config.py`, `RequestAdmissionIntent` is frozen and
+  slotted, uses strictly typed `bool`, and accepts only `default` /
+  `webui_start` origins. `True` requires `webui_start`. Two appended
+  `PreparedTrainingConfig` fields carry typed host `admission` and one
+  request's `admission_intent` outside the Trainer config/sidecars, preserving
   the existing positional dataclass ABI.
-- In \`mikazuki/training_request.py\`, explicit \`admission_intent\` and
-  \`admission_purpose\` keyword-only inputs are type checked. The purpose is
-  constrained to the actual \`launch\` mode; raw/custom/nested normalized
-  copies of \`experimental_full_bf16_ack\`, \`admission_intent\`, or \`admission\`
+- In `mikazuki/training_request.py`, explicit `admission_intent` and
+  `admission_purpose` keyword-only inputs are type checked. The purpose is
+  constrained to the actual `launch` mode; raw/custom/nested normalized
+  copies of `experimental_full_bf16_ack`, `admission_intent`, or `admission`
   are rejected instead of interpreted as credentials.
-- \`assess_component_training_admission\` runs after
-  \`prepare_training_config\` applies the final \`ui_custom_params\` overlay
+- `assess_component_training_admission` runs after
+  `prepare_training_config` applies the final `ui_custom_params` overlay
   and after the existing host-owned Policy/Multi-Caption path checks. The
-  result is stored separately as \`prepared.admission\`. Preview/Export scrub
+  result is stored separately as `prepared.admission`. Preview/Export scrub
   positive intent and never use it in an admission decision or sidecar.
   New tests additionally exercise the **real** GUI compilation path with
-  both \`full_bf16: true → false\` and \`false → true\` via custom TOML.
-- Importantly the QG-1B3-B \`parameter_policy_runtime_blockers\` still owns
-  the Start hard gate and still passes \`experimental_ack=False\` internally.
-  Even \`RequestAdmissionIntent(True, "webui_start")\` can create at most a
-  *host-side* \`experimental_host_candidate\`; Start remains blocked for an
+  both `full_bf16: true → false` and `false → true` via custom TOML.
+- Importantly the QG-1B3-B `parameter_policy_runtime_blockers` still owns
+  the Start hard gate and still passes `experimental_ack=False` internally.
+  Even `RequestAdmissionIntent(True, "webui_start")` can create at most a
+  *host-side* `experimental_host_candidate`; Start remains blocked for an
   uncertified configuration until both A2 API + B Direct Trainer are
   implemented and reviewed. Validation/sidecar/materialization order and
   current D1-qualified cases remain unchanged.
-- Existing AST-isolated \`tests/test_parameter_policy_request_contract.py\`
+- Existing AST-isolated `tests/test_parameter_policy_request_contract.py`
   helper namespaces were extended only to inject the new named producer,
   typed intent and existing custom-TOML parser. Mocked Step 6F tests retain
   their historical purposes; real-pipeline tests install the real producer.
@@ -109,7 +109,7 @@ contract; they do not grant direct Trainer or GUI admission.
   rather than treating a scoped Host pass as complete readiness.
 
 **Stop line:** This is only QG-2-A1 scoped Host GREEN. No production edits
-to \`app/training_api.py\`, \`parameter_policy_trainer.py\`, launcher transport,
+to `app/training_api.py`, `parameter_policy_trainer.py`, launcher transport,
 source qualification/release tables, CUDA, optimizer ownership or Checkpoint
 are authorized by this gate. Draft PR #69 stays open/unmerged. Next is the
 independent Strict Review of Request inputs/one-job lifetime before QG-2-A2.
