@@ -180,18 +180,25 @@ class QG2A1SR1TargetedRed(unittest.TestCase):
         self.assertEqual(events, [], "Reject Preview materialize before preparation.")
 
     def test_sr107_materialize_requires_strict_boolean(self):
+        # Freeze one test identity / one RED failure. SubTest would emit four
+        # separate unittest failures and corrupt the exact RED count.
+        violations = []
         for value in ("false", 1, 0, None):
-            # None was not defined as a valid implicit default in the frozen
-            # contract: only omission uses the declared False default.
-            with self.subTest(value=repr(value)):
-                prepare, events = _prepare_fixture(component=False)
-                self._requires_denial(
-                    prepare, events,
-                    fragment="materialize",
-                    launch=False, admission_purpose="preview",
-                    materialize=value,
+            prepare, events = _prepare_fixture(component=False)
+            try:
+                prepare(
+                    {}, "sd-lora", launch=False,
+                    admission_purpose="preview", materialize=value,
                 )
-                self.assertEqual(events, [])
+            except ValueError as exc:
+                if "materialize" not in str(exc):
+                    violations.append(f"{value!r}: wrong error {exc}")
+            else:
+                violations.append(f"{value!r}: invalid value was accepted")
+            if events:
+                violations.append(f"{value!r}: preparation/writes occurred {events}")
+        if violations:
+            self.fail(f"{MARKER}: " + "; ".join(violations))
 
     def test_sr108_prepared_type_hints_resolve_real_component_admission(self):
         try:
