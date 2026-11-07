@@ -1,0 +1,156 @@
+name: DTS QG-2-A2 API and frontend Admission Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2a2-api-host.yml"
+      - "docs/qualification-gate-qg2a2-api-ui-contract.md"
+      - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/frontend_training_patch.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2a2-api-host.yml"
+      - "docs/qualification-gate-qg2a2-api-ui-contract.md"
+      - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/frontend_training_patch.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  a2-host:
+    name: QG-2-A2 exact 12 API/UI RED plus four actual baselines (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile QG-2-A2 isolated API/UI contracts and source
+        run: python -m py_compile tests/test_parameter_policy_qg2a2_api_red.py mikazuki/app/training_api.py mikazuki/frontend_training_patch.py
+      - name: Preserve exact inherited A1, SR1 and B3 Host GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_admission_adapter_host", 12),
+              ("tests.test_parameter_policy_qg1b3b_runtime_migration", 12),
+              ("tests.test_parameter_policy_qg2a1_request_red", 16),
+              ("tests.test_parameter_policy_qg2a1_sr1", 12),
+              ("tests.test_parameter_policy_qg2a1_sr1_lifecycle", 5),
+          ]
+          for name, expected in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"QG2-A2 BAD GREEN DISCOVERY {name}: {suite.countTestCases()}")
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              if (result.testsRun != expected or result.errors or result.failures
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG2-A2 PRIOR GREEN REGRESSION: {name}")
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_training_api_overlay_contract"
+          )
+          if suite.countTestCases() < 9:
+              raise SystemExit("QG2-A2 previous public API routing coverage missing")
+          result = unittest.TextTestRunner(verbosity=1).run(suite)
+          if (result.errors or result.failures or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("QG2-A2 previous public API contract regression")
+          print("QG-2-A2 inherited GREEN: 42 QG1B +12 adapter +12 B3B "
+                "+16 A1 +12 SR1 +5 lifecycle + legacy public API overlay")
+          PY
+      - name: Preserve B301-B310 GREEN and precisely B311-B312 integration RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2TargetedRed, QG1B3QG2ExistingBaselines, MARKER
+          )
+          targets = sorted(n for n in dir(QG1B3QG2TargetedRed)
+                           if n.startswith("test_b3"))
+          baselines = sorted(n for n in dir(QG1B3QG2ExistingBaselines)
+                             if n.startswith("test_b9"))
+          if len(targets) != 12 or len(baselines) != 4:
+              raise SystemExit("QG-2-A2 INVALID B3 DISCOVERY")
+          suite = unittest.TestSuite(
+              [QG1B3QG2TargetedRed(n) for n in targets]
+              + [QG1B3QG2ExistingBaselines(n) for n in baselines]
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or len(result.failures) != 2
+                  or actual != set(targets[-2:])
+                  or result.expectedFailures or result.unexpectedSuccesses
+                  or any(MARKER not in trace for _, trace in result.failures)):
+              raise SystemExit(f"QG-2-A2 INVALID B311/B312 HOLD: {sorted(actual)}")
+          print("QG-2-A2 inherited: B301-B310+4 baselines GREEN; "
+                "B311 and B312 EXACT TWO INTENTIONAL RED, no launch permission")
+          PY
+      - name: Exact A201-A212 source RED or later fully tested scoped GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a2_api_red import (
+              QG2A2TargetedRed, QG2A2ExistingBaselines, MARKER
+          )
+          targets = sorted(n for n in dir(QG2A2TargetedRed)
+                           if n.startswith("test_a2"))
+          baselines = sorted(n for n in dir(QG2A2ExistingBaselines)
+                             if n.startswith("test_a9"))
+          if len(targets) != 12 or len(baselines) != 4:
+              raise SystemExit(f"QG-2-A2 BAD DISCOVERY: {len(targets)}+{len(baselines)}")
+          for number in range(201, 213):
+              if sum(n.startswith(f"test_a{number}_") for n in targets) != 1:
+                  raise SystemExit(f"QG-2-A2 BAD A{number} DISCOVERY")
+          for number in range(901, 905):
+              if sum(n.startswith(f"test_a{number}_") for n in baselines) != 1:
+                  raise SystemExit(f"QG-2-A2 BAD A{number} BASELINE DISCOVERY")
+          target = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2A2TargetedRed(n) for n in targets)
+          )
+          baseline = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2A2ExistingBaselines(n) for n in baselines)
+          )
+          if (target.testsRun != 12 or baseline.testsRun != 4 or target.errors
+                  or baseline.errors or baseline.failures
+                  or target.skipped or baseline.skipped
+                  or target.expectedFailures or baseline.expectedFailures
+                  or target.unexpectedSuccesses or baseline.unexpectedSuccesses):
+              raise SystemExit("QG-2-A2 INVALID RUN: unexpected ERROR/FAIL/SKIP/xfail/xpass")
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in target.failures}
+          bad = [case.id() for case, trace in target.failures
+                 if MARKER not in trace]
+          if len(target.failures) == 12 and actual == set(targets) and not bad:
+              print("QG-2-A2 VALID TESTS-ONLY RED: A201-A212 EXACT 12 "
+                    "missing-source FAIL + A901-A904 4 real API PASS, "
+                    "no ERROR/SKIP/xfail/xpass. NO production edits.")
+              raise SystemExit(1)  # valid RED must truthfully FAIL this job
+          if target.failures:
+              raise SystemExit(f"QG-2-A2 INVALID RED IDENTITIES: {sorted(actual)}")
+          print("QG-2-A2 TEST-ONLY SOURCE GREEN CANDIDATE 12/12+4/4 "
+                "(frontend real UI smoke and Direct Trainer still HOLD)")
+          PY
