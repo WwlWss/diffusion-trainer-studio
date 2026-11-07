@@ -145,6 +145,19 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
         self.assertFalse(preview["runtime_ready"])
         self.assertEqual(preview["runtime_blockers"], state.runtime_blockers)
 
+    def test_sr205_unreviewed_backend_preserves_step6f_pending_error(self):
+        # Fix A adds independent typed denial, but must keep the original
+        # first diagnostic when Step 6F already has a hard blocker.
+        prepare = _real_prepare_request()
+        with self.assertRaisesRegex(ValueError, "full_bf16"):
+            prepare(
+                _component_gui_config(
+                    "flux-finetune", ["transformer.double_stream"],
+                    full_bf16=True, mixed_precision="bf16",
+                ),
+                "flux-finetune", launch=True,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
