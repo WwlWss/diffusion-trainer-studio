@@ -66,3 +66,50 @@ Every A101–A112 test fails at the *actual absent A1 interface* with marker `QG
 A separate Ubuntu + Windows Python 3.11 workflow checks prior scoped QG-1B3-B stable Host cases and **exactly 12 A1 targeted FAIL + 4 baseline PASS** (zero ERROR/SKIP/xfail/xpass); the workflow ends FAILURE on valid Tests-only RED. Freeze run IDs, exact commit and failure marker after real CI. Concurrent inherited B310–B312 remain intentionally RED; no new blanket rejection of existing D1/Standard.
 
 **Next after valid RED:** minimal A1 GREEN (only `training_config.py`, `training_request.py` and its tests), independent review of input/intent trust and no side effects, then QG-2-A2 GUI/API transport with typed Preview/Export/Start and B311, followed by QG-2-B direct Trainer/launcher B312. No actual experimental Full-BF16 user launch until both entrypoints and physical checks are reviewed; no PR merge before full parity and Final Strict.
+
+## 5. Minimal GREEN implementation following the frozen RED
+
+This section describes the implemented **Request Host** scope after the original
+dual-OS Tests-only RED. Sections 1–4 above remain the historical frozen
+contract; they do not grant direct Trainer or GUI admission.
+
+- In \`mikazuki/training_config.py\`, \`RequestAdmissionIntent\` is frozen and
+  slotted, uses strictly typed \`bool\`, and accepts only \`default\` /
+  \`webui_start\` origins. \`True\` requires \`webui_start\`. Two appended
+  \`PreparedTrainingConfig\` fields carry typed host \`admission\` and one
+  request's \`admission_intent\` outside the Trainer config/sidecars, preserving
+  the existing positional dataclass ABI.
+- In \`mikazuki/training_request.py\`, explicit \`admission_intent\` and
+  \`admission_purpose\` keyword-only inputs are type checked. The purpose is
+  constrained to the actual \`launch\` mode; raw/custom/nested normalized
+  copies of \`experimental_full_bf16_ack\`, \`admission_intent\`, or \`admission\`
+  are rejected instead of interpreted as credentials.
+- \`assess_component_training_admission\` runs after
+  \`prepare_training_config\` applies the final \`ui_custom_params\` overlay
+  and after the existing host-owned Policy/Multi-Caption path checks. The
+  result is stored separately as \`prepared.admission\`. Preview/Export scrub
+  positive intent and never use it in an admission decision or sidecar.
+  New tests additionally exercise the **real** GUI compilation path with
+  both \`full_bf16: true → false\` and \`false → true\` via custom TOML.
+- Importantly the QG-1B3-B \`parameter_policy_runtime_blockers\` still owns
+  the Start hard gate and still passes \`experimental_ack=False\` internally.
+  Even \`RequestAdmissionIntent(True, "webui_start")\` can create at most a
+  *host-side* \`experimental_host_candidate\`; Start remains blocked for an
+  uncertified configuration until both A2 API + B Direct Trainer are
+  implemented and reviewed. Validation/sidecar/materialization order and
+  current D1-qualified cases remain unchanged.
+- Existing AST-isolated \`tests/test_parameter_policy_request_contract.py\`
+  helper namespaces were extended only to inject the new named producer,
+  typed intent and existing custom-TOML parser. Mocked Step 6F tests retain
+  their historical purposes; real-pipeline tests install the real producer.
+- The QG-2-A1 workflow now requires A101–A112 12/12 PASS and A901–A904
+  4/4 PASS on both OS, with B301–B310 and prior baselines GREEN. The
+  cumulative full-contract workflow remains explicitly **RED** for B311
+  (typed GUI/Preview/Export/Start) and B312 (Direct Trainer/CLI/launcher),
+  rather than treating a scoped Host pass as complete readiness.
+
+**Stop line:** This is only QG-2-A1 scoped Host GREEN. No production edits
+to \`app/training_api.py\`, \`parameter_policy_trainer.py\`, launcher transport,
+source qualification/release tables, CUDA, optimizer ownership or Checkpoint
+are authorized by this gate. Draft PR #69 stays open/unmerged. Next is the
+independent Strict Review of Request inputs/one-job lifetime before QG-2-A2.
