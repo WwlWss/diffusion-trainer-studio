@@ -193,6 +193,21 @@ def match_full_bf16_evidence_coverage(
     if not isinstance(components, Mapping) or not isinstance(profiles, Mapping):
         return EvidenceCoverage(False, None, ("policy.unavailable",))
 
+    # D1 proof only covered true Full-BF16, single-process execution.
+    # These are shape conditions, NOT extra producer runtime hard errors.
+    if effective_config.get("full_bf16") is not True:
+        reasons.append("execution.full_bf16_unconfirmed")
+    if effective_config.get("mixed_precision") != "bf16":
+        reasons.append("execution.mixed_precision_unconfirmed")
+    if effective_config.get("num_processes", 1) != 1 or (
+        type(effective_config.get("num_processes", 1)) is bool
+    ):
+        reasons.append("execution.process_count_unconfirmed")
+    if effective_config.get("distributed_type") not in (None, "NO"):
+        reasons.append("execution.distributed_mode_outside_scope")
+    if effective_config.get("fused_optimizer_groups") not in (None, 0):
+        reasons.append("execution.fused_optimizer_groups_outside_scope")
+
     active = {
         name: route
         for name, route in components.items()
@@ -225,6 +240,7 @@ def match_full_bf16_evidence_coverage(
         "v2", "network_train_unet_only", "network_train_text_encoder_only",
         "cache_text_encoder_outputs", "cache_text_encoder_outputs_to_disk",
         "gradient_checkpointing", "full_fp16", "fp8_base", "deepspeed",
+        "torch_compile", "compile", "fused_backward_pass",
     ):
         if effective_config.get(key) not in (None, False, 0):
             reasons.append(f"feature.{key}_outside_scope")
