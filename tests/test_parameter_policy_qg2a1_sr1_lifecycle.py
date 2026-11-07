@@ -6,7 +6,6 @@ They intentionally do not authorize GUI/Direct Trainer or perform CUDA work.
 from __future__ import annotations
 
 import json
-import toml
 import unittest
 from unittest.mock import patch
 
@@ -74,15 +73,22 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
                 exported.admission_intent.experimental_full_bf16_ack
             )
 
-            portable_toml = toml.dumps(exported.config)
-            portable_sidecars = json.dumps(exported.sidecars, sort_keys=True)
-            self.assertNotIn("experimental_full_bf16_ack", portable_toml)
-            self.assertNotIn("experimental_full_bf16_ack", portable_sidecars)
-            self.assertNotIn("admission_intent", portable_toml)
+            # Freeze the control-plane exclusion via a real portable JSON
+            # copy of Trainer fields + host-owned sidecars. This minimal
+            # Host CI intentionally does not install the optional 'toml'
+            # package used by the FastAPI Export payload renderer.
+            portable_text = json.dumps({
+                "train_type": exported.train_type,
+                "effective_config": exported.config,
+                "sidecars": exported.sidecars,
+            }, ensure_ascii=False, sort_keys=True)
+            self.assertNotIn("experimental_full_bf16_ack", portable_text)
+            self.assertNotIn("admission_intent", portable_text)
+            portable = json.loads(portable_text)
 
             rehydrated = rehydrate_trainer_config(
-                toml.loads(portable_toml), "sd-lora",
-                sidecars=exported.sidecars,
+                portable["effective_config"], "sd-lora",
+                sidecars=portable["sidecars"],
             )
             self.assertNotIn("experimental_full_bf16_ack", rehydrated)
             second = prepare(
