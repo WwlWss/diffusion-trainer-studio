@@ -43,7 +43,30 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile SR1 and Request/Prepared source
-        run: python -m py_compile tests/test_parameter_policy_qg2a1_sr1.py mikazuki/training_request.py mikazuki/training_config.py
+        run: python -m py_compile tests/test_parameter_policy_qg2a1_sr1.py tests/test_parameter_policy_qg2a1_sr1_lifecycle.py mikazuki/training_request.py mikazuki/training_config.py
+      - name: Fix D cold-import both orders and resolve first-party runtime type
+        shell: bash
+        run: |
+          python - <<'PY'
+          from typing import get_type_hints, get_args
+          from mikazuki.training_config import PreparedTrainingConfig
+          from mikazuki.parameter_policy_admission import ComponentAdmission
+          from mikazuki.parameter_policy_editor import parameter_policy_editor_metadata
+          resolved = get_args(get_type_hints(PreparedTrainingConfig)["admission"])
+          if set(resolved) != {ComponentAdmission, type(None)}:
+              raise SystemExit(f"Fix D failed config-first import: {resolved}")
+          print("Fix D cold config-first import, get_type_hints: PASS")
+          PY
+          python - <<'PY'
+          from typing import get_type_hints, get_args
+          from mikazuki.parameter_policy_admission import ComponentAdmission
+          from mikazuki.training_config import PreparedTrainingConfig
+          from mikazuki.parameter_policy_editor import parameter_policy_editor_metadata
+          resolved = get_args(get_type_hints(PreparedTrainingConfig)["admission"])
+          if set(resolved) != {ComponentAdmission, type(None)}:
+              raise SystemExit(f"Fix D failed admission-first import: {resolved}")
+          print("Fix D cold admission-first import, get_type_hints: PASS")
+          PY
       - name: Preserve original A1 12 plus four real Host baselines
         shell: bash
         run: |
