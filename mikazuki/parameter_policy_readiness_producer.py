@@ -13,6 +13,9 @@ from collections.abc import Mapping
 from typing import Any
 
 from mikazuki.optimizer_profiles import get_optimizer_capability
+from mikazuki.parameter_policy_evidence_coverage import (
+    match_full_bf16_evidence_coverage,
+)
 from mikazuki.parameter_policy import (
     _non_anima_policy_structure_and_target_blockers,
     _non_anima_text_encoder_cache_blockers,
@@ -91,6 +94,42 @@ def _registry_issue(
     )
 
 
+_CAPABILITY_PRIORITY = {
+    "implemented": 0,
+    "experimental_candidate": 1,
+    "not_implemented": 2,
+    "known_incompatible": 3,
+}
+
+
+def _combine_capability(current: str, incoming: str) -> str:
+    """An actual unsupported/incompatible fact beats a review-only HOLD."""
+    return max((current, incoming), key=_CAPABILITY_PRIORITY.__getitem__)
+
+
+def _aggregate_issues(
+    issues: list[ReadinessIssue],
+) -> tuple[ReadinessIssue, ...]:
+    """Preserve every distinct profile-specific reason under unique codes."""
+    by_code: dict[str, set[tuple[str, str]]] = {}
+    for issue in issues:
+        by_code.setdefault(issue.code, set()).add((issue.source, issue.message))
+
+    result: list[ReadinessIssue] = []
+    for code in sorted(by_code):
+        details = sorted(by_code[code])
+        if len(details) == 1:
+            source, message = details[0]
+        else:
+            source = "QG1B"
+            message = "; ".join(
+                f"[{item_source}] {item_message}"
+                for item_source, item_message in details
+            )
+        result.append(_issue(code, message, source))
+    return tuple(result)
+
+
 def classify_component_full_bf16_readiness(
     canonical_policy: Mapping[str, Any],
     *,
@@ -103,8 +142,8 @@ def classify_component_full_bf16_readiness(
     None means the Full-BF16 feature is strictly inactive.  The result's
     can_start is *advisory*: Preview/Start/Trainer do not consume it yet and
     real Torch dtype/device/optimizer/Checkpoint checks remain separate.
-    require_assets is reserved for later host/source-aware diagnostics; it
-    never substitutes for existing launch asset validation.
+    require_assets=True raises until an actual asset validator is connected;
+    it never silently pretends that model/encoder assets were inspected.
     """
     if not isinstance(effective_config, Mapping):
         raise ValueError("Component Full-BF16 readiness needs an Effective Config mapping.")
@@ -130,6 +169,11 @@ def classify_component_full_bf16_readiness(
         )
     if not active:
         return None
+    if require_assets:
+        raise ValueError(
+            "QG-1B Host asset preflight is not implemented; "
+            "use the existing launch asset validator."
+        )
 
     # The explicit argument names exclude any Worker-supplied claimed
     # capability, severity bucket, evidence tier, or can_start permission.
@@ -226,7 +270,9 @@ def classify_component_full_bf16_readiness(
                 "Encoder embeddings outside the Component optimizer.",
                 "E08",
             ))
-            capability_status = "known_incompatible"
+            capability_status = _combine_capability(
+                capability_status, "known_incompatible"
+            )
 
     if normalized_backend == "sd-lora":
         try:
@@ -242,7 +288,9 @@ def classify_component_full_bf16_readiness(
                 "implementation/ownership audit.",
                 "E07",
             ))
-            capability_status = "not_implemented"
+            capability_status = _combine_capability(
+                capability_status, "experimental_candidate"
+            )
 
     # Source-audited production Host path is intentionally narrower than
     # registered baseline Component trainers.  An unreviewed true Full-BF16
@@ -254,38 +302,48 @@ def classify_component_full_bf16_readiness(
             "not completed a source/optimizer-ownership audit.",
             "E03",
         ))
-        capability_status = "not_implemented"
+        capability_status = _combine_capability(
+            capability_status, "experimental_candidate"
+        )
 
     referenced_types: set[str] = set()
+    referenced_profiles_by_type: dict[str, list[str]] = {}
     profiles = canonical["optimizer_profiles"]
     for profile_name in _referenced_optimizer_profiles(canonical):
         profile = profiles[profile_name]
         optimizer = get_optimizer_capability(profile["type"])
         name = optimizer.name
+        referenced_profiles_by_type.setdefault(name, []).append(profile_name)
         if optimizer.component_support == "planned":
             hard.append(_issue(
                 "capability.optimizer.not_implemented",
-                f"Optimizer {name} is registered but not implemented for "
-                "Component v1 execution.",
+                f"Optimizer Profile {profile_name!r} ({name}) is registered "
+                "but not implemented for Component v1 execution.",
                 "O07",
             ))
-            capability_status = "not_implemented"
+            capability_status = _combine_capability(
+                capability_status, "not_implemented"
+            )
         elif optimizer.component_support != "supported":
             hard.append(_issue(
                 "capability.optimizer.audit_required",
-                f"Optimizer {name} needs an actual Component-specific "
-                "optimizer/learning-rate ownership audit.",
+                f"Optimizer Profile {profile_name!r} ({name}) needs a "
+                "Component-specific optimizer/learning-rate ownership audit.",
                 "O06",
             ))
-            capability_status = "not_implemented"
+            capability_status = _combine_capability(
+                capability_status, "experimental_candidate"
+            )
         elif name not in _AUDITED_OPTIMIZERS:
             hard.append(_issue(
                 "capability.optimizer.audit_required",
-                f"Optimizer {name} does not yet have this source-audited "
-                "true Full-BF16 Component execution contract.",
+                f"Optimizer Profile {profile_name!r} ({name}) does not yet "
+                "have this source-audited true Full-BF16 execution contract.",
                 "O02",
             ))
-            capability_status = "not_implemented"
+            capability_status = _combine_capability(
+                capability_status, "experimental_candidate"
+            )
         else:
             # The existing AdamW variant gate describes known D0 proof scope.
             # Extra explicit state variants need an actual constructor/Resume
@@ -296,15 +354,17 @@ def classify_component_full_bf16_readiness(
             if variant:
                 hard.append(_issue(
                     "capability.optimizer.audit_required",
-                    variant,
+                    f"Optimizer Profile {profile_name!r} ({name}): {variant}",
                     "E06",
                 ))
-                capability_status = "not_implemented"
+                capability_status = _combine_capability(
+                    capability_status, "experimental_candidate"
+                )
         referenced_types.add(name)
 
-    # Multiple referenced profiles may share a single optimizer type and
-    # issue code.  Aggregate stable issue codes rather than duplicate them.
-    unique_hard = tuple({item.code: item for item in hard}.values())
+    # Multiple referenced Profiles can share an issue code. Preserve every
+    # reason in a deterministic aggregate without weakening any hard error.
+    unique_hard = _aggregate_issues(hard)
 
     # Unreviewed or incompatible host semantics must never display a formal
     # tier based solely on a release row, even if that row is manipulated.
@@ -324,27 +384,53 @@ def classify_component_full_bf16_readiness(
     if backend_warning:
         warnings.append(backend_warning)
 
-    # Only actual trained optimizer references affect qualification; unused
-    # stored Profile definitions have no optimizer state in this job.
-    optimizer_warnings = [
-        _registry_issue(
+    # Do not convert the backend's broad release row into a certificate for
+    # arbitrary training settings. D1 cases bind exact input model/policy
+    # identities; this Host-only producer cannot verify those identities.
+    coverage = match_full_bf16_evidence_coverage(
+        train_type=normalized_backend,
+        canonical_policy=canonical,
+        effective_config=effective_config,
+    )
+    if coverage.covered:
+        warnings.append(_issue(
+            "qualification.variant.identity_unverified",
+            f"D1 reference shape {coverage.case_id} matched, but this Host "
+            "has not verified the model/input SHA or checkpoint provenance.",
+            "E13",
+        ))
+    else:
+        warnings.append(_issue(
+            "qualification.variant.outside_scope",
+            "Host config is outside or insufficient to establish the D1 "
+            "reference-shape scope: " + ", ".join(coverage.reasons),
+            "E13",
+        ))
+
+    # Only referenced primary/fallback Profiles influence evidence. Each
+    # source Profile is retained in the diagnostics even when types and codes
+    # repeat. Unused stored Profiles do not enter the current optimizer.
+    for name in sorted(referenced_types):
+        optimizer_warning = _registry_issue(
             subject="optimizer",
             row=FULL_BF16_OPTIMIZER_QUALIFICATIONS.get(name),
             required_id=FULL_BF16_SHARED_OPTIMIZER_EVIDENCE_ID,
         )
-        for name in sorted(referenced_types)
-    ]
-    warning_by_code = {item.code: item for item in warnings}
-    for item in optimizer_warnings:
-        if item is not None:
-            warning_by_code.setdefault(item.code, item)
+        if optimizer_warning:
+            owners = ", ".join(sorted(referenced_profiles_by_type[name]))
+            warnings.append(_issue(
+                optimizer_warning.code,
+                f"Optimizer {name} via Profiles {owners}: "
+                f"{optimizer_warning.message}",
+                optimizer_warning.source,
+            ))
 
     return evaluate_execution_readiness(
         capability="implemented",
-        warnings=tuple(warning_by_code.values()),
-        evidence_tier=(
-            "formally_qualified" if not warning_by_code else "unverified"
-        ),
+        warnings=_aggregate_issues(warnings),
+        # Qualified case-family rows do not authenticate THIS job's model
+        # files. The Host cannot claim per-run formal proof without that bind.
+        evidence_tier="unverified",
     )
 
 
