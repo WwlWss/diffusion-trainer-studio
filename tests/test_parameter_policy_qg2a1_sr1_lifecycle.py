@@ -114,7 +114,7 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
             full_bf16=True, mixed_precision="bf16",
             gpu_ids=["0", "1"],
         )
-        state = prepare(raw, "sd-lora", launch=False)
+        state = prepare(deepcopy(raw), "sd-lora", launch=False)
         self.assertEqual(state.admission.status, "legacy_approved")
         self.assertTrue(state.admission.host_admissible)
         self.assertTrue(
@@ -122,7 +122,7 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
             state.runtime_blockers,
         )
         with self.assertRaisesRegex(ValueError, "GPU"):
-            prepare(raw, "sd-lora", launch=True, materialize=True)
+            prepare(deepcopy(raw), "sd-lora", launch=True, materialize=True)
 
     def test_sr204_public_runtime_ready_uses_all_blockers_not_host_only(self):
         prepare = _real_prepare_request(
