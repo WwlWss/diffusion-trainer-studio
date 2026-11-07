@@ -11,7 +11,9 @@ from pathlib import Path
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
-from mikazuki.parameter_policy_admission import assess_component_training_admission
+from mikazuki.parameter_policy_admission import (
+    ComponentAdmission, assess_component_training_admission,
+)
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
@@ -288,25 +290,35 @@ def prepare_request_config(
             launch and admission_purpose == "start"
             and admission_intent.experimental_full_bf16_ack
         )
-        prepared.admission = assess_component_training_admission(
+        admission = assess_component_training_admission(
             policy,
             train_type=prepared.train_type,
             effective_config=prepared.config,
             purpose=admission_purpose,
             experimental_ack=explicit_start_ack,
         )
+        if type(admission) is not ComponentAdmission:
+            raise ValueError(
+                "Request requires a first-party typed ComponentAdmission "
+                "diagnostic, never None or a caller-provided permission."
+            )
+        prepared.admission = admission
         if explicit_start_ack:
-            if prepared.admission.status in {"inactive", "legacy_approved"}:
+            if admission.status in {"inactive", "legacy_approved"}:
                 raise ValueError(
                     "Experimental Full-BF16 acknowledgement is only valid "
                     "for a nonqualified, source-audited Component candidate."
                 )
-            prepared.admission_intent = admission_intent
+            # Preserve genuine per-request acknowledgement only for the
+            # audited *candidate* state. Never carry consent when blocked.
+            if admission.status == "experimental_host_candidate":
+                prepared.admission_intent = admission_intent
 
-        # The existing hard gate still evaluates experimental_ack=False.
-        # Until QG-2-A2 (API) and QG-2-B (Direct Trainer) are BOTH validated,
-        # no Host candidate can bypass this legacy/fail-closed Start path.
-        blockers = parameter_policy_runtime_blockers(
+        # Defense in depth: the existing Step 6F and GPU hard gates MUST
+        # remain independent of the typed Host admission producer.  An
+        # experimental ack is still False in Step 6F until BOTH QG-2-A2 and
+        # QG-2-B are reviewed; it is not an authorization token.
+        legacy_blockers = parameter_policy_runtime_blockers(
             policy,
             train_type=prepared.train_type,
             effective_config=prepared.config,
@@ -315,10 +327,25 @@ def prepare_request_config(
             # intent (effective_launch is deliberately false for Components).
             require_assets=launch,
         )
-        blockers.extend(parameter_policy_gpu_selection_blockers(prepared.gpu_ids))
+        gpu_blockers = parameter_policy_gpu_selection_blockers(prepared.gpu_ids)
+        # Typed source errors must also appear in Preview's comprehensive
+        # runtime diagnostics. Preserve all old diagnostic ordering and
+        # de-duplicate by exact text, never by searching for "pending".
+        blockers = list(dict.fromkeys(
+            [*legacy_blockers, *gpu_blockers, *admission.runtime_blockers]
+        ))
         prepared.runtime_blockers.extend(blockers)
-        if launch and blockers:
-            raise ValueError(blockers[0])
+        if launch:
+            if admission.status in {"blocked", "ack_required"}:
+                raise ValueError(admission.runtime_blockers[0])
+            if admission.status == "experimental_host_candidate":
+                raise ValueError(
+                    "QG-2-A2 and QG-2-B admission transport and Direct "
+                    "Trainer verification are still HOLD; experimental "
+                    "Host candidacy cannot authorize Start."
+                )
+            if blockers:
+                raise ValueError(blockers[0])
     if materialize:
         materialize_sidecars(prepared.sidecars)
     return prepared
