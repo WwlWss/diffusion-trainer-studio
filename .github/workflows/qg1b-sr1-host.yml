@@ -7,6 +7,7 @@ on:
     paths:
       - ".github/workflows/qg1b-sr1-host.yml"
       - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
       - "tests/test_parameter_policy_qg1b_trusted_producer.py"
       - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
       - "mikazuki/parameter_policy_readiness_producer.py"
@@ -19,6 +20,7 @@ on:
     paths:
       - ".github/workflows/qg1b-sr1-host.yml"
       - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
       - "tests/test_parameter_policy_qg1b_trusted_producer.py"
       - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
       - "mikazuki/parameter_policy_readiness_producer.py"
@@ -51,7 +53,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile frozen B1/B2-SR1 tests
-        run: python -m py_compile tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_trusted_producer.py
+        run: python -m py_compile tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_trusted_producer.py tests/test_parameter_policy_qg1b_evidence_coverage.py
       - name: Preserve original QG-1B2 16-case GREEN
         shell: bash
         run: |
@@ -124,5 +126,26 @@ jobs:
               "QG-1B2-SR1 SCOPED HOST GREEN: 16/16 PASS + "
               "old QG-1B 16/16 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; "
               "no Start/CUDA or certificate promotion"
+          )
+          PY
+
+      - name: Verify 10 pure D1 positive and negative shape checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1b_evidence_coverage"
+          )
+          if suite.countTestCases() != 10:
+              raise SystemExit("QG-1B2-SR1 INVALID D1 COVERAGE DISCOVERY")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 10 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit("QG-1B2-SR1 INVALID D1 SHAPE COVERAGE REGRESSION")
+          print(
+              "QG-1B2-SR1 D1 HOST REFERENCE SHAPE GREEN: 10/10 PASS, "
+              "0 FAIL/ERROR/SKIP; no model input SHA or GPU claim"
           )
           PY
