@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import Literal, Optional
 
-if TYPE_CHECKING:
-    from mikazuki.parameter_policy_admission import ComponentAdmission
+# Runtime type resolution (typing.get_type_hints / future API serializers)
+# must see the real class, not only a TYPE_CHECKING forward name. This
+# low-dependency first-party adapter imports Policy and optimizer metadata,
+# but never imports training_config at module initialization.
+from mikazuki.parameter_policy_admission import ComponentAdmission
 
 from mikazuki.anima_effective_config import prepare_anima_config, validate_post_override_anima_config
 from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
