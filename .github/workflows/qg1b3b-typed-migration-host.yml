@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   migration:
-    name: QG1B3-B typed certificate migration (\u0024{{ matrix.os }})
+    name: QG1B3-B typed certificate migration (${{ matrix.os }})
     runs-on: \u0024{{ matrix.os }}
     timeout-minutes: 12
     strategy:
