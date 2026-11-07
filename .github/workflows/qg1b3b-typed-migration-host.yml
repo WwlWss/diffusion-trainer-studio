@@ -1,0 +1,121 @@
+name: DTS QG-1B3-B typed certificate migration RED to scoped GREEN
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "docs/qualification-gate-qg1b3b-typed-migration-contract.md"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "docs/qualification-gate-qg1b3b-typed-migration-contract.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  migration:
+    name: QG1B3-B typed certificate migration (\u0024{{ matrix.os }})
+    runs-on: \u0024{{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile tests and host source
+        run: python -m py_compile tests/test_parameter_policy_qg1b3b_runtime_migration.py mikazuki/parameter_policy.py
+      - name: Verify exact RED or complete scoped GREEN, never fabricate success
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg1b3b_runtime_migration import (
+              QG1B3BTypedMigrationRed, QG1B3BTrueExistingBaselines, MARKER,
+          )
+          targeted = unittest.defaultTestLoader.loadTestsFromTestCase(QG1B3BTypedMigrationRed)
+          baseline = unittest.defaultTestLoader.loadTestsFromTestCase(QG1B3BTrueExistingBaselines)
+          if targeted.countTestCases() != 8 or baseline.countTestCases() != 4:
+              raise SystemExit("QG-1B3-B INVALID DISCOVERY")
+          first = unittest.TextTestRunner(verbosity=2).run(targeted)
+          second = unittest.TextTestRunner(verbosity=2).run(baseline)
+          if (first.testsRun != 8 or second.testsRun != 4 or first.errors
+                  or second.errors or second.failures or first.skipped
+                  or second.skipped or first.expectedFailures or second.expectedFailures
+                  or first.unexpectedSuccesses or second.unexpectedSuccesses):
+              raise SystemExit("QG-1B3-B INVALID TARGET/BASELINE EXECUTION")
+          if not first.failures:
+              print("QG-1B3-B 8/8 TARGET GREEN +4/4 BASELINE GREEN")
+          else:
+              ids = {case.id().rsplit(".", 1)[-1] for case, _ in first.failures}
+              expected = {name for name in dir(QG1B3BTypedMigrationRed)
+                          if name.startswith("test_b3b1")}
+              if (len(first.failures) != 8 or ids != expected
+                  or any(MARKER not in trace for _, trace in first.failures)):
+                  raise SystemExit("QG-1B3-B INVALID RED SHAPE")
+              raise SystemExit("QG-1B3-B VALID TESTS-ONLY RED: 8 target FAIL /4 baseline PASS; intentionally failing")
+          PY
+      - name: Preserve prior 42, B3-A 12, B301-B308, and B309-B312 stage honesty
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          modules = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_admission_adapter_host", 12),
+          ]
+          for name, expected in modules:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              if (suite.countTestCases() != expected or result.testsRun != expected
+                  or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B INVALID OLD GREEN: {name}")
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2ExistingBaselines, QG1B3QG2TargetedRed, MARKER
+          )
+          for cls, low, high in (
+              (QG1B3QG2TargetedRed, 301, 309),
+              (QG1B3QG2ExistingBaselines, 901, 905),
+          ):
+              names = sorted(n for n in dir(cls)
+                             if n.startswith("test_b") and low <= int(n[6:9]) < high)
+              suite = unittest.TestSuite(cls(n) for n in names)
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              if (len(names) != high-low or result.testsRun != len(names)
+                  or result.failures or result.errors or result.skipped):
+                  raise SystemExit(f"QG1B3-B PREVIOUS GREEN REGRESSION: {cls}")
+          names = sorted(n for n in dir(QG1B3QG2TargetedRed)
+                         if n.startswith("test_b3") and 309 <= int(n[6:9]) <= 312)
+          suite = unittest.TestSuite(QG1B3QG2TargetedRed(n) for n in names)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if (len(names) != 4 or result.testsRun != 4 or actual != set(names[1:])
+              or result.errors or result.skipped
+              or any(MARKER not in trace for _, trace in result.failures)):
+              raise SystemExit(f"QG1B3-B INVALID INTEGRATION STAGE: {actual}")
+          print("QG1B3-B SCOPED GREEN: B309 PASS, B310-B312 EXACT THREE RED; NO QG2 PROMOTION")
+          PY
