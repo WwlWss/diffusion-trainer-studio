@@ -50,7 +50,7 @@ jobs:
           python-version: "3.11"
       - name: Compile new test-only source (no production edit)
         run: python -m py_compile tests/test_parameter_policy_qg2a1_request_red.py
-      - name: Preserve existing QG-1B3-A/B green and B310-B312 intentional RED
+      - name: Preserve existing QG-1B3-A/B green and B311-B312 intentional RED
         shell: bash
         run: |
           python - <<'PY'
@@ -84,15 +84,15 @@ jobs:
               + [QG1B3QG2ExistingBaselines(n) for n in baseline]
           )
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          expected_red = set(names[-3:])
+          expected_red = set(names[-2:])
           actual_red = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
           if (result.testsRun != 16 or actual_red != expected_red
-                  or len(result.failures) != 3 or result.errors or result.skipped
+                  or len(result.failures) != 2 or result.errors or result.skipped
                   or result.expectedFailures or result.unexpectedSuccesses
                   or any(MARKER not in trace for _, trace in result.failures)):
               raise SystemExit(f"QG-2-A1 INVALID B3 PREVIOUS STAGE: {sorted(actual_red)}")
           print("QG-2-A1 inherited: 42 QG1B +12 adapter +12 B3B GREEN;"
-                " B301-B309 and 4 baselines GREEN; B310-B312 EXACT THREE RED")
+                " B301-B310 and 4 baselines GREEN; B311-B312 EXACT TWO RED")
           PY
       - name: Exact 12 targeted Request RED and four true existing baselines
         shell: bash
