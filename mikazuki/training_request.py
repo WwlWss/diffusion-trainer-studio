@@ -204,6 +204,8 @@ def prepare_request_config(
         raise ValueError("Request training config must be a dictionary.")
     if type(launch) is not bool:
         raise ValueError("Request launch must be a real boolean.")
+    if type(materialize) is not bool:
+        raise ValueError("Request materialize must be a real boolean.")
     if admission_purpose is None:
         admission_purpose = "start" if launch else "preview"
     if (
@@ -212,6 +214,11 @@ def prepare_request_config(
         or (admission_purpose == "start") != launch
     ):
         raise ValueError("Request admission purpose does not match launch intent.")
+    # Legacy Start and explicit Export may deliberately write sidecars.
+    # Preview is strictly model-free and MUST reject a write instruction
+    # before config normalization or any Standard launch preparation.
+    if admission_purpose == "preview" and materialize:
+        raise ValueError("Preview cannot materialize sidecars.")
     if admission_intent is None:
         admission_intent = RequestAdmissionIntent()
     elif type(admission_intent) is not RequestAdmissionIntent:
