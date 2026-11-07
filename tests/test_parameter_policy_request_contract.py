@@ -48,6 +48,7 @@ def _load_prepare_request_config(**overrides):
         "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset({"sd-lora"}),
         "materialize_sidecars": lambda sidecars: None,
         "RequestAdmissionIntent": RequestAdmissionIntent,
+        "ComponentAdmission": ComponentAdmission,
         "parse_ui_custom_params": parse_ui_custom_params,
         # Mock Policy intentionally lacks canonical fields. Return a real
         # validated inert diagnostic, never a None permission escape hatch;
