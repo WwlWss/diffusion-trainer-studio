@@ -1,4 +1,4 @@
-name: DTS QG-1B3 QG-2 production admission contract Tests-only RED (NO CUDA)
+name: DTS QG-1B3 QG-2 cumulative admission with two integration RED (NO CUDA)
 
 on:
   push:
