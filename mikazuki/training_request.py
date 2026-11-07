@@ -11,12 +11,16 @@ from pathlib import Path
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
+from mikazuki.parameter_policy_admission import assess_component_training_admission
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
     parameter_policy_gpu_selection_blockers,
 )
-from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
+from mikazuki.training_config import (
+    PAGE_BACKEND_MAP, RequestAdmissionIntent, prepare_training_config,
+)
+from mikazuki.training_gui_args import parse_ui_custom_params
 from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
 
@@ -184,11 +188,59 @@ def prepare_request_config(
     toml_path: str | None = None,
     *,
     materialize: bool = False,
+    admission_intent: RequestAdmissionIntent | None = None,
+    admission_purpose: str | None = None,
 ):
+    """Compile effective Trainer config and request-scoped Host admission.
+
+    QG-2-A1 is *diagnostic only*: a per-job acknowledgement may change the
+    typed Host admission result, never the existing Step 6F Start gate.
+    A2/B must independently wire and audit API/Direct Trainer transport.
+    """
     del stamp
+    if not isinstance(config, dict):
+        raise ValueError("Request training config must be a dictionary.")
+    if type(launch) is not bool:
+        raise ValueError("Request launch must be a real boolean.")
+    if admission_purpose is None:
+        admission_purpose = "start" if launch else "preview"
+    if (
+        type(admission_purpose) is not str
+        or admission_purpose not in {"preview", "export", "start"}
+        or (admission_purpose == "start") != launch
+    ):
+        raise ValueError("Request admission purpose does not match launch intent.")
+    if admission_intent is None:
+        admission_intent = RequestAdmissionIntent()
+    elif type(admission_intent) is not RequestAdmissionIntent:
+        raise ValueError("Request admission intent must be a typed, per-job intent.")
+
+    # An acknowledgement must come from the future, dedicated control plane,
+    # never from Trainer arguments, raw GUI data or custom TOML overrides.
+    # Perform this inspection before any launch-time normalization or staging.
+    reserved = frozenset((
+        "experimental_full_bf16_ack", "admission_intent", "admission",
+    ))
+    custom_overrides = parse_ui_custom_params(config.get("ui_custom_params"))
+    nested_overrides = config.get("__ui_custom_overrides")
+    if (
+        reserved.intersection(config)
+        or reserved.intersection(custom_overrides)
+        or (isinstance(nested_overrides, dict)
+            and reserved.intersection(nested_overrides))
+    ):
+        raise ValueError(
+            "experimental_full_bf16_ack / admission_intent are Host-owned "
+            "per-job controls; Trainer config and ui_custom_params cannot set them."
+        )
+
     train_utils.fix_config_types(config)
     normalize_parameter_policy_editor_state(config)
     policy_path, policy_sidecars, policy = build_parameter_policy_sidecar(config, page_type)
+    if policy is None and admission_intent.experimental_full_bf16_ack:
+        # Standard Start can already have launch-time staging in its compiler.
+        # Reject inappropriate consent *before* invoking that compiler.
+        raise ValueError("Experimental Full-BF16 acknowledgement requires Component mode.")
     multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
 
@@ -216,11 +268,44 @@ def prepare_request_config(
         raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 手工注入。")
     if multi_path is not None and effective_multi_path != multi_path:
         raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 覆盖。")
+    if reserved.intersection(prepared.config):
+        raise ValueError(
+            "experimental_full_bf16_ack / admission_intent cannot appear in "
+            "the normalized Trainer config."
+        )
+
     prepared.sidecars.update(policy_sidecars)
     prepared.sidecars.update(multi_sidecars)
     prepared.sidecars.update(sidecars)
     prepared.warnings.extend(prompt_warnings)
+
+    # Every invocation begins with a *new* neutral intent. Preview/Export may
+    # be given a UI intent by a future caller, but MUST NOT consume or retain
+    # its positive acknowledgement, including in any portable sidecar.
+    prepared.admission_intent = RequestAdmissionIntent()
     if policy is not None:
+        explicit_start_ack = (
+            launch and admission_purpose == "start"
+            and admission_intent.experimental_full_bf16_ack
+        )
+        prepared.admission = assess_component_training_admission(
+            policy,
+            train_type=prepared.train_type,
+            effective_config=prepared.config,
+            purpose=admission_purpose,
+            experimental_ack=explicit_start_ack,
+        )
+        if explicit_start_ack:
+            if prepared.admission.status in {"inactive", "legacy_approved"}:
+                raise ValueError(
+                    "Experimental Full-BF16 acknowledgement is only valid "
+                    "for a nonqualified, source-audited Component candidate."
+                )
+            prepared.admission_intent = admission_intent
+
+        # The existing hard gate still evaluates experimental_ack=False.
+        # Until QG-2-A2 (API) and QG-2-B (Direct Trainer) are BOTH validated,
+        # no Host candidate can bypass this legacy/fail-closed Start path.
         blockers = parameter_policy_runtime_blockers(
             policy,
             train_type=prepared.train_type,
