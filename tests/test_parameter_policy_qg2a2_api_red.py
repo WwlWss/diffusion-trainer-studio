@@ -21,7 +21,6 @@ from unittest.mock import patch
 from mikazuki.parameter_policy_admission import assess_component_training_admission
 from mikazuki.parameter_policy_execution import FULL_BF16_BACKEND_QUALIFICATIONS
 from mikazuki.training_config import PreparedTrainingConfig, RequestAdmissionIntent
-from mikazuki.training_request import decode_training_request
 from tests.test_parameter_policy_admission_red import _config, _pending, _policy
 from tests.test_parameter_policy_qg2a1_request_red import _make_preparation
 
@@ -32,6 +31,30 @@ API = API_FILE.read_text(encoding="utf-8")
 UI = UI_FILE.read_text(encoding="utf-8")
 TREE = ast.parse(API, filename=str(API_FILE))
 MARKER = "QG-2-A2 API/UI CONTRACT ABSENT"
+
+# training_request imports the full FastAPI application transitively. Keep
+# minimal Host CI dependency-free by extracting its *actual* decoder AST,
+# exactly as the existing tests/test_parameter_policy_request_contract does.
+REQUEST_FILE = ROOT / "mikazuki" / "training_request.py"
+REQUEST_TREE = ast.parse(
+    REQUEST_FILE.read_text(encoding="utf-8"), filename=str(REQUEST_FILE),
+)
+decoder_node = next(
+    node for node in REQUEST_TREE.body
+    if isinstance(node, ast.FunctionDef)
+    and node.name == "decode_training_request"
+)
+decoder_module = ast.Module(
+    body=[ast.ImportFrom(
+        module="__future__", names=[ast.alias(name="annotations")],
+        level=0,
+    ), decoder_node],
+    type_ignores=[],
+)
+ast.fix_missing_locations(decoder_module)
+_decoder_globals = {"json": json}
+exec(compile(decoder_module, str(REQUEST_FILE), "exec"), _decoder_globals)
+decode_training_request = _decoder_globals["decode_training_request"]
 
 
 def _source_function(name: str):
