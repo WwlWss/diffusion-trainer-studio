@@ -95,7 +95,7 @@ def _component_gui_config(train_type, train_components, **extra):
     return config
 
 
-def _real_prepare_request(**overrides):
+def _real_prepare_request(*, gpu_blockers=None, **overrides):
     resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
     return _load_prepare_request_config(
         normalize_parameter_policy_editor_state=normalize_parameter_policy_editor_state,
@@ -104,7 +104,9 @@ def _real_prepare_request(**overrides):
         assess_component_training_admission=assess_component_training_admission,
         legacy_api=SimpleNamespace(resolve_training_backend=resolver),
         parameter_policy_runtime_blockers=parameter_policy_runtime_blockers,
-        parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
+        parameter_policy_gpu_selection_blockers=(
+            gpu_blockers if gpu_blockers is not None else (lambda gpu_ids: [])
+        ),
         PARAMETER_POLICY_RUNTIME_TRAIN_TYPES=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
         **overrides,
     )
