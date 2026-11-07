@@ -5,6 +5,7 @@ They intentionally do not authorize GUI/Direct Trainer or perform CUDA work.
 """
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import unittest
 from unittest.mock import patch
@@ -14,6 +15,7 @@ from mikazuki.parameter_policy_admission import (
 )
 from mikazuki.parameter_policy_editor import parameter_policy_editor_preview
 from mikazuki.parameter_policy_execution import FULL_BF16_BACKEND_QUALIFICATIONS
+from mikazuki.parameter_policy_matrix import parameter_policy_gpu_selection_blockers
 from mikazuki.training_config import RequestAdmissionIntent
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 from tests.test_parameter_policy_admission_red import _pending
@@ -91,17 +93,22 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
                 sidecars=portable["sidecars"],
             )
             self.assertNotIn("experimental_full_bf16_ack", rehydrated)
+            # Each actual HTTP request is decoded into its own dict.
+            # The Request normalizer intentionally mutates that one dict,
+            # including a host-owned parameter_policy_config staging path.
             second = prepare(
-                rehydrated, "sd-lora", launch=False,
+                deepcopy(rehydrated), "sd-lora", launch=False,
                 admission_purpose="preview",
             )
             self.assertEqual(second.admission.status, "ack_required")
             with self.assertRaisesRegex(ValueError, "experimental_full_bf16_ack"):
-                prepare(rehydrated, "sd-lora", launch=True)
+                prepare(deepcopy(rehydrated), "sd-lora", launch=True)
         self.assertNotIn("experimental_full_bf16_ack", exported.config)
 
     def test_sr203_host_admissible_does_not_cancel_multigpu_block(self):
-        prepare = _real_prepare_request()
+        prepare = _real_prepare_request(
+            gpu_blockers=parameter_policy_gpu_selection_blockers
+        )
         raw = _component_gui_config(
             "sd-lora", ["unet.attention.adapter"],
             full_bf16=True, mixed_precision="bf16",
@@ -118,7 +125,9 @@ class QG2A1SR1LifecycleAndGPU(unittest.TestCase):
             prepare(raw, "sd-lora", launch=True, materialize=True)
 
     def test_sr204_public_runtime_ready_uses_all_blockers_not_host_only(self):
-        prepare = _real_prepare_request()
+        prepare = _real_prepare_request(
+            gpu_blockers=parameter_policy_gpu_selection_blockers
+        )
         state = prepare(
             _component_gui_config(
                 "sd-lora", ["unet.attention.adapter"],
