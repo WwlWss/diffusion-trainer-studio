@@ -13,8 +13,10 @@ from mikazuki.parameter_policy_editor import (
     bootstrap_parameter_policy_editor,
     normalize_parameter_policy_editor_state,
 )
+from mikazuki.parameter_policy_admission import assess_component_training_admission
 from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
-from mikazuki.training_config import prepare_training_config
+from mikazuki.training_config import RequestAdmissionIntent, prepare_training_config
+from mikazuki.training_gui_args import parse_ui_custom_params
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +45,12 @@ def _load_prepare_request_config(**overrides):
         "parameter_policy_gpu_selection_blockers": lambda gpu_ids: [],
         "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset({"sd-lora"}),
         "materialize_sidecars": lambda sidecars: None,
+        "RequestAdmissionIntent": RequestAdmissionIntent,
+        "parse_ui_custom_params": parse_ui_custom_params,
+        # Unit tests using a deliberately incomplete mock Policy can still
+        # exercise the unchanged Step 6F ordering; real-pipeline tests below
+        # install the actual first-party Admission producer.
+        "assess_component_training_admission": lambda policy, **kw: None,
     }
     namespace.update(overrides)
     exec(compile(module, "mikazuki/training_request.py", "exec"), namespace)
@@ -80,6 +88,7 @@ def _real_prepare_request(**overrides):
         normalize_parameter_policy_editor_state=normalize_parameter_policy_editor_state,
         build_parameter_policy_sidecar=build_parameter_policy_sidecar,
         prepare_training_config=prepare_training_config,
+        assess_component_training_admission=assess_component_training_admission,
         legacy_api=SimpleNamespace(resolve_training_backend=resolver),
         parameter_policy_runtime_blockers=parameter_policy_runtime_blockers,
         parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
