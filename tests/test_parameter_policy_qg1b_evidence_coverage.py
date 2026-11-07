@@ -154,6 +154,27 @@ class QG1B2D1CoverageHost(unittest.TestCase):
         self.assertEqual(p, p0)
         self.assertEqual(c, c0)
 
+        # D1 shape coverage must not be spuriously true when independent
+        # execution/precision/process or wrapping flags differ.
+        for changed in (
+            {"full_bf16": False},
+            {"mixed_precision": "fp16"},
+            {"num_processes": 2},
+            {"distributed_type": "MULTI_GPU"},
+            {"torch_compile": True},
+            {"fused_optimizer_groups": 1},
+        ):
+            with self.subTest(changed=changed):
+                other = {**c, **changed}
+                selected = match_full_bf16_evidence_coverage(
+                    train_type="sd-lora", canonical_policy=p,
+                    effective_config=other,
+                )
+                self.assertFalse(
+                    selected.covered,
+                    f"D1 reference shape falsely covers {changed!r}",
+                )
+
     def test_real_implementation_guards_stay_separate_from_evidence_coverage(self):
         p, c = _case("sdxl-lora")
         c["gradient_checkpointing"] = True
