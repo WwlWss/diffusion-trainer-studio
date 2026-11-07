@@ -579,20 +579,84 @@ def parameter_policy_runtime_blockers(
             )
         )
 
-        # Import lazily so Standard mode and inactive Parameter Policy callers
-        # do not load the execution-feature qualification subsystem.
+        # QG-1B3-B: separate the *typed* implementation/acknowledgement
+        # decision from certificate metadata.  No GUI/CLI intent transport
+        # exists yet: the acknowledgement must remain hardcoded False here.
+        #
+        # Preserve legacy full-BF16 blockers for invalid input and unaudited
+        # backends.  Only the independently source-audited SD1/SDXL routes may
+        # replace certificate-only denial with a missing-acknowledgement
+        # blocker.  Start still fails closed until QG-2 wires both entrances.
+        # Import lazily to leave inactive and Standard behavior undisturbed.
         from mikazuki.parameter_policy_execution import (
+            active_parameter_policy_execution_features,
             parameter_policy_execution_blockers,
         )
 
-        blockers.extend(
-            parameter_policy_execution_blockers(
-                canonical,
-                train_type=normalized_train_type,
-                effective_config=effective_config,
-                require_assets=require_assets,
+        try:
+            active_features = active_parameter_policy_execution_features(
+                effective_config
             )
-        )
+        except ValueError:
+            # Existing strict pseudo-boolean diagnostics remain authoritative.
+            blockers.extend(
+                parameter_policy_execution_blockers(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                    require_assets=require_assets,
+                )
+            )
+        else:
+            if "full_bf16" not in active_features:
+                blockers.extend(
+                    parameter_policy_execution_blockers(
+                        canonical,
+                        train_type=normalized_train_type,
+                        effective_config=effective_config,
+                        require_assets=require_assets,
+                    )
+                )
+            else:
+                from mikazuki.parameter_policy_admission import (
+                    assess_component_training_admission,
+                )
+
+                admission = assess_component_training_admission(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                    purpose="start" if require_assets else "preview",
+                    experimental_ack=False,
+                )
+                if normalized_train_type in {"sd-lora", "sdxl-lora"}:
+                    # Source-audited: typed admission replaces *only* the
+                    # certificate-only blocker. Hard failures retain the
+                    # original execution validator as an independent guard.
+                    blockers.extend(admission.runtime_blockers)
+                    if admission.status == "blocked":
+                        blockers.extend(
+                            parameter_policy_execution_blockers(
+                                canonical,
+                                train_type=normalized_train_type,
+                                effective_config=effective_config,
+                                require_assets=require_assets,
+                            )
+                        )
+                else:
+                    # Not yet source-audited (SD3/Flux/Anima/etc): keep prior
+                    # release diagnostics, then add the source-owned hard
+                    # capability findings. A forged qualified row cannot
+                    # remove either safety boundary.
+                    blockers.extend(
+                        parameter_policy_execution_blockers(
+                            canonical,
+                            train_type=normalized_train_type,
+                            effective_config=effective_config,
+                            require_assets=require_assets,
+                        )
+                    )
+                    blockers.extend(admission.runtime_blockers)
         if normalized_train_type not in {"anima-lora", "anima-finetune"}:
             blockers.extend(
                 _non_anima_policy_structure_and_target_blockers(
