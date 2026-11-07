@@ -351,8 +351,11 @@ def prepare_request_config(
                     "Trainer verification are still HOLD; experimental "
                     "Host candidacy cannot authorize Start."
                 )
-            if blockers:
-                raise ValueError(blockers[0])
+        # Preserve the exact historical Step 6F early-Start gate after the
+        # new independent typed decision. Old B904 source/ordering contract
+        # explicitly checks this guard appears before sidecar materialization.
+        if launch and blockers:
+            raise ValueError(blockers[0])
     if materialize:
         materialize_sidecars(prepared.sidecars)
     return prepared
