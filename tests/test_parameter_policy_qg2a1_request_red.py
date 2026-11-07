@@ -1,8 +1,8 @@
 """QG-2-A1 Request Admission + per-job intent: 12 unmet contracts, 4 real baselines.
 
-Tests-only. No launch/Trainer/GUI changes or CUDA authority. A101-A112 are
-genuine future behavioral contracts; in this RED the absent first-party
-RequestAdmissionIntent/interface is checked before executing new behavior.
+The original A101-A112 Tests-only RED has been followed by scoped Request
+GREEN. These tests exercise the implemented contract as well as its previous
+unmet-interface RED marker. No API/Trainer/CUDA authorization is granted.
 """
 from __future__ import annotations
 
@@ -28,7 +28,8 @@ from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPE
 from mikazuki.training_gui_args import parse_ui_custom_params
 from tests.test_parameter_policy_admission_red import _config, _pending, _policy
 from tests.test_parameter_policy_request_contract import (
-    _load_prepare_request_config, _prepared,
+    _component_gui_config, _load_prepare_request_config,
+    _prepared, _real_prepare_request,
 )
 
 MARKER = "QG-2-A1 REQUEST INTENT CONTRACT ABSENT"
@@ -194,6 +195,34 @@ class QG2A1TargetedRed(unittest.TestCase):
         self.assertIs(calls[0]["effective_config"], result.config)
         self.assertEqual(calls[0]["purpose"], "preview")
         self.assertIs(calls[0]["experimental_ack"], False)
+
+        # Real end-to-end Host compilation: custom TOML is applied only by
+        # prepare_training_config after raw GUI normalization.  Admission
+        # MUST see this *final* value in both directions.
+        real_prepare = _real_prepare_request()
+        for raw_feature, overlay_feature, expected_status in (
+            (True, False, "inactive"),
+            (False, True, "legacy_approved"),
+        ):
+            with self.subTest(
+                raw=raw_feature, post_override=overlay_feature,
+            ):
+                raw = _component_gui_config(
+                    "sd-lora", ["unet.attention.adapter"],
+                    full_bf16=raw_feature,
+                    mixed_precision="bf16",
+                    ui_custom_params=(
+                        "full_bf16 = true" if overlay_feature
+                        else "full_bf16 = false"
+                    ),
+                )
+                actual = real_prepare(
+                    raw, "sd-lora", launch=False,
+                    admission_purpose="preview",
+                )
+                self.assertIs(actual.config["full_bf16"], overlay_feature)
+                self.assertEqual(actual.admission.status, expected_status)
+                self.assertEqual(actual.runtime_blockers, [])
 
     def test_a105_pending_certificate_has_typed_preview_ack_blocker(self):
         self._contract()
