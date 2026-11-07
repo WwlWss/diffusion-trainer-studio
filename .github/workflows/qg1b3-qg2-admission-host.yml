@@ -50,7 +50,7 @@ permissions:
 
 jobs:
   admission-host:
-    name: QG1B3-QG2 12 targeted RED +4 prior PASS; frozen 42 prior GREEN (${{ matrix.os }})
+    name: QG1B3-QG2 10 target GREEN +2 integration RED; frozen 42 prior GREEN (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
@@ -92,7 +92,7 @@ jobs:
               "16 QG1B +16 SR1 +10 D1, 0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
-      - name: Exact 16-case admission contract RED or later full GREEN
+      - name: Exact 16-case admission: B301-B310 GREEN + B311-B312 RED
         shell: bash
         run: |
           python - <<'PY'
@@ -113,17 +113,10 @@ jobs:
                   f"xfail={len(result.expectedFailures)} "
                   f"xpass={len(result.unexpectedSuccesses)}"
               )
+          # Scoped QG-2-A1: only API and Direct Trainer are still
+          # intentionally RED. Never treat the unfinished full contract as
+          # global GREEN, nor accept unexpected failures as qualification.
           expected = {
-              "test_b301_immutable_admission_source_contract_without_caller_authority",
-              "test_b302_existing_qualified_sd1_is_still_host_admissible_without_ack",
-              "test_b303_pending_only_certificate_is_warning_and_preview_ack_required",
-              "test_b304_start_requires_explicit_ack_for_pending_supported_candidate",
-              "test_b305_fake_qualification_and_user_claims_cannot_authorize_sd3",
-              "test_b306_ack_never_turns_bad_precision_or_pseudo_bool_into_allow",
-              "test_b307_ack_never_overrides_sdxl_ownership_risk_or_planned_optimizer",
-              "test_b308_inactive_standard_and_strict_explicit_ack_inputs",
-              "test_b309_legacy_runtime_gate_uses_trusted_source_without_dropping_safety",
-              "test_b310_request_uses_post_override_admission_and_ephemeral_intent",
               "test_b311_preview_export_start_expose_typed_admission_and_keep_asset_order",
               "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent",
           }
@@ -133,15 +126,16 @@ jobs:
                   case.id() for case, trace in result.failures
                   if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
               ]
-              if len(result.failures) != 12 or actual != expected or unrelated:
+              if len(result.failures) != 2 or actual != expected or unrelated:
                   raise SystemExit(
                       f"QG-1B3-QG2 INVALID RED: failures={len(result.failures)} "
                       f"actual={sorted(actual)} unrelated={unrelated}"
                   )
               print(
-                  "QG-1B3-QG2 VALID TESTS-ONLY RED: 12 targeted FAIL + "
-                  "4 real legacy baseline PASS, 0 ERROR/SKIP/xfail/xpass; "
-                  "prior 42/42 host GREEN; no execution or certificate unlock"
+                  "QG-2-A1 STAGED FULL CONTRACT RED: B301-B310 10 GREEN + "
+                  "B311/B312 TWO INTENTIONAL RED + 4 baseline PASS, "
+                  "0 ERROR/SKIP/xfail/xpass; QG-2-A2/B unfinished, "
+                  "no execution or certificate unlock"
               )
               raise SystemExit(1)
           print(
