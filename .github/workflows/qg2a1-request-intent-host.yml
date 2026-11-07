@@ -1,0 +1,142 @@
+name: DTS QG-2-A1 Request per-job Admission intent — exact Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - "docs/qualification-gate-qg2a1-request-intent-contract.md"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_gui_args.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - "docs/qualification-gate-qg2a1-request-intent-contract.md"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_gui_args.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  request-intent:
+    name: QG2-A1 12 exact Request RED plus four live baselines (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact branch HEAD without optional submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new test-only source (no production edit)
+        run: python -m py_compile tests/test_parameter_policy_qg2a1_request_red.py
+      - name: Preserve existing QG-1B3-A/B green and B310-B312 intentional RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          for module, count in (
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_admission_adapter_host", 12),
+              ("tests.test_parameter_policy_qg1b3b_runtime_migration", 12),
+          ):
+              suite = unittest.defaultTestLoader.loadTestsFromName(module)
+              if suite.countTestCases() != count:
+                  raise SystemExit(f"QG-2-A1 INVALID OLD DISCOVERY {module}: {suite.countTestCases()}")
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG-2-A1 INVALID OLD GREEN: {module}")
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2TargetedRed, QG1B3QG2ExistingBaselines, MARKER
+          )
+          names = sorted(n for n in dir(QG1B3QG2TargetedRed)
+                         if n.startswith("test_b3") and 301 <= int(n[6:9]) <= 312)
+          baseline = sorted(n for n in dir(QG1B3QG2ExistingBaselines)
+                            if n.startswith("test_b9"))
+          if len(names) != 12 or len(baseline) != 4:
+              raise SystemExit("QG-2-A1 INVALID B3 SUITE DISCOVERY")
+          suite = unittest.TestSuite(
+              [QG1B3QG2TargetedRed(n) for n in names]
+              + [QG1B3QG2ExistingBaselines(n) for n in baseline]
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          expected_red = set(names[-3:])
+          actual_red = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if (result.testsRun != 16 or actual_red != expected_red
+                  or len(result.failures) != 3 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses
+                  or any(MARKER not in trace for _, trace in result.failures)):
+              raise SystemExit(f"QG-2-A1 INVALID B3 PREVIOUS STAGE: {sorted(actual_red)}")
+          print("QG-2-A1 inherited: 42 QG1B +12 adapter +12 B3B GREEN;"
+                " B301-B309 and 4 baselines GREEN; B310-B312 EXACT THREE RED")
+          PY
+      - name: Exact 12 targeted Request RED and four true existing baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a1_request_red import (
+              QG2A1TargetedRed, QG2A1ExistingBaselines, MARKER
+          )
+          targeted = sorted(n for n in dir(QG2A1TargetedRed)
+                            if n.startswith("test_a1"))
+          baselines = sorted(n for n in dir(QG2A1ExistingBaselines)
+                             if n.startswith("test_a9"))
+          for num in range(101, 113):
+              if sum(n.startswith(f"test_a{num}_") for n in targeted) != 1:
+                  raise SystemExit(f"QG-2-A1 INVALID A{num} TARGET DISCOVERY")
+          for num in range(901, 905):
+              if sum(n.startswith(f"test_a{num}_") for n in baselines) != 1:
+                  raise SystemExit(f"QG-2-A1 INVALID A{num} BASELINE DISCOVERY")
+          if len(targeted) != 12 or len(baselines) != 4:
+              raise SystemExit("QG-2-A1 INVALID EXACT 12+4 DISCOVERY")
+          tests = unittest.TestSuite(QG2A1TargetedRed(n) for n in targeted)
+          baseline_tests = unittest.TestSuite(QG2A1ExistingBaselines(n) for n in baselines)
+          red = unittest.TextTestRunner(verbosity=2).run(tests)
+          base = unittest.TextTestRunner(verbosity=2).run(baseline_tests)
+          if (red.testsRun != 12 or base.testsRun != 4 or red.errors
+                  or base.failures or base.errors or red.skipped or base.skipped
+                  or red.expectedFailures or base.expectedFailures
+                  or red.unexpectedSuccesses or base.unexpectedSuccesses):
+              raise SystemExit("QG-2-A1 INVALID RUN: unrelated ERROR/FAIL/SKIP/xfail/xpass")
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in red.failures}
+          unrelated = [case.id() for case, traceback in red.failures
+                       if MARKER not in traceback]
+          if len(red.failures) == 12 and actual == set(targeted) and not unrelated:
+              print("QG-2-A1 VALID TESTS-ONLY RED: A101-A112 12 exact missing"
+                    " Request intent FAIL + A901-A904 4 real baseline PASS;"
+                    " zero ERROR/SKIP/xfail/xpass. NO production/GUI/Trainer edits.")
+              raise SystemExit(1)  # Intentional CI failure, not faux-green.
+          if not red.failures:
+              print("QG-2-A1 SOURCE GREEN CANDIDATE: 12/12+4/4;"
+                    " independent source/entrypoint review still mandatory.")
+          else:
+              raise SystemExit(
+                  f"QG-2-A1 INVALID RED SHAPE: {len(red.failures)=} "
+                  f"{sorted(actual)=} {unrelated=}"
+              )
+          PY
