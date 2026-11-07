@@ -1,4 +1,4 @@
-name: DTS QG-1B3-A first-party Host adapter scoped GREEN (integration RED retained)
+name: DTS QG-1B3-A Host adapter and QG-1B3-B staged integration (three RED retained)
 
 on:
   push:
@@ -11,7 +11,9 @@ on:
       - "tests/test_parameter_policy_admission_adapter_host.py"
       - "mikazuki/parameter_policy_readiness_producer.py"
       - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
       - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
   pull_request:
     paths:
       - ".github/workflows/qg1b3a-admission-adapter-host.yml"
@@ -28,7 +30,7 @@ permissions:
 
 jobs:
   adapter-scoped-host:
-    name: QG1B3-A 42 legacy +12 admission subset +12 independent GREEN, four integration RED (${{ matrix.os }})
+    name: QG1B3-A 42 legacy +12 adapter +12 independent GREEN, B309 GREEN, B310-B312 RED (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
@@ -74,7 +76,7 @@ jobs:
               "0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
-      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309-B312 intentional RED
+      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309 GREEN and B310-B312 intentional RED
         shell: bash
         run: |
           python - <<'PY'
@@ -116,29 +118,30 @@ jobs:
               and 309 <= int(name[6:9]) <= 312
           )
           if len(pending) != 4:
-              raise SystemExit("QG-1B3-A INVALID 4 integration RED discovery")
+              raise SystemExit("QG-1B3-B INVALID INTEGRATION DISCOVERY")
           remaining = unittest.TestSuite(
               QG1B3QG2TargetedRed(name) for name in pending
           )
-          red = unittest.TextTestRunner(verbosity=2).run(remaining)
-          actual = {case.id().rsplit(".", 1)[-1] for case, _ in red.failures}
+          staged = unittest.TextTestRunner(verbosity=2).run(remaining)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in staged.failures}
+          expected = set(pending[1:])
           unrelated = [
-              case.id() for case, trace in red.failures
+              case.id() for case, trace in staged.failures
               if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
           ]
-          if (red.testsRun != 4 or len(red.failures) != 4
-                  or actual != set(pending) or unrelated or red.errors
-                  or red.skipped or red.expectedFailures
-                  or red.unexpectedSuccesses):
+          if (staged.testsRun != 4 or len(staged.failures) != 3
+                  or actual != expected or unrelated or staged.errors
+                  or staged.skipped or staged.expectedFailures
+                  or staged.unexpectedSuccesses):
               raise SystemExit(
-                  f"QG-1B3-A INVALID REMAINING INTEGRATION RED: "
-                  f"failures={len(red.failures)} actual={sorted(actual)}"
+                  f"QG-1B3-B INVALID STAGED INTEGRATION: "
+                  f"failures={len(staged.failures)} actual={sorted(actual)}"
               )
           print(
-              "QG-1B3-A SCOPED HOST GREEN: B301-B308 8/8 PASS, "
+              "QG-1B3-A/B STAGED HOST GREEN: B301-B309 9/9 PASS, "
               "B901-B904 4/4 PASS, independent 12/12 PASS, "
-              "prior 42/42 PASS; B309-B312 EXACT FOUR INTENTIONAL RED. "
-              "No Preview/Export/Start/Direct Trainer integration, "
-              "no new model file validation, no CUDA, no permission to merge."
+              "prior 42/42 PASS; B310-B312 EXACT THREE INTENTIONAL RED. "
+              "No QG-2 Request/Start/direct Trainer integration, "
+              "no CUDA, no permission to merge."
           )
           PY
