@@ -1,4 +1,4 @@
-name: DTS QG-1B3-A Host adapter and QG-1B3-B staged integration (three RED retained)
+name: DTS QG-1B3-A/B and QG-2-A1 staged Host GREEN (two integration RED retained)
 
 on:
   push:
