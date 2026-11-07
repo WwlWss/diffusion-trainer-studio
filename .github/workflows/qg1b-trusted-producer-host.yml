@@ -1,0 +1,117 @@
+name: DTS QG-1B trusted producer Host Tests-only RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b-trusted-producer"
+    paths:
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/parameter_policy_trainer.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/parameter_policy_trainer.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  trusted-producer-host:
+    name: QG1B 12 producer RED + 4 original PASS (${{ matrix.os }}, NO CUDA)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout source without Gitlink submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile frozen B1 host tests
+        run: python -m py_compile tests/test_parameter_policy_qg1b_trusted_producer.py
+      - name: Exactly 16 B1 host cases, targeted RED then scoped GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1b_trusted_producer"
+          )
+          found = suite.countTestCases()
+          if found != 16:
+              raise SystemExit(f"QG-1B INVALID DISCOVERY: {found} != 16")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1B INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_b101_frozen_first_party_function_has_no_caller_authority_args",
+              "test_b102_pending_certificate_only_is_warning_for_audited_sd1",
+              "test_b103_fake_qualified_without_evidence_cannot_promote_tier",
+              "test_b104_actual_precision_error_beats_forged_warning_and_can_start",
+              "test_b105_unknown_backend_stays_blocked_despite_fake_release_row",
+              "test_b106_planned_optimizer_not_granted_by_fake_qualification",
+              "test_b107_quoted_false_must_never_be_treated_as_inactive_standard",
+              "test_b108_real_sdxl_gradient_checkpointing_risk_stays_hard",
+              "test_b109_sd3_full_bf16_unreviewed_capability_not_promoted",
+              "test_b110_unreferenced_optimizers_do_not_change_tier_or_permissions",
+              "test_b111_source_release_rows_and_identity_never_mutated",
+              "test_b112_inactive_strict_noop_and_refuses_untrusted_keywords",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "QG-1B TRUSTED PRODUCER CONTRACT ABSENT" not in trace
+              ]
+              if len(result.failures) != 12 or actual != expected or unrelated:
+                  raise SystemExit(
+                      f"QG-1B INVALID RED: failures={len(result.failures)} "
+                      f"actual={sorted(actual)} expected={sorted(expected)} "
+                      f"unrelated={unrelated}"
+                  )
+              print(
+                  "QG-1B1 VALID TESTS-ONLY RED: 12 targeted FAIL + "
+                  "4 original baseline PASS, 0 ERROR/SKIP/xfail/xpass; "
+                  "first-party trusted producer intentionally absent"
+              )
+              raise SystemExit(1)
+          print(
+              "QG-1B2 SCOPED HOST GREEN: 16/16 PASS, "
+              "0 FAIL/ERROR/SKIP/xfail/xpass; first-party host source "
+              "classification only; NO Start, CUDA, physical tensor or "
+              "signed certificate qualification"
+          )
+          PY
