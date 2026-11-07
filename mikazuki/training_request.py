@@ -344,7 +344,15 @@ def prepare_request_config(
         prepared.runtime_blockers.extend(blockers)
         if launch:
             if admission.status in {"blocked", "ack_required"}:
-                raise ValueError(admission.runtime_blockers[0])
+                # Reject independently of legacy Step 6F, but preserve its
+                # existing user-visible first error whenever it is present
+                # (including historical full_bf16 pending diagnostics).
+                # If the old gate ever omits the error, the first-party
+                # typed reason still fails the request closed.
+                raise ValueError(
+                    legacy_blockers[0] if legacy_blockers
+                    else admission.runtime_blockers[0]
+                )
             if admission.status == "experimental_host_candidate":
                 raise ValueError(
                     "QG-2-A2 and QG-2-B admission transport and Direct "
