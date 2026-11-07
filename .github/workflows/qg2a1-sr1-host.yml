@@ -8,6 +8,7 @@ on:
       - ".github/workflows/qg2a1-sr1-host.yml"
       - "docs/qualification-gate-qg2a1-sr1-review-repair-contract.md"
       - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
       - "tests/test_parameter_policy_request_contract.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
@@ -16,6 +17,7 @@ on:
       - ".github/workflows/qg2a1-sr1-host.yml"
       - "docs/qualification-gate-qg2a1-sr1-review-repair-contract.md"
       - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
       - "tests/test_parameter_policy_request_contract.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
@@ -61,6 +63,26 @@ jobs:
                       or result.unexpectedSuccesses):
                   raise SystemExit(f"QG2A1-SR1 INHERITED A1 GREEN LOST: {cls}")
           print("QG2A1-SR1 prior A1 12/12 + four real baselines PASS.")
+          PY
+      - name: Fix C four genuine lifecycle, Export-rehydrate and GPU readiness regressions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a1_sr1_lifecycle import (
+              QG2A1SR1LifecycleAndGPU
+          )
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+              QG2A1SR1LifecycleAndGPU
+          )
+          if suite.countTestCases() != 4:
+              raise SystemExit("QG-2-A1-SR1 Fix C invalid 4-case discovery")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 4 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit("QG-2-A1-SR1 Fix C lifecycle/GPU not GREEN")
+          print("QG-2-A1-SR1 Fix C: four live lifecycle/GPU checks PASS.")
           PY
       - name: Exact SR101-SR108 RED or independently demonstrated GREEN
         shell: bash
