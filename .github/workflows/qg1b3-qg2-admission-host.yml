@@ -92,7 +92,7 @@ jobs:
               "16 QG1B +16 SR1 +10 D1, 0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
-      - name: Exact 16-case admission: B301-B310 GREEN + B311-B312 RED
+      - name: "Exact 16-case admission: B301-B310 GREEN + B311-B312 RED"
         shell: bash
         run: |
           python - <<'PY'
