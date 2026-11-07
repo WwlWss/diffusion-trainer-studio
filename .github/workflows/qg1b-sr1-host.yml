@@ -1,0 +1,128 @@
+name: DTS QG-1B2-SR1 qualification evidence and diagnostics Host RED to GREEN
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b-trusted-producer"
+    paths:
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "docs/qualification-gate-qg1b-trusted-producer-contract.md"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qg1b-sr1-host:
+    name: QG1B SR1 12 targeted RED / 4 baseline PASS and old 16 GREEN (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact source without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile frozen B1/B2-SR1 tests
+        run: python -m py_compile tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_trusted_producer.py
+      - name: Preserve original QG-1B2 16-case GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1b_trusted_producer"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit("QG-1B2-SR1 INVALID OLD DISCOVERY: expected 16")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("QG-1B2-SR1 INVALID OLD REGRESSION: expected 16/16 PASS")
+          print("QG-1B2-SR1 FROZEN ORIGINAL 16/16 GREEN; zero extra outcomes")
+          PY
+      - name: Exact SR1 12 targeted RED then 16-case GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg1b_sr1"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit(
+                  f"QG-1B2-SR1 INVALID DISCOVERY: {suite.countTestCases()} != 16"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1B2-SR1 INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          expected = {
+              "test_sr101_incomplete_host_reference_does_not_mint_formal_certification",
+              "test_sr102_sdxl_te1_only_is_not_d1_formal_scope",
+              "test_sr103_nonreference_rank_and_resolution_are_unverified",
+              "test_sr104_nonreference_accumulation_is_unverified",
+              "test_sr105_muon_nonreference_ns_steps_is_unverified",
+              "test_sr106_active_asset_check_request_must_not_succeed_without_check",
+              "test_sr107_multiple_optimizer_types_are_all_named_in_hard_diagnostics",
+              "test_sr108_multiple_pending_optimizers_both_named_in_warning",
+              "test_sr109_same_optimizer_two_profiles_are_both_named",
+              "test_sr110_sd3_requires_review_but_is_not_marked_unimplemented",
+              "test_sr111_sd2_v2_requires_review_but_is_not_marked_unimplemented",
+              "test_sr112_known_incompatible_wins_over_planned_optimizer",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              missing = [
+                  case.id() for case, trace in result.failures
+                  if "QG-1B2-SR1 CONTRACT NOT SATISFIED" not in trace
+              ]
+              if len(result.failures) != 12 or actual != expected or missing:
+                  raise SystemExit(
+                      f"QG-1B2-SR1 INVALID RED: failures={len(result.failures)} "
+                      f"actual={sorted(actual)} missing_marker={missing}"
+                  )
+              print(
+                  "QG-1B2-SR1 VALID TESTS-ONLY RED: 12 targeted FAIL + "
+                  "4 baseline PASS; old QG-1B 16/16 PASS; "
+                  "0 ERROR/SKIP/xfail/xpass; no production patch yet"
+              )
+              raise SystemExit(1)
+          print(
+              "QG-1B2-SR1 SCOPED HOST GREEN: 16/16 PASS + "
+              "old QG-1B 16/16 PASS, 0 FAIL/ERROR/SKIP/xfail/xpass; "
+              "no Start/CUDA or certificate promotion"
+          )
+          PY
