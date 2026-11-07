@@ -128,6 +128,18 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         self.assertTrue(r.host_admissible)
         self.assertFalse(r.requires_experimental_ack)
         self.assertFalse(r.runtime_blockers)
+        # Legacy permission is not proof that this particular model/target
+        # matches the physical D1 vector. A fabricated release case ID must
+        # never create an additional "legacy approved" exemption.
+        forged = ExecutionFeatureQualification(
+            "qualified", "Test-only wrong source case", "fake:other-case"
+        )
+        with patch.dict(
+            FULL_BF16_BACKEND_QUALIFICATIONS, {"sd-lora": forged}
+        ):
+            fake = self._assess(purpose="start")
+        self.assertNotEqual(fake.status, "legacy_approved")
+        self.assertEqual(fake.readiness.evidence_tier, "unverified")
 
     def test_b303_pending_only_certificate_is_warning_and_preview_ack_required(self):
         with patch.dict(FULL_BF16_BACKEND_QUALIFICATIONS, {"sd-lora": _pending()}):
