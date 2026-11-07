@@ -1,0 +1,144 @@
+name: DTS QG-1B3-A first-party Host adapter scoped GREEN (integration RED retained)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - "mikazuki/parameter_policy_admission.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - "mikazuki/parameter_policy_admission.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-scoped-host:
+    name: QG1B3-A 42 legacy +12 admission subset +12 independent GREEN, four integration RED (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact HEAD without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new adapter and independent tests
+        run: python -m py_compile mikazuki/parameter_policy_admission.py tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_admission_adapter_host.py
+      - name: Assert original 42 source Host baselines and 12 independent invariants GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_admission_adapter_host", 12),
+          ]
+          for module, count in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(module)
+              if suite.countTestCases() != count:
+                  raise SystemExit(
+                      f"QG-1B3-A INVALID DISCOVERY: {module} "
+                      f"has {suite.countTestCases()} instead of {count}"
+                  )
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG-1B3-A INVALID REGRESSION: {module}")
+          print(
+              "QG-1B3-A ORIGINAL 42/42 PASS + INDEPENDENT 12/12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass"
+          )
+          PY
+      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309-B312 intentional RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2ExistingBaselines, QG1B3QG2TargetedRed,
+          )
+          adapter = sorted(
+              name for name in dir(QG1B3QG2TargetedRed)
+              if name.startswith("test_b30") and 301 <= int(name[6:9]) <= 308
+          )
+          baseline = sorted(
+              name for name in dir(QG1B3QG2ExistingBaselines)
+              if name.startswith("test_b90")
+          )
+          if len(adapter) != 8 or len(baseline) != 4:
+              raise SystemExit(
+                  f"QG-1B3-A INVALID SUBSET DISCOVERY: {adapter=} {baseline=}"
+              )
+          suite = unittest.TestSuite(
+              [QG1B3QG2TargetedRed(name) for name in adapter]
+              + [QG1B3QG2ExistingBaselines(name) for name in baseline]
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "QG-1B3-A INVALID FIRST-PARTY ADAPTER SCOPED GREEN"
+              )
+          print(
+              "QG-1B3-A B301-B308 8/8 PASS + B901-B904 4/4 PASS; "
+              "old 42/42 and new independent 12/12 PASS"
+          )
+
+          pending = sorted(
+              name for name in dir(QG1B3QG2TargetedRed)
+              if name.startswith("test_b3")
+              and 309 <= int(name[6:9]) <= 312
+          )
+          if len(pending) != 4:
+              raise SystemExit("QG-1B3-A INVALID 4 integration RED discovery")
+          remaining = unittest.TestSuite(
+              QG1B3QG2TargetedRed(name) for name in pending
+          )
+          red = unittest.TextTestRunner(verbosity=2).run(remaining)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in red.failures}
+          unrelated = [
+              case.id() for case, trace in red.failures
+              if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
+          ]
+          if (red.testsRun != 4 or len(red.failures) != 4
+                  or actual != set(pending) or unrelated or red.errors
+                  or red.skipped or red.expectedFailures
+                  or red.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1B3-A INVALID REMAINING INTEGRATION RED: "
+                  f"failures={len(red.failures)} actual={sorted(actual)}"
+              )
+          print(
+              "QG-1B3-A SCOPED HOST GREEN: B301-B308 8/8 PASS, "
+              "B901-B904 4/4 PASS, independent 12/12 PASS, "
+              "prior 42/42 PASS; B309-B312 EXACT FOUR INTENTIONAL RED. "
+              "No Preview/Export/Start/Direct Trainer integration, "
+              "no new model file validation, no CUDA, no permission to merge."
+          )
+          PY
