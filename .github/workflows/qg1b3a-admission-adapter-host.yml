@@ -76,6 +76,28 @@ jobs:
               "0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
+      - name: Verify QG-1B3-B eight typed migration contracts and four independent baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg1b3b_runtime_migration import (
+              QG1B3BTypedMigrationRed, QG1B3BTrueExistingBaselines,
+          )
+          for cls, count in (
+              (QG1B3BTypedMigrationRed, 8),
+              (QG1B3BTrueExistingBaselines, 4),
+          ):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              if suite.countTestCases() != count:
+                  raise SystemExit(f"QG1B3-B INVALID DISCOVERY: {cls.__name__}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B NOT GREEN: {cls.__name__}")
+          print("QG-1B3-B typed migration 8/8 PASS +4/4 real baselines PASS")
+          PY
       - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309 GREEN and B310-B312 intentional RED
         shell: bash
         run: |
