@@ -181,19 +181,25 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         )
 
     def test_b306_ack_never_turns_bad_precision_or_pseudo_bool_into_allow(self):
-        for cfg, code in (
+        # One test = one targeted RED. Still inspect BOTH negative cases once
+        # the absent adapter is implemented; avoid two failing subTest records.
+        cases = (
             (_config(mixed_precision="fp16"), "runtime.bf16.precision_mismatch"),
             (_config(full_bf16="false"), "runtime.bool.invalid"),
-        ):
-            with self.subTest(cfg=cfg):
-                r = self._assess(
-                    config=cfg, purpose="start", experimental_ack=True
-                )
-                self.assertEqual(r.status, "blocked")
-                self.assertFalse(r.host_admissible)
-                self.assertIn(
-                    code, {x.code for x in r.readiness.hard_errors}
-                )
+        )
+        problems = []
+        for cfg, code in cases:
+            r = self._assess(
+                config=cfg, purpose="start", experimental_ack=True
+            )
+            if (
+                r.status != "blocked"
+                or r.host_admissible
+                or code not in {x.code for x in r.readiness.hard_errors}
+            ):
+                problems.append((cfg, code, r.status))
+        if problems:
+            self.fail(f"{MARKER}: explicit acknowledgement bypasses {problems!r}")
 
     def test_b307_ack_never_overrides_sdxl_ownership_risk_or_planned_optimizer(self):
         risky = self._assess(
