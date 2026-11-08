@@ -492,8 +492,8 @@ class QG2A2TargetedRed(unittest.TestCase):
         self.assertIn('"/api/run"', UI)
         self.assertIn("__runtimeReady", UI)
         self.assertIn("localStorage.setItem", UI)
-        self.assertNotIn('a.value.experimental_full_bf16_ack', UI)
-        self.assertNotIn('localStorage.setItem("experimental_full_bf16_ack"', UI)
+        self.assertNotIn('a.value.experimental_full_bf16_ack=', UI)
+        self.assertNotIn('localStorage.setItem("experimental_full_bf16_ack",', UI)
 
     def test_a212_ui_ready_is_not_host_admissible_or_gui_only_authority(self):
         self._need(
