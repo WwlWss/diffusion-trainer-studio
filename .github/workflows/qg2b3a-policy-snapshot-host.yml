@@ -1,0 +1,196 @@
+name: DTS QG-2-B3-A Policy loader and snapshot Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - "docs/qualification-gate-qg2b3a-policy-snapshot-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - "docs/qualification-gate-qg2b3a-policy-snapshot-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  policy-snapshot-host:
+    name: "QG-2-B3-A exact 8 RED + 4 real baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact source without optional submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile B3-A and inherited host test harnesses
+        run: python -m py_compile mikazuki/parameter_policy.py mikazuki/parameter_policy_admission.py mikazuki/direct_trainer_admission_intent.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_qg1b_trusted_producer.py tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_evidence_coverage.py
+      - name: Preserve 42 prior QG-1B and SR1 host GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+          ]
+          for name, expected in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"QG-2-B3-A PRIOR DISCOVERY MISMATCH: {name}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != expected or result.errors or result.failures
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG-2-B3-A PRIOR GREEN REGRESSION: {name}")
+          print("QG-2-B3-A PRIOR 42/42 HOST GREEN; 0 FAIL/ERROR/SKIP/xfail/xpass")
+          PY
+      - name: Preserve QG-2-B2 all-seven-entrypoint CLI Intent GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_qg2b2_cli_intent"
+          )
+          if suite.countTestCases() != 8:
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID B2 DISCOVERY: {suite.countTestCases()} != 8"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.errors or result.failures
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit("QG-2-B3-A QG-2-B2 CLI INTENT REGRESSION")
+          print("QG-2-B3-A QG-2-B2 CLI INTENT GREEN: 8/8 PASS")
+          PY
+      - name: Preserve cumulative B301-B311 GREEN and one B312 RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_admission_red"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID CUMULATIVE DISCOVERY: {suite.countTestCases()} != 16"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID CUMULATIVE RUN: tests={result.testsRun} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)}"
+              )
+          expected = {
+              "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          bad = [
+              case.id() for case, trace in result.failures
+              if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
+          ]
+          if len(result.failures) != 1 or actual != expected or bad:
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID B312 RED: actual={sorted(actual)} bad={bad}"
+              )
+          print("QG-2-B3-A CUMULATIVE: B301-B311 11 PASS + B901-B904 4 PASS; "
+                "exactly one B312 RED; 0 ERROR/SKIP/xfail/xpass")
+          PY
+      - name: Exact B3-A eight targeted RED plus four actual baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b3a_snapshot_red import (
+              QG2B3APolicySnapshotTargetedRed,
+              QG2B3APolicySnapshotBaselines,
+              MARKER,
+          )
+          targets = sorted(
+              name for name in dir(QG2B3APolicySnapshotTargetedRed)
+              if name.startswith("test_b3a2")
+          )
+          baselines = sorted(
+              name for name in dir(QG2B3APolicySnapshotBaselines)
+              if name.startswith("test_b3a9")
+          )
+          if len(targets) != 8 or len(baselines) != 4:
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID DISCOVERY: {len(targets)}+{len(baselines)}"
+              )
+          for number in range(201, 209):
+              if sum(name.startswith(f"test_b3a{number}_") for name in targets) != 1:
+                  raise SystemExit(f"QG-2-B3-A INVALID B3A{number} IDENTITY")
+          for number in range(901, 905):
+              if sum(name.startswith(f"test_b3a{number}_") for name in baselines) != 1:
+                  raise SystemExit(f"QG-2-B3-A INVALID B3A{number} BASELINE")
+          target_result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(
+                  QG2B3APolicySnapshotTargetedRed(name) for name in targets
+              )
+          )
+          baseline_result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(
+                  QG2B3APolicySnapshotBaselines(name) for name in baselines
+              )
+          )
+          if (target_result.testsRun != 8 or baseline_result.testsRun != 4
+                  or target_result.errors or baseline_result.errors
+                  or baseline_result.failures or target_result.skipped
+                  or baseline_result.skipped or target_result.expectedFailures
+                  or baseline_result.expectedFailures
+                  or target_result.unexpectedSuccesses
+                  or baseline_result.unexpectedSuccesses):
+              raise SystemExit("QG-2-B3-A INVALID RED/BASELINE RUN")
+          actual = {
+              case.id().rsplit(".", 1)[-1]
+              for case, _trace in target_result.failures
+          }
+          bad = [
+              case.id() for case, trace in target_result.failures
+              if MARKER not in trace
+          ]
+          if len(target_result.failures) == 8 and actual == set(targets) and not bad:
+              print("QG-2-B3-A VALID TESTS-ONLY RED: B3A201-B3A208 EXACT 8 "
+                    "missing-source FAIL + B3A901-B3A904 4 real PASS; "
+                    "0 ERROR/SKIP/xfail/xpass; NO production edits.")
+              raise SystemExit(1)
+          if target_result.failures:
+              raise SystemExit(
+                  f"QG-2-B3-A INVALID RED IDENTITIES: {sorted(actual)} bad={bad}"
+              )
+          print("QG-2-B3-A SOURCE GREEN CANDIDATE: 8/8+4/4 "
+                "(not an implementation signoff; B3-B/B3-C and B312 remain HOLD)")
+          PY
