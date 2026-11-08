@@ -172,12 +172,12 @@ jobs:
           )
           result = unittest.TextTestRunner(verbosity=1).run(suite)
           actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          expected = set(names[-2:])
+          expected = set(names[-1:])
           if (result.testsRun != 16 or result.errors or result.skipped
-                  or len(result.failures) != 2 or actual != expected
+                  or len(result.failures) != 1 or actual != expected
                   or result.expectedFailures or result.unexpectedSuccesses
                   or any(MARKER not in trace for _, trace in result.failures)):
-              raise SystemExit(f"QG-2-A1-SR1 BAD B311/B312 HOLD: {actual}")
+              raise SystemExit(f"QG-2-A1-SR1 BAD B312 HOLD: {actual}")
           print("QG-2-A1-SR1 scoped Host only: B301–B310+4 baselines PASS; "
-                "B311/B312 exact two RED, no GUI/Direct Trainer permission.")
+                "B311 GREEN; B312 exact one RED, no Direct Trainer permission.")
           PY
