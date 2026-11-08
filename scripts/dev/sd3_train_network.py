@@ -1,4 +1,7 @@
 import argparse
+from mikazuki.direct_trainer_admission_intent import (
+    extract_direct_trainer_admission_intent,
+)
 import copy
 import math
 import random
@@ -597,8 +600,9 @@ if __name__ == "__main__":
     parser = setup_parser()
 
     args = parser.parse_args()
+    admission_intent = extract_direct_trainer_admission_intent(args)
     train_util.verify_command_line_training_args(args)
     args = train_util.read_config_from_file(args, parser)
 
     trainer = Sd3NetworkTrainer()
-    trainer.train(args)
+    trainer.train(args, admission_intent=admission_intent)
