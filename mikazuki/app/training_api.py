@@ -82,17 +82,21 @@ def _decode_training_admission_request(
     if not isinstance(payload, dict):
         raise ValueError("训练配置必须是 JSON object。")
 
-    if "config" not in payload:
+    if "config" not in payload or not isinstance(payload.get("config"), dict):
         if "experimental_full_bf16_ack" in payload:
             raise ValueError(
                 "Experimental acknowledgement is only accepted as a "
                 "top-level field in a nested training request."
             )
+        # Preserve the old decoder's flat-payload fallback when a legacy
+        # Trainer option happens to be named 'config' but is not an object.
+        # An explicit train_type marks the nested API envelope, where a
+        # non-object config is malformed and must fail closed.
+        if "config" in payload and "train_type" in payload:
+            raise ValueError("Nested training request config must be a JSON object.")
         return None, dict(payload), RequestAdmissionIntent()
 
-    raw_config = payload.get("config")
-    if not isinstance(raw_config, dict):
-        raise ValueError("Nested training request config must be a JSON object.")
+    raw_config = payload["config"]
     if {"experimental_full_bf16_ack", "admission_intent", "admission"}.intersection(raw_config):
         raise ValueError(
             "Admission controls are API-owned and cannot be supplied as Trainer config."
