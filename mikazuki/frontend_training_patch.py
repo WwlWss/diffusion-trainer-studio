@@ -150,6 +150,7 @@ def patch_training_layout_js(content: str) -> str:
 
     content = _replace_once(
         content,
+        'createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",onClick:O}',
         '__isComponentMode()&&a.value.full_bf16===!0&&__admission.value&&__admission.value.requires_experimental_ack===!0?createBaseVNode("label",{style:{display:"flex",alignItems:"center",gap:"8px",margin:"0px 0px 10px 0px"}},[createBaseVNode("input",{type:"checkbox",checked:__experimentalFullBf16Ack.value,onChange:$event=>__experimentalFullBf16Ack.value=$event.target.checked}),createTextVNode("我确认本次 Start 使用实验性 Full-BF16 路径；当前仍受后端准入门槛限制")]):createCommentVNode("",!0),createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",disabled:__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value&&!(__admission.value&&__admission.value.requires_experimental_ack===!0&&__experimentalFullBf16Ack.value===!0),onClick:O}',
         'createVNode(g,{plain:"",class:"max-btn color-btn",type:"primary",disabled:__startPending.value||__policyBootstrapPending.value||__isComponentMode()&&!__runtimeReady.value&&!(__admission.value&&__admission.value.requires_experimental_ack===!0&&__experimentalFullBf16Ack.value===!0),onClick:O}',
         "start pending disable",
