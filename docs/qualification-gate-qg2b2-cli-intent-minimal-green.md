@@ -16,13 +16,13 @@ The module intentionally imports no torch, Accelerate, sd-scripts or model-aware
 
 ## 2. Stable / Dev CLI path
 
-Both `scripts/stable/train_network.py` and `scripts/dev/train_network.py`:
-1. register the flag in `setup_parser()`;
+Both base entrypoints (`scripts/stable/train_network.py`, `scripts/dev/train_network.py`) and all five model-family entrypoints (`scripts/stable/sdxl_train_network.py`, `scripts/dev/sdxl_train_network.py`, `scripts/dev/sd3_train_network.py`, `scripts/dev/flux_train_network.py`, `scripts/dev/lumina_train_network.py`) now:
+1. inherit the single flag registration from the corresponding base `train_network.setup_parser()`;
 2. extract the intent immediately after `parse_args()`;
 3. extract before command-line validation and `read_config_from_file()`;
 4. pass it separately as `trainer.train(args, admission_intent=admission_intent)`.
 
-Both `NetworkTrainer.train()` signatures accept an optional `admission_intent=None` parameter for ABI-compatible handoff. It is not consumed by the Trainer in B2; the Early/Final Host Admission integration remains B3. Existing `trainer.train(args)` callers remain valid.
+Both base `NetworkTrainer.train()` signatures accept an optional `admission_intent=None` parameter for ABI-compatible handoff. The five model-family classes inherit this method and do not override it. The intent is not consumed by the Trainer in B2; Early/Final Host Admission integration remains B3. Existing `trainer.train(args)` callers remain valid.
 
 ## 3. TOML and output-config trust boundary
 
@@ -35,7 +35,7 @@ Therefore a TOML root or section key cannot create an intent. A raw flag is extr
 
 ## 4. B2 tests and exact gate
 
-`tests/test_parameter_policy_qg2b2_cli_intent.py` contains exactly eight passing Host tests:
+`tests/test_parameter_policy_qg2b2_cli_intent.py` contains exactly eight passing Host tests, including all seven entrypoints:
 1. frozen intent / strict real boolean;
 2. one-shot extraction / raw Namespace field removal;
 3. real argparse `store_true` behavior and default false;
@@ -43,7 +43,7 @@ Therefore a TOML root or section key cannot create an intent. A raw flag is extr
 5. Stable/Dev parser registration;
 6. TOML rejection before Namespace merge;
 7. actual Stable/Dev `read_config_from_file()` output-config behavior without serializing acknowledgement;
-8. Stable/Dev main extraction ordering and separate Trainer handoff.
+8. All seven Stable/Dev base and model-family entrypoints extract and separately forward the intent.
 
 `.github/workflows/qg2b2-cli-intent-host.yml` runs on Ubuntu and Windows with Python 3.11. It requires:
 - 42/42 inherited QG-1B / SR1 host tests PASS;
