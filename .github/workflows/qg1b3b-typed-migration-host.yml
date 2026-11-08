@@ -76,7 +76,7 @@ jobs:
                   raise SystemExit("QG-1B3-B INVALID RED SHAPE")
               raise SystemExit("QG-1B3-B VALID TESTS-ONLY RED: 8 target FAIL /4 baseline PASS; intentionally failing")
           PY
-      - name: Preserve prior 42, B3-A 12, B301-B308, and B309-B312 staged honesty
+      - name: Preserve prior 42, B3-A 12, B301-B311 GREEN, and B312 staged RED
         shell: bash
         run: |
           python - <<'PY'
