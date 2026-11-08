@@ -4741,7 +4741,7 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
         args_dict = vars(args)
 
         # remove unnecessary keys
-        for key in ["config_file", "output_config", "wandb_api_key"]:
+        for key in ["config_file", "output_config", "wandb_api_key", "experimental_full_bf16_ack"]:
             if key in args_dict:
                 del args_dict[key]
 
@@ -4784,6 +4784,13 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
         # if value is dict, save all key and value into one dict
         for key, value in section_dict.items():
             ignore_nesting_dict[key] = value
+
+    # Direct Trainer acknowledgement is a one-invocation CLI control.  TOML
+    # must never be able to seed the argparse Namespace with this field.
+    from mikazuki.direct_trainer_admission_intent import (
+        reject_direct_trainer_ack_toml,
+    )
+    reject_direct_trainer_ack_toml(ignore_nesting_dict)
 
     config_args = argparse.Namespace(**ignore_nesting_dict)
     args = parser.parse_args(namespace=config_args)
