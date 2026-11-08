@@ -114,7 +114,7 @@ jobs:
           print("QG-2-A2 inherited GREEN: 42 QG1B +12 adapter +12 B3B "
                 "+16 A1 +12 SR1 +5 lifecycle + legacy public API overlay")
           PY
-      - name: Preserve B301-B310 GREEN and precisely B311-B312 integration RED
+      - name: Preserve B301-B311 GREEN and precisely B312 integration RED
         shell: bash
         run: |
           python - <<'PY'
@@ -135,13 +135,13 @@ jobs:
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
           if (result.testsRun != 16 or result.errors or result.skipped
-                  or len(result.failures) != 2
-                  or actual != set(targets[-2:])
+                  or len(result.failures) != 1
+                  or actual != set(targets[-1:])
                   or result.expectedFailures or result.unexpectedSuccesses
                   or any(MARKER not in trace for _, trace in result.failures)):
-              raise SystemExit(f"QG-2-A2 INVALID B311/B312 HOLD: {sorted(actual)}")
-          print("QG-2-A2 inherited: B301-B310+4 baselines GREEN; "
-                "B311 and B312 EXACT TWO INTENTIONAL RED, no launch permission")
+              raise SystemExit(f"QG-2-A2 INVALID B312 HOLD: {sorted(actual)}")
+          print("QG-2-A2 inherited: B301-B311+4 baselines GREEN; "
+                "B312 EXACT ONE INTENTIONAL RED, no Direct Trainer permission")
           PY
       - name: Exact A201-A212 source RED or later fully tested scoped GREEN
         shell: bash
