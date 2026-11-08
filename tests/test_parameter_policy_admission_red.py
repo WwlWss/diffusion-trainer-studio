@@ -407,8 +407,16 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             "assess_component_training_admission" not in _called_names(direct_admission_fn)
             or 'purpose="direct_trainer"' not in direct_admission
             or "experimental_ack" not in direct_admission
+            or "load_parameter_policy_sidecar" not in direct_admission
         ):
-            missing.append("Direct Trainer purpose + strict acknowledgement at first-party gate")
+            missing.append("Direct Trainer purpose + strict acknowledgement + pure canonical Policy loader")
+        policy_source = _source("mikazuki/parameter_policy.py")
+        if (
+            "def load_parameter_policy_sidecar" not in policy_source
+            or "import torch" in policy_source
+            or "from torch" in policy_source
+        ):
+            missing.append("shared torch-free canonical Policy sidecar loader/hash")
 
         # CLI intent is parsed once, removed from argparse, and kept separate
         # from the Effective Config. TOML cannot supply the reserved key.
@@ -417,9 +425,15 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             "scripts/dev/library/train_util.py",
         ):
             util = _source(util_path)
-            if "--experimental_full_bf16_ack" not in util:
+            flag = "--experimental_full_bf16_ack"
+            if flag not in util:
                 missing.append(f"{util_path}: strict CLI opt-in parser")
-            read_code, _read_fn = _source_fn(util_path, "read_config_from_file")
+            else:
+                flag_position = util.index(flag)
+                parser_excerpt = util[flag_position:flag_position + 500]
+                if 'action="store_true"' not in parser_excerpt and "action='store_true'" not in parser_excerpt:
+                    missing.append(f"{util_path}: acknowledgement parser must produce a real bool")
+            read_code, read_fn = _source_fn(util_path, "read_config_from_file")
             namespace_marker = "argparse.Namespace(**ignore_nesting_dict)"
             if (
                 "experimental_full_bf16_ack" not in read_code
@@ -427,6 +441,20 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
                 or read_code.index("experimental_full_bf16_ack") > read_code.index(namespace_marker)
             ):
                 missing.append(f"{util_path}: reject TOML acknowledgement before Namespace merge")
+            else:
+                direct_rejection = any(
+                    isinstance(item, ast.If)
+                    and "experimental_full_bf16_ack" in (
+                        ast.get_source_segment(_source(util_path), item.test) or ""
+                    )
+                    and any(isinstance(child, ast.Raise) for child in ast.walk(item))
+                    for item in ast.walk(read_fn)
+                )
+                if (
+                    not direct_rejection
+                    and "reject_direct_trainer_ack_toml" not in _called_names(read_fn)
+                ):
+                    missing.append(f"{util_path}: TOML key must be actively rejected, not merely mentioned")
 
         # Both CLI entrypoints must extract the ephemeral intent before config
         # loading and pass it separately to the model-family Trainer.
@@ -498,23 +526,30 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             missing.append("late Session typed intent + immutable preflight snapshot")
         if "assess_component_training_admission" not in _called_names(session_fn):
             missing.append("late Session first-party Direct Trainer Admission")
+        policy_loader = next(
+            (
+                name for name in ("load_parameter_policy_file", "load_parameter_policy_sidecar")
+                if name in session_code
+            ),
+            None,
+        )
         if (
-            "load_parameter_policy_file" not in session_code
+            policy_loader is None
             or "policy_hash" not in session_code
             or "effective_config_fingerprint" not in session_code
             or "admission_snapshot" not in session_code
             or "require_assets=True" not in session_code
             or "scan_parameter_roots" not in session_code
+            or "purpose=\"direct_trainer\"" not in session_code
+            or "experimental_ack" not in session_code
         ):
-            missing.append("late Session Policy/config identity + mandatory asset gate")
-        else:
-            if not (
-                "assess_component_training_admission" in session_code
-                and session_code.index("load_parameter_policy_file")
-                < session_code.index("assess_component_training_admission")
-                < session_code.index("scan_parameter_roots")
-            ):
-                missing.append("late Admission and identity comparison must precede live root scan")
+            missing.append("late Session Policy/config identity + Direct Trainer Admission + mandatory asset gate")
+        elif not (
+            session_code.index(policy_loader)
+            < session_code.index("assess_component_training_admission")
+            < session_code.index("scan_parameter_roots")
+        ):
+            missing.append("late Admission and identity comparison must precede live root scan")
         if (
             "parameter_policy_v1_semantic_blockers" not in _called_names(session_fn)
             or not (
@@ -553,8 +588,11 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             or "admission_intent" not in _argument_names(launcher_fn)
             or "--experimental_full_bf16_ack" not in launcher_code
             or "experimental_full_bf16_ack" not in launcher_code
+            or "admission_intent.origin" not in launcher_code
+            or "webui_start" not in launcher_code
+            or "admission_intent.experimental_full_bf16_ack is True" not in launcher_code
         ):
-            missing.append("typed per-job Launcher intent and child CLI flag")
+            missing.append("typed strict-positive WebUI per-job Launcher intent and child CLI flag")
         elif "args = [" in launcher_code:
             args_start = launcher_code.index("args = [")
             trainer_index = launcher_code.find("trainer_file", args_start)
