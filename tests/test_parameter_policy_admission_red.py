@@ -440,6 +440,46 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
                     f"{trainer_path}: early Host gate plus final-config gate before Accelerator/model load"
                 )
 
+        # Every model-family entrypoint must consume the same one-shot CLI
+        # intent and forward it through the inherited NetworkTrainer ABI.
+        derived_entrypoints = (
+            ("scripts/stable/sdxl_train_network.py", "SdxlNetworkTrainer"),
+            ("scripts/dev/sdxl_train_network.py", "SdxlNetworkTrainer"),
+            ("scripts/dev/sd3_train_network.py", "Sd3NetworkTrainer"),
+            ("scripts/dev/flux_train_network.py", "FluxNetworkTrainer"),
+            ("scripts/dev/lumina_train_network.py", "LuminaNetworkTrainer"),
+        )
+        for trainer_path, trainer_class in derived_entrypoints:
+            main = _main_guard_source(trainer_path)
+            if (
+                "extract_direct_trainer_admission_intent(args)" not in main
+                or "read_config_from_file(args, parser)" not in main
+                or "trainer.train(args, admission_intent=admission_intent)" not in main
+            ):
+                missing.append(f"{trainer_path}: model-family CLI intent handoff")
+            class_tree = ast.parse(_source(trainer_path), filename=trainer_path)
+            owner = next(
+                (
+                    node for node in class_tree.body
+                    if isinstance(node, ast.ClassDef) and node.name == trainer_class
+                ),
+                None,
+            )
+            if owner is None or not any(
+                isinstance(base, ast.Attribute)
+                and base.attr == "NetworkTrainer"
+                and isinstance(base.value, ast.Name)
+                and base.value.id == "train_network"
+                for base in owner.bases
+            ):
+                missing.append(f"{trainer_path}: expected NetworkTrainer inheritance")
+            elif any(
+                isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and item.name == "train"
+                for item in owner.body
+            ):
+                missing.append(f"{trainer_path}: model-family train() must inherit typed ABI")
+
         # The early bridge remains torch-free and must not import the late,
         # model-aware trainer module.
         for bridge_path in (
