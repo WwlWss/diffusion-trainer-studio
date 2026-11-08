@@ -113,9 +113,9 @@ jobs:
           suite = unittest.TestSuite(QG1B3QG2TargetedRed(n) for n in names)
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          if (len(names) != 4 or result.testsRun != 4 or actual != set(names[2:])
-              or len(result.failures) != 2 or result.errors or result.skipped
+          if (len(names) != 4 or result.testsRun != 4 or actual != set(names[3:])
+              or len(result.failures) != 1 or result.errors or result.skipped
               or any(MARKER not in trace for _, trace in result.failures)):
               raise SystemExit(f"QG1B3-B INVALID INTEGRATION STAGE: {actual}")
-          print("QG1B3-B SCOPED GREEN: B309-B310 PASS, B311-B312 EXACT TWO RED; QG2-A2/B STILL HOLD")
+          print("QG1B3-B SCOPED GREEN: B309-B311 PASS, B312 EXACT ONE RED; QG2-A2/B STILL HOLD")
           PY
