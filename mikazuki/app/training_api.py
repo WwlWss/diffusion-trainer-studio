@@ -93,6 +93,12 @@ def _decode_training_admission_request(
     raw_config = payload.get("config")
     if not isinstance(raw_config, dict):
         raise ValueError("Nested training request config must be a JSON object.")
+    if {"experimental_full_bf16_ack", "admission_intent", "admission"}.intersection(raw_config):
+        raise ValueError(
+            "Admission controls are API-owned and cannot be supplied as Trainer config."
+        )
+    if {"admission_intent", "admission"}.intersection(payload):
+        raise ValueError("Admission diagnostics and intent are server-owned fields.")
 
     page_type = payload.get("train_type")
     if page_type is not None and type(page_type) is not str:
