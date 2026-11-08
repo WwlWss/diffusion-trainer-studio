@@ -84,15 +84,15 @@ jobs:
               + [QG1B3QG2ExistingBaselines(n) for n in baseline]
           )
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          expected_red = set(names[-2:])
+          expected_red = set(names[-1:])
           actual_red = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
           if (result.testsRun != 16 or actual_red != expected_red
-                  or len(result.failures) != 2 or result.errors or result.skipped
+                  or len(result.failures) != 1 or result.errors or result.skipped
                   or result.expectedFailures or result.unexpectedSuccesses
                   or any(MARKER not in trace for _, trace in result.failures)):
               raise SystemExit(f"QG-2-A1 INVALID B3 PREVIOUS STAGE: {sorted(actual_red)}")
           print("QG-2-A1 inherited: 42 QG1B +12 adapter +12 B3B GREEN;"
-                " B301-B310 and 4 baselines GREEN; B311-B312 EXACT TWO RED")
+                " B301-B311 and 4 baselines GREEN; B312 EXACT ONE RED")
           PY
       - name: Exact 12 targeted Request RED-to-GREEN and four live baselines
         shell: bash
