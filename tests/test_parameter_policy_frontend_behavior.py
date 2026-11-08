@@ -125,6 +125,7 @@ if ("fallback_optimizer_profile" in a.value.parameter_policy_components.base) {
             cwd=ROOT,
             input=self.patched,
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=False,
         )
