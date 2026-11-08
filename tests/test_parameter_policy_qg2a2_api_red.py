@@ -498,6 +498,7 @@ class QG2A2TargetedRed(unittest.TestCase):
             "frontend lacks visible nonpersisted per-Start acknowledgement control",
         )
         self.assertIn('"/api/run"', UI)
+        self.assertIn('__admission.value.status=="ack_required"', UI)
         self.assertIn("__runtimeReady", UI)
         self.assertIn("localStorage.setItem", UI)
         self.assertNotIn('a.value.experimental_full_bf16_ack=', UI)
