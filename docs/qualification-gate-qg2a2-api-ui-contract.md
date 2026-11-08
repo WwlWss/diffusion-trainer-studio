@@ -103,9 +103,12 @@ submodule commit was changed.
   send it. It never enters `a.value`, localStorage, sessionStorage,
   history/preset, TOML, Bundle or Sidecars.
 - Consent is consumed/reset on Start attempt, reset on form/config changes
-  and mode transitions, and reset on unmount. The Start button can submit an
-  explicit candidate attempt, but the server continues to return the SR1
-  QG-2-A2/B HOLD response. No actual experimental training can start.
+  and mode transitions, and reset on unmount. Both checkbox visibility and
+  Start submission require the typed Preview status `ack_required` plus the
+  explicit checked state; a generic `requires_experimental_ack` flag alone
+  cannot enable the control. The Start button can submit an explicit
+  candidate attempt, but the server continues to return the SR1 QG-2-A2/B
+  HOLD response. No actual experimental training can start.
 - The pinned frontend submodule was checked out in a separate CI job. The
   real `layout.96d49288.js` is patched by the production patch function,
   syntax-checked by Node, and the extracted real request/Start handlers are
@@ -115,27 +118,29 @@ submodule commit was changed.
 ### Exact dual-platform acceptance
 
 At exact source HEAD
-`297ed1ef5c92b09506c5643dd9c511929ff09616`:
+`b611477337aca616659aa8a6da5810ebcfa71f4b`:
 
-- [QG-2-A2 API/UI + frontend smoke #42464012944](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012944):
+- [QG-2-A2 API/UI + frontend smoke  #42464477769](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477769):
   **Ubuntu SUCCESS and Windows SUCCESS**. A201–A212 **12/12 PASS**;
   A901–A904 **4/4 PASS**; inherited B301–B311 plus B901–B904 PASS;
   B312 is the **exact single remaining intentional RED**. Pinned frontend
   smoke: **6/6 PASS on each OS**, including patched JavaScript syntax,
   Start-only envelope and one-shot acknowledgement consumption.
-- [QG-1B3-A/B + QG-2-A1 staged Host #42464012881](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012881):
+- [QG-1B3-A/B + QG-2-A1 staged Host  #42464477698](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477698):
   SUCCESS on both OS; B301–B311 and inherited host baselines pass. The
-  standalone B3B workflow was still queued at evidence capture; the
+  standalone B3B workflow remained queued at evidence capture; the
   successful inherited stage executed its 12 B3B tests.
-- [QG-2-A1-SR1 #42464012882](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012882),
-  [QG-2-A1 Request #42464012900](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012900),
-  [QG-1A #42464012896](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012896),
-  [QG-1B #42464012952](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012952)
+- [QG-2-A1-SR1  #42464477700](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477700),
+  [QG-2-A1 Request  #42464477746](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477746),
+  [QG-1A  #42464477749](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477749),
+  [QG-1B  #42464477696](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477696)
   all SUCCESS.
-- The cumulative admission workflow intentionally remains FAILURE because
-  B312 is still RED; the Anima umbrella also reports only B312 as its
-  intentional failure with 64 optional-dependency skips. Neither is a full
-  project GREEN or merge authorization.
+- [Cumulative admission #42464477724](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477724)
+  intentionally remains FAILURE for exactly B312; its Ubuntu and Windows
+  logs identify the original `QG-1B3-QG2 ADMISSION CONTRACT ABSENT` marker.
+  [Anima umbrella #42464477760](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464477760)
+  reports 758 tests, exactly the same B312 failure, and 64 optional-dependency
+  skips. Neither is a full project GREEN or merge authorization.
 
 **Verdict:** QG-2-A2 scoped API + WebUI GREEN; B311 GREEN; B312 remains
 the only integration hold. PR #69 remains Draft/unmerged. No production
