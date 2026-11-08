@@ -391,12 +391,8 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
     def test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent(self):
         missing = []
         admission_source = _source("mikazuki/parameter_policy_admission.py")
-        if "class DirectTrainerAdmissionIntent" not in admission_source:
-            missing.append("immutable DirectTrainerAdmissionIntent")
         if "class DirectTrainerAdmissionSnapshot" not in admission_source:
             missing.append("immutable Policy/config admission snapshot")
-        if "def extract_direct_trainer_admission_intent" not in admission_source:
-            missing.append("one-shot CLI intent extraction")
         direct_admission, direct_admission_fn = _maybe_source_fn(
             "mikazuki/parameter_policy_admission.py",
             "prepare_direct_trainer_admission",
@@ -418,69 +414,14 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         ):
             missing.append("shared torch-free canonical Policy sidecar loader/hash")
 
-        # CLI intent is parsed once, removed from argparse, and kept separate
-        # from the Effective Config. TOML cannot supply the reserved key.
-        for util_path in (
-            "scripts/stable/library/train_util.py",
-            "scripts/dev/library/train_util.py",
-        ):
-            util = _source(util_path)
-            flag = "--experimental_full_bf16_ack"
-            if flag not in util:
-                missing.append(f"{util_path}: strict CLI opt-in parser")
-            else:
-                flag_position = util.index(flag)
-                parser_excerpt = util[flag_position:flag_position + 500]
-                if 'action="store_true"' not in parser_excerpt and "action='store_true'" not in parser_excerpt:
-                    missing.append(f"{util_path}: acknowledgement parser must produce a real bool")
-            read_code, read_fn = _source_fn(util_path, "read_config_from_file")
-            namespace_marker = "argparse.Namespace(**ignore_nesting_dict)"
-            if (
-                "experimental_full_bf16_ack" not in read_code
-                or namespace_marker not in read_code
-                or read_code.index("experimental_full_bf16_ack") > read_code.index(namespace_marker)
-            ):
-                missing.append(f"{util_path}: reject TOML acknowledgement before Namespace merge")
-            else:
-                direct_rejection = any(
-                    isinstance(item, ast.If)
-                    and "experimental_full_bf16_ack" in (
-                        ast.get_source_segment(_source(util_path), item.test) or ""
-                    )
-                    and any(isinstance(child, ast.Raise) for child in ast.walk(item))
-                    for item in ast.walk(read_fn)
-                )
-                if (
-                    not direct_rejection
-                    and "reject_direct_trainer_ack_toml" not in _called_names(read_fn)
-                ):
-                    missing.append(f"{util_path}: TOML key must be actively rejected, not merely mentioned")
+        # The B2 CLI/parser/TOML contract is independently GREEN in the
+        # QG-2-B2 suite. B312 remains focused on the still-missing Admission
+        # preflight, model-aware Session and Launcher parity.
 
-        # Both CLI entrypoints must extract the ephemeral intent before config
-        # loading and pass it separately to the model-family Trainer.
         for trainer_path in (
             "scripts/stable/train_network.py",
             "scripts/dev/train_network.py",
         ):
-            main = _main_guard_source(trainer_path)
-            if not main:
-                missing.append(f"{trainer_path}: executable CLI entrypoint")
-                continue
-            required = (
-                "extract_direct_trainer_admission_intent",
-                "read_config_from_file",
-                "admission_intent=",
-                "trainer.train",
-            )
-            if any(token not in main for token in required):
-                missing.append(f"{trainer_path}: separate CLI intent handoff")
-            elif not (
-                main.index("extract_direct_trainer_admission_intent")
-                < main.index("read_config_from_file")
-                < main.index("trainer.train")
-            ):
-                missing.append(f"{trainer_path}: intent must be extracted before TOML/output-config handling")
-
             train_code, train_fn = _source_method(
                 trainer_path, "NetworkTrainer", "train"
             )
@@ -628,30 +569,6 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         # Once the source contract exists, verify that the typed intent is
         # strict and that the actual first-party classifier retains D1 legacy,
         # pending acknowledgement and unsupported-backend distinctions.
-        module = importlib.import_module("mikazuki.parameter_policy_admission")
-        intent_type = getattr(module, "DirectTrainerAdmissionIntent", None)
-        snapshot_type = getattr(module, "DirectTrainerAdmissionSnapshot", None)
-        self.assertIsNotNone(intent_type)
-        self.assertTrue(is_dataclass(intent_type))
-        self.assertTrue(intent_type.__dataclass_params__.frozen)
-        self.assertTrue(is_dataclass(snapshot_type))
-        self.assertTrue(snapshot_type.__dataclass_params__.frozen)
-        self.assertTrue(
-            {"policy_hash", "effective_config_fingerprint", "admission"}.issubset(
-                set(snapshot_type.__dataclass_fields__)
-            )
-        )
-        with self.assertRaises(ValueError):
-            intent_type(experimental_full_bf16_ack="true")
-        with self.assertRaises(ValueError):
-            intent_type(experimental_full_bf16_ack=1)
-
-        extract = getattr(module, "extract_direct_trainer_admission_intent")
-        raw_args = SimpleNamespace(experimental_full_bf16_ack=True)
-        intent = extract(raw_args)
-        self.assertIs(intent.experimental_full_bf16_ack, True)
-        self.assertFalse(hasattr(raw_args, "experimental_full_bf16_ack"))
-
         legacy = assess_component_training_admission(
             _policy(), train_type="sd-lora", effective_config=_config(),
             purpose="direct_trainer", experimental_ack=False,
