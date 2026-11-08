@@ -220,6 +220,14 @@ class QG2A2TargetedRed(unittest.TestCase):
         self.assertEqual(
             decode_training_request(b'{"x":2}'), (None, {"x": 2}),
         )
+        # Preserve the legacy flat fallback for a non-object Trainer field
+        # named "config"; only an envelope with train_type requires an object.
+        flat_page, flat_config, flat_intent = self._helper()(
+            b'{"config":"legacy-flat-value"}', purpose="preview",
+        )
+        self.assertIsNone(flat_page)
+        self.assertEqual(flat_config, {"config": "legacy-flat-value"})
+        self.assertFalse(flat_intent.experimental_full_bf16_ack)
 
     def test_a202_nested_start_ack_exact_bool_and_server_owned_origin(self):
         parse = self._helper()
