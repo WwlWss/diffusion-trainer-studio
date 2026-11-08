@@ -46,6 +46,22 @@ def _source_fn(path, func):
     return ast.get_source_segment(source, node) or "", node
 
 
+def _maybe_source_fn(path, func):
+    source = _source(path)
+    tree = ast.parse(source, filename=path)
+    node = next(
+        (
+            n for n in tree.body
+            if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and n.name == func
+        ),
+        None,
+    )
+    if node is None:
+        return "", None
+    return ast.get_source_segment(source, node) or "", node
+
+
 def _source_method(path, class_name, method):
     source = _source(path)
     tree = ast.parse(source, filename=path)
@@ -381,7 +397,7 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             missing.append("immutable Policy/config admission snapshot")
         if "def extract_direct_trainer_admission_intent" not in admission_source:
             missing.append("one-shot CLI intent extraction")
-        direct_admission, direct_admission_fn = _source_fn(
+        direct_admission, direct_admission_fn = _maybe_source_fn(
             "mikazuki/parameter_policy_admission.py",
             "prepare_direct_trainer_admission",
         )
@@ -461,7 +477,7 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             "scripts/stable/library/dts_parameter_policy_bridge.py",
             "scripts/dev/library/dts_parameter_policy_bridge.py",
         ):
-            bridge_code, bridge_fn = _source_fn(
+            bridge_code, bridge_fn = _maybe_source_fn(
                 bridge_path, "preflight_component_training_admission"
             )
             if (
@@ -493,7 +509,8 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             missing.append("late Session Policy/config identity + mandatory asset gate")
         else:
             if not (
-                session_code.index("load_parameter_policy_file")
+                "assess_component_training_admission" in session_code
+                and session_code.index("load_parameter_policy_file")
                 < session_code.index("assess_component_training_admission")
                 < session_code.index("scan_parameter_roots")
             ):
