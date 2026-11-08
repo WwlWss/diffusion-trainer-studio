@@ -30,7 +30,7 @@ permissions:
 
 jobs:
   adapter-scoped-host:
-    name: QG1B3-A 42 legacy +12 adapter +12 independent GREEN, B309-B310 GREEN, B311-B312 RED (${{ matrix.os }})
+    name: QG1B3-A 42 legacy +12 adapter +12 independent GREEN, B309-B311 GREEN, B312 RED (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
@@ -98,7 +98,7 @@ jobs:
                   raise SystemExit(f"QG1B3-B NOT GREEN: {cls.__name__}")
           print("QG-1B3-B typed migration 8/8 PASS +4/4 real baselines PASS")
           PY
-      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309-B310 GREEN and B311-B312 intentional RED
+      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309-B311 GREEN and B312 intentional RED
         shell: bash
         run: |
           python - <<'PY'
@@ -146,12 +146,12 @@ jobs:
           )
           staged = unittest.TextTestRunner(verbosity=2).run(remaining)
           actual = {case.id().rsplit(".", 1)[-1] for case, _ in staged.failures}
-          expected = set(pending[2:])
+          expected = set(pending[3:])
           unrelated = [
               case.id() for case, trace in staged.failures
               if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
           ]
-          if (staged.testsRun != 4 or len(staged.failures) != 2
+          if (staged.testsRun != 4 or len(staged.failures) != 1
                   or actual != expected or unrelated or staged.errors
                   or staged.skipped or staged.expectedFailures
                   or staged.unexpectedSuccesses):
@@ -162,7 +162,7 @@ jobs:
           print(
               "QG-1B3-A/B STAGED HOST GREEN: B301-B310 10/10 PASS, "
               "B901-B904 4/4 PASS, independent 12/12 PASS, "
-              "prior 42/42 PASS; B311-B312 EXACT TWO INTENTIONAL RED. "
+              "prior 42/42 PASS; B312 EXACT ONE INTENTIONAL RED; B311 GREEN. "
               "No QG-2 Request/Start/direct Trainer integration, "
               "no CUDA, no permission to merge."
           )
