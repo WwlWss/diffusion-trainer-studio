@@ -10,6 +10,11 @@ import time
 import json
 from multiprocessing import Value
 import numpy as np
+from mikazuki.direct_trainer_admission_intent import (
+    add_direct_trainer_admission_argument,
+    extract_direct_trainer_admission_intent,
+)
+
 import toml
 
 from tqdm import tqdm
@@ -509,7 +514,9 @@ class NetworkTrainer:
 
         return loss.mean()
 
-    def train(self, args):
+    def train(self, args, admission_intent=None):
+        # QG-2-B2 carries the one-shot CLI intent separately from args.
+        # QG-2-B3 will consume it at the early/final Host Admission gates.
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
         parameter_policy_requested = bool(
@@ -1853,6 +1860,7 @@ def setup_parser() -> argparse.ArgumentParser:
     sai_model_spec.add_model_spec_arguments(parser)
     train_util.add_dataset_arguments(parser, True, True, True)
     train_util.add_training_arguments(parser, True)
+    add_direct_trainer_admission_argument(parser)
     train_util.add_masked_loss_arguments(parser)
     deepspeed_utils.add_deepspeed_arguments(parser)
     train_util.add_optimizer_arguments(parser)
@@ -2022,8 +2030,9 @@ if __name__ == "__main__":
     parser = setup_parser()
 
     args = parser.parse_args()
+    admission_intent = extract_direct_trainer_admission_intent(args)
     train_util.verify_command_line_training_args(args)
     args = train_util.read_config_from_file(args, parser)
 
     trainer = NetworkTrainer()
-    trainer.train(args)
+    trainer.train(args, admission_intent=admission_intent)
