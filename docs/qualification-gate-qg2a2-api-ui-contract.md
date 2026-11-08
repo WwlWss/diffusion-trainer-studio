@@ -59,55 +59,55 @@ A new .github/workflows/qg2a2-api-host.yml runs Python 3.11 on Ubuntu and Window
 
 ## 6. QG-2-A2 minimum GREEN implementation and exact evidence
 
-**Implementation scope:** only \`mikazuki/app/training_api.py\` and
-\`mikazuki/frontend_training_patch.py\` were changed in production. Existing
+**Implementation scope:** only `mikazuki/app/training_api.py` and
+`mikazuki/frontend_training_patch.py` were changed in production. Existing
 Request/Admission/Step6F/asset/Trainer/Launcher/Checkpoint code and release
 tables are untouched. Test, CI and documentation files were updated; no
 submodule commit was changed.
 
 ### API control plane
 
-- \`_decode_training_admission_request(body, purpose)\` now validates the
+- `_decode_training_admission_request(body, purpose)` now validates the
   purpose and nested JSON envelope. Only an exact top-level boolean in a
   nested envelope is considered. The server constructs origin
-  \`webui_start\`; caller origin/diagnostics are never trusted. Flat legacy
-  JSON remains supported, including the prior non-object flat \`config\`
-  fallback, while a malformed nested \`train_type/config\` envelope fails.
-  Nested \`experimental_full_bf16_ack\`, \`admission_intent\`, and \`admission\`
+  `webui_start`; caller origin/diagnostics are never trusted. Flat legacy
+  JSON remains supported, including the prior non-object flat `config`
+  fallback, while a malformed nested `train_type/config` envelope fails.
+  Nested `experimental_full_bf16_ack`, `admission_intent`, and `admission`
   injection is rejected.
 - Preview and Export explicitly call Request with their own purposes and a
   neutral intent, even if a client sends true. Preview remains no-write.
   Export retains validate → payload → deliberately materialize sidecars
   ordering and the prior OSError boundary.
 - Start parses its one-job top-level intent before preparation. It still
-  calls SR1 Request/Step6F, and \`experimental_host_candidate\` is still
+  calls SR1 Request/Step6F, and `experimental_host_candidate` is still
   rejected before asset checks, Trainer staging, sidecar/TOML writes or
   launcher invocation. Component asset/Trainer/Anima/Sidecar/TOML ordering
   and Standard's old ordering are unchanged.
-- \`_prepared_payload\` emits a typed, advisory-only \`admission\` object
+- `_prepared_payload` emits a typed, advisory-only `admission` object
   (status, purpose, acknowledgement requirement, host-admissible diagnostic,
   evidence tier, warnings and typed blockers) only from an actual first-party
-  \`ComponentAdmission\`. It is separate from effective Trainer config, TOML,
-  portable Bundle and Sidecars; there is no \`can_start\` token. Public
-  \`runtime_ready\` still uses the full runtime blocker set, not
-  \`host_admissible\` alone.
+  `ComponentAdmission`. It is separate from effective Trainer config, TOML,
+  portable Bundle and Sidecars; there is no `can_start` token. Public
+  `runtime_ready` still uses the full runtime blocker set, not
+  `host_admissible` alone.
 
 ### Pinned frontend control
 
-- \`frontend_training_patch.py\` adds a separate transient
-  \`__experimentalFullBf16Ack\` ref and displays a visible checkbox only when
-  a Component Full-BF16 Preview reports \`requires_experimental_ack\`.
+- `frontend_training_patch.py` adds a separate transient
+  `__experimentalFullBf16Ack` ref and displays a visible checkbox only when
+  a Component Full-BF16 Preview reports `requires_experimental_ack`.
 - The shared request helper adds top-level
-  \`experimental_full_bf16_ack=true\` only for \`/api/run\` and only when the
+  `experimental_full_bf16_ack=true` only for `/api/run` and only when the
   explicit checkbox is true. Preview, Export, Bootstrap and Rehydrate do not
-  send it. It never enters \`a.value\`, localStorage, sessionStorage,
+  send it. It never enters `a.value`, localStorage, sessionStorage,
   history/preset, TOML, Bundle or Sidecars.
 - Consent is consumed/reset on Start attempt, reset on form/config changes
   and mode transitions, and reset on unmount. The Start button can submit an
   explicit candidate attempt, but the server continues to return the SR1
   QG-2-A2/B HOLD response. No actual experimental training can start.
 - The pinned frontend submodule was checked out in a separate CI job. The
-  real \`layout.96d49288.js\` is patched by the production patch function,
+  real `layout.96d49288.js` is patched by the production patch function,
   syntax-checked by Node, and the extracted real request/Start handlers are
   behavior-tested. This is a Node behavior smoke, not a claim of full browser
   E2E automation.
@@ -115,7 +115,7 @@ submodule commit was changed.
 ### Exact dual-platform acceptance
 
 At exact source HEAD
-\`297ed1ef5c92b09506c5643dd9c511929ff09616\`:
+`297ed1ef5c92b09506c5643dd9c511929ff09616`:
 
 - [QG-2-A2 API/UI + frontend smoke #42464012944](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012944):
   **Ubuntu SUCCESS and Windows SUCCESS**. A201–A212 **12/12 PASS**;
