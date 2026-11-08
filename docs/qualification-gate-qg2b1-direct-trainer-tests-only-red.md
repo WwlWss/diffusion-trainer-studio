@@ -56,7 +56,7 @@ First-party source must provide:
 - Frozen DirectTrainerAdmissionIntent with strict real-bool experimental_full_bf16_ack.
 - A strict --experimental_full_bf16_ack CLI parser entry in both stable and dev sd-scripts parser paths.
 - extract_direct_trainer_admission_intent(args) that creates the typed intent and removes the raw flag from the argparse Namespace.
-- Stable and dev executable entrypoints extract the intent before read_config_from_file() and pass it separately to Trainer.train().
+- All seven base/model-family NetworkTrainer entrypoints (Stable base + SDXL; Dev base + SDXL, SD3, Flux/Chroma and Lumina) extract the intent before read_config_from_file() and pass it separately to the inherited Trainer.train() ABI.
 
 This is one invocation's user intent. It is not a qualification record, evidence token, environment variable or persisted training setting.
 
