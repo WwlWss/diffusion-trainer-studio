@@ -1,4 +1,4 @@
-name: DTS QG-2-A2 API and frontend Admission Tests-only RED (NO CUDA)
+name: DTS QG-2-A2 API and WebUI scoped GREEN with B312 Direct Trainer RED (NO CUDA)
 
 on:
   push:
@@ -62,7 +62,7 @@ jobs:
         run: python -m unittest tests.test_parameter_policy_frontend_behavior -v
 
   a2-host:
-    name: QG-2-A2 exact 12 API/UI RED plus four actual baselines (${{ matrix.os }})
+    name: QG-2-A2 twelve API/UI contracts and four baselines (scoped GREEN) (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 14
     strategy:
