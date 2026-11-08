@@ -125,8 +125,9 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             reject_direct_trainer_ack_toml(None)
 
-    def test_b2_05_stable_and_dev_parsers_register_the_same_cli_flag(self):
-        for path in ("scripts/stable/train_network.py", "scripts/dev/train_network.py"):
+    def test_b2_05_all_network_family_parsers_inherit_the_same_cli_flag(self):
+        base_paths = ("scripts/stable/train_network.py", "scripts/dev/train_network.py")
+        for path in base_paths:
             source, setup = _function(path, "setup_parser")
             calls = [
                 node for node in ast.walk(setup)
@@ -140,6 +141,30 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 source,
             )
             self.assertIn("add_direct_trainer_admission_argument(parser)", source)
+
+        # All model-family NetworkTrainer entrypoints derive their parser from
+        # one of the two base train_network modules, so the flag must be
+        # inherited exactly once (not re-registered with conflicting defaults).
+        derived = (
+            "scripts/stable/sdxl_train_network.py",
+            "scripts/dev/sdxl_train_network.py",
+            "scripts/dev/sd3_train_network.py",
+            "scripts/dev/flux_train_network.py",
+            "scripts/dev/lumina_train_network.py",
+        )
+        for path in derived:
+            source, setup = _function(path, "setup_parser")
+            calls = [
+                node for node in ast.walk(setup)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "setup_parser"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "train_network"
+            ]
+            self.assertEqual(len(calls), 1, path)
+            self.assertIn("from mikazuki.direct_trainer_admission_intent import", source)
+            self.assertIn("extract_direct_trainer_admission_intent", source)
 
     def test_b2_06_toml_rejection_precedes_namespace_merge_in_both_train_utils(self):
         for path in (
@@ -227,8 +252,17 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 self.assertNotIn(ACK, captured, path)
                 self.assertEqual(captured.get("learning_rate"), 1e-4)
 
-    def test_b2_08_cli_extracts_before_config_and_passes_intent_separately(self):
-        for path in ("scripts/stable/train_network.py", "scripts/dev/train_network.py"):
+    def test_b2_08_all_direct_trainer_entrypoints_extract_and_forward_intent(self):
+        entrypoints = (
+            ("scripts/stable/train_network.py", "NetworkTrainer"),
+            ("scripts/dev/train_network.py", "NetworkTrainer"),
+            ("scripts/stable/sdxl_train_network.py", "SdxlNetworkTrainer"),
+            ("scripts/dev/sdxl_train_network.py", "SdxlNetworkTrainer"),
+            ("scripts/dev/sd3_train_network.py", "Sd3NetworkTrainer"),
+            ("scripts/dev/flux_train_network.py", "FluxNetworkTrainer"),
+            ("scripts/dev/lumina_train_network.py", "LuminaNetworkTrainer"),
+        )
+        for path, trainer_class in entrypoints:
             source, main = _main_guard(path)
             body = ast.get_source_segment(source, main)
             self.assertLess(
@@ -246,18 +280,51 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 body,
                 path,
             )
-            _train_source, train = _class_method(path, "NetworkTrainer", "train")
-            arguments = {
-                item.arg
-                for item in (
-                    list(train.args.posonlyargs)
-                    + list(train.args.args)
-                    + list(train.args.kwonlyargs)
+            self.assertIn(
+                "from mikazuki.direct_trainer_admission_intent import",
+                source,
+                path,
+            )
+
+            # The two base trainers own the optional train() ABI. Derived
+            # model-family trainers inherit it and must not override it.
+            if trainer_class == "NetworkTrainer":
+                _train_source, train = _class_method(path, "NetworkTrainer", "train")
+                arguments = {
+                    item.arg
+                    for item in (
+                        list(train.args.posonlyargs)
+                        + list(train.args.args)
+                        + list(train.args.kwonlyargs)
+                    )
+                }
+                self.assertIn("admission_intent", arguments, path)
+                train_text = ast.get_source_segment(_train_source, train)
+                self.assertIn("admission_intent=None", train_text, path)
+            else:
+                class_tree = ast.parse(source, filename=path)
+                owner = next(
+                    item for item in class_tree.body
+                    if isinstance(item, ast.ClassDef) and item.name == trainer_class
                 )
-            }
-            self.assertIn("admission_intent", arguments, path)
-            train_text = ast.get_source_segment(_train_source, train)
-            self.assertIn("admission_intent=None", train_text, path)
+                self.assertTrue(
+                    any(
+                        isinstance(base, ast.Attribute)
+                        and base.attr == "NetworkTrainer"
+                        and isinstance(base.value, ast.Name)
+                        and base.value.id == "train_network"
+                        for base in owner.bases
+                    ),
+                    path,
+                )
+                self.assertFalse(
+                    any(
+                        isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and item.name == "train"
+                        for item in owner.body
+                    ),
+                    f"{path} must inherit the base train() intent ABI",
+                )
 
 
 if __name__ == "__main__":
