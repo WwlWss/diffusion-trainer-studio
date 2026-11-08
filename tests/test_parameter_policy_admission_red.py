@@ -705,7 +705,7 @@ class QG1B3QG2ExistingBaselines(unittest.TestCase):
                 node for node in tree.body
                 if isinstance(node, (ast.Import, ast.ImportFrom))
             ]
-            imported = ast.dump(top_level_imports)
+            imported = ast.dump(ast.Module(body=top_level_imports, type_ignores=[]))
             self.assertNotIn("parameter_policy_trainer", imported)
             self.assertNotIn("torch", imported)
 
