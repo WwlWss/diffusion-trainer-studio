@@ -161,7 +161,7 @@ def _prepared_payload(prepared) -> dict:
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
     policy_preview = _prepared_parameter_policy_preview(prepared)
-    admission = getattr(prepared, "admission", None)
+    admission = prepared.admission
     if policy_preview is not None:
         if type(admission) is not ComponentAdmission:
             raise RuntimeError(
