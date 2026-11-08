@@ -149,7 +149,7 @@ jobs:
               )
           print("QG-2-A1-SR1 TARGET+BASELINE GREEN: 8/8+4/4 PASS")
           PY
-      - name: Hold B311 and B312 as exact two intentional integration RED
+      - name: Hold B312 as the exact remaining Direct Trainer integration RED
         shell: bash
         run: |
           python - <<'PY'
