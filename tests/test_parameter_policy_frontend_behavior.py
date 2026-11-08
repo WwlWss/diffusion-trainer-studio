@@ -178,7 +178,7 @@ if ("fallback_optimizer_profile" in a.value.parameter_policy_components.base) {
   let __policyBootstrapPending = {{value: false}};
   let __runtimeReady = {{value: false}};
   let __experimentalFullBf16Ack = {{value: true}};
-  let __admission = {{value: {{requires_experimental_ack: true}}}};
+  let __admission = {{value: {{status: "ack_required", requires_experimental_ack: true}}}};
   let __isComponentMode = () => true;
   let T = () => ({{full_bf16: true}});
   let sessionStorage = {{setItem: () => {{}}}};
