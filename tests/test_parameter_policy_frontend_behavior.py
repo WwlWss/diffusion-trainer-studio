@@ -136,23 +136,25 @@ if ("fallback_optimizer_profile" in a.value.parameter_policy_components.base) {
     def test_request_envelope_carries_ack_only_for_explicit_start(self):
         self._run_node(
             f"""
-const sent = [];
-const post = async (url, body) => {{
-  sent.push({{url, body: JSON.parse(body)}});
-  return {{ok: true, json: async () => ({{status: "success", data: {{}}}})}};
-}};
-const t = "sd-lora";
-{self.training_request_helper};
-const raw = {{full_bf16: true}};
-await __trainingRequest("/api/training/preview", raw);
-await __trainingRequest("/api/training/export", raw, true);
-await __trainingRequest("/api/run", raw, true);
-await __trainingRequest("/api/run", raw, false);
-if ("experimental_full_bf16_ack" in sent[0].body) throw new Error("Preview leaked ack");
-if ("experimental_full_bf16_ack" in sent[1].body) throw new Error("Export leaked ack");
-if (sent[2].body.experimental_full_bf16_ack !== true) throw new Error("Start lost explicit ack");
-if ("experimental_full_bf16_ack" in sent[3].body) throw new Error("false ack should remain absent");
-if ("experimental_full_bf16_ack" in raw) throw new Error("request helper mutated Trainer config");
+(async () => {{
+  const sent = [];
+  const post = async (url, body) => {{
+    sent.push({{url, body: JSON.parse(body)}});
+    return {{ok: true, json: async () => ({{status: "success", data: {{}}}})}};
+  }};
+  const t = "sd-lora";
+  {self.training_request_helper};
+  const raw = {{full_bf16: true}};
+  await __trainingRequest("/api/training/preview", raw);
+  await __trainingRequest("/api/training/export", raw, true);
+  await __trainingRequest("/api/run", raw, true);
+  await __trainingRequest("/api/run", raw, false);
+  if ("experimental_full_bf16_ack" in sent[0].body) throw new Error("Preview leaked ack");
+  if ("experimental_full_bf16_ack" in sent[1].body) throw new Error("Export leaked ack");
+  if (sent[2].body.experimental_full_bf16_ack !== true) throw new Error("Start lost explicit ack");
+  if ("experimental_full_bf16_ack" in sent[3].body) throw new Error("false ack should remain absent");
+  if ("experimental_full_bf16_ack" in raw) throw new Error("request helper mutated Trainer config");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
 """
         )
 
@@ -163,40 +165,34 @@ if ("experimental_full_bf16_ack" in raw) throw new Error("request helper mutated
         self.assertIn("__admission.value.requires_experimental_ack===!0", self.patched)
         self._run_node(
             f"""
-const sent = [];
-const post = async (url, body) => {{
-  sent.push({{url, body: JSON.parse(body)}});
-  return {{ok: true, json: async () => ({{status: "success", data: {{task_id: "one"}, message: "held"}})}};
-}};
-const t = "sd-lora";
-const __trainingRequest = async (endpoint, raw, experimentalAck) => {{
-  let body = {{train_type: t, config: raw}};
-  endpoint === "/api/run" && experimentalAck === true &&
-    (body.experimental_full_bf16_ack = true);
-  const response = await post(endpoint, JSON.stringify(body));
-  const result = await response.json();
-  if (!response.ok || result.status !== "success") throw new Error(result.message);
-  return result;
-}};
-let __startPending = {{value: false}};
-let __policyBootstrapPending = {{value: false}};
-let __runtimeReady = {{value: false}};
-let __experimentalFullBf16Ack = {{value: true}};
-let __admission = {{value: {{requires_experimental_ack: true}}}};
-let __isComponentMode = () => true;
-let T = () => ({{full_bf16: true}});
-let sessionStorage = {{setItem: () => {{}}}};
-let ElMessage = {{success: () => {{}}}};
-let v = () => "networkError";
-let O;
-{self.start_handler};
-await O();
-if (sent.length !== 1 || sent[0].body.experimental_full_bf16_ack !== true) {{
-  throw new Error("single Start did not carry the explicit acknowledgement");
-}}
-if (__experimentalFullBf16Ack.value !== false) throw new Error("ack was not consumed/reset");
-await O();
-if (sent.length !== 1) throw new Error("ack replayed into a later Start");
+(async () => {{
+  const sent = [];
+  const post = async (url, body) => {{
+    sent.push({{url, body: JSON.parse(body)}});
+    return {{ok: true, json: async () => ({{status: "success", data: {{task_id: "one"}}, message: "held"}})}};
+  }};
+  const t = "sd-lora";
+  {self.training_request_helper};
+  let __startPending = {{value: false}};
+  let __policyBootstrapPending = {{value: false}};
+  let __runtimeReady = {{value: false}};
+  let __experimentalFullBf16Ack = {{value: true}};
+  let __admission = {{value: {{requires_experimental_ack: true}}}};
+  let __isComponentMode = () => true;
+  let T = () => ({{full_bf16: true}});
+  let sessionStorage = {{setItem: () => {{}}}};
+  let ElMessage = {{success: () => {{}}, error: () => {{}}}};
+  let v = () => "networkError";
+  let O;
+  {self.start_handler};
+  await O();
+  if (sent.length !== 1 || sent[0].body.experimental_full_bf16_ack !== true) {{
+    throw new Error("single Start did not carry the explicit acknowledgement");
+  }}
+  if (__experimentalFullBf16Ack.value !== false) throw new Error("ack was not consumed/reset");
+  await O();
+  if (sent.length !== 1) throw new Error("ack replayed into a later Start");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
 """
         )
 
