@@ -50,7 +50,7 @@ jobs:
           python-version: "3.11"
       - name: Compile new test-only source (no production edit)
         run: python -m py_compile tests/test_parameter_policy_qg2a1_request_red.py
-      - name: Preserve existing QG-1B3-A/B green and B311-B312 intentional RED
+      - name: Preserve existing QG-1B3-A/B green and B312 intentional RED
         shell: bash
         run: |
           python - <<'PY'
