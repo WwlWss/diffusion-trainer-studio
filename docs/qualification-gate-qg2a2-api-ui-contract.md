@@ -56,3 +56,97 @@ A901-A904 are genuine old-source baselines: real decode nested/flat; AST-isolate
 A new .github/workflows/qg2a2-api-host.yml runs Python 3.11 on Ubuntu and Windows. It first preserves QG-2-A1-SR1 8+4, A1 original 12+4, SR1 Fix C 5 and B301-B310+4 baseline GREEN; B311/B312 exactly two intentional RED. Then requires A201-A212 twelve exact FAIL and A901-A904 four actual PASS; it exits FAILURE on valid Tests-only RED (not faux GREEN). Real run logs and HEAD must be recorded and matched per OS.
 
 **Stop after VALID RED:** Future A2 minimum GREEN may change only training_api.py, frontend_training_patch.py and directly affected tests. It must pass source-isolated endpoints, actual frontend control behavior and UI/Node smoke before scoped A2 signoff. B312 Direct Trainer/Launcher remains an intentionally RED independent gate; no merged PR, real CUDA, evidence promotion, optimizer or Checkpoint change.
+
+## 6. QG-2-A2 minimum GREEN implementation and exact evidence
+
+**Implementation scope:** only \`mikazuki/app/training_api.py\` and
+\`mikazuki/frontend_training_patch.py\` were changed in production. Existing
+Request/Admission/Step6F/asset/Trainer/Launcher/Checkpoint code and release
+tables are untouched. Test, CI and documentation files were updated; no
+submodule commit was changed.
+
+### API control plane
+
+- \`_decode_training_admission_request(body, purpose)\` now validates the
+  purpose and nested JSON envelope. Only an exact top-level boolean in a
+  nested envelope is considered. The server constructs origin
+  \`webui_start\`; caller origin/diagnostics are never trusted. Flat legacy
+  JSON remains supported, including the prior non-object flat \`config\`
+  fallback, while a malformed nested \`train_type/config\` envelope fails.
+  Nested \`experimental_full_bf16_ack\`, \`admission_intent\`, and \`admission\`
+  injection is rejected.
+- Preview and Export explicitly call Request with their own purposes and a
+  neutral intent, even if a client sends true. Preview remains no-write.
+  Export retains validate → payload → deliberately materialize sidecars
+  ordering and the prior OSError boundary.
+- Start parses its one-job top-level intent before preparation. It still
+  calls SR1 Request/Step6F, and \`experimental_host_candidate\` is still
+  rejected before asset checks, Trainer staging, sidecar/TOML writes or
+  launcher invocation. Component asset/Trainer/Anima/Sidecar/TOML ordering
+  and Standard's old ordering are unchanged.
+- \`_prepared_payload\` emits a typed, advisory-only \`admission\` object
+  (status, purpose, acknowledgement requirement, host-admissible diagnostic,
+  evidence tier, warnings and typed blockers) only from an actual first-party
+  \`ComponentAdmission\`. It is separate from effective Trainer config, TOML,
+  portable Bundle and Sidecars; there is no \`can_start\` token. Public
+  \`runtime_ready\` still uses the full runtime blocker set, not
+  \`host_admissible\` alone.
+
+### Pinned frontend control
+
+- \`frontend_training_patch.py\` adds a separate transient
+  \`__experimentalFullBf16Ack\` ref and displays a visible checkbox only when
+  a Component Full-BF16 Preview reports \`requires_experimental_ack\`.
+- The shared request helper adds top-level
+  \`experimental_full_bf16_ack=true\` only for \`/api/run\` and only when the
+  explicit checkbox is true. Preview, Export, Bootstrap and Rehydrate do not
+  send it. It never enters \`a.value\`, localStorage, sessionStorage,
+  history/preset, TOML, Bundle or Sidecars.
+- Consent is consumed/reset on Start attempt, reset on form/config changes
+  and mode transitions, and reset on unmount. The Start button can submit an
+  explicit candidate attempt, but the server continues to return the SR1
+  QG-2-A2/B HOLD response. No actual experimental training can start.
+- The pinned frontend submodule was checked out in a separate CI job. The
+  real \`layout.96d49288.js\` is patched by the production patch function,
+  syntax-checked by Node, and the extracted real request/Start handlers are
+  behavior-tested. This is a Node behavior smoke, not a claim of full browser
+  E2E automation.
+
+### Exact dual-platform acceptance
+
+At exact source HEAD
+\`297ed1ef5c92b09506c5643dd9c511929ff09616\`:
+
+- [QG-2-A2 API/UI + frontend smoke #42464012944](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012944):
+  **Ubuntu SUCCESS and Windows SUCCESS**. A201–A212 **12/12 PASS**;
+  A901–A904 **4/4 PASS**; inherited B301–B311 plus B901–B904 PASS;
+  B312 is the **exact single remaining intentional RED**. Pinned frontend
+  smoke: **6/6 PASS on each OS**, including patched JavaScript syntax,
+  Start-only envelope and one-shot acknowledgement consumption.
+- [QG-1B3-A/B + QG-2-A1 staged Host #42464012881](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012881):
+  SUCCESS on both OS; B301–B311 and inherited host baselines pass. The
+  standalone B3B workflow was still queued at evidence capture; the
+  successful inherited stage executed its 12 B3B tests.
+- [QG-2-A1-SR1 #42464012882](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012882),
+  [QG-2-A1 Request #42464012900](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012900),
+  [QG-1A #42464012896](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012896),
+  [QG-1B #42464012952](https://github.com/WwlWss/diffusion-trainer-studio/actions/runs/42464012952)
+  all SUCCESS.
+- The cumulative admission workflow intentionally remains FAILURE because
+  B312 is still RED; the Anima umbrella also reports only B312 as its
+  intentional failure with 64 optional-dependency skips. Neither is a full
+  project GREEN or merge authorization.
+
+**Verdict:** QG-2-A2 scoped API + WebUI GREEN; B311 GREEN; B312 remains
+the only integration hold. PR #69 remains Draft/unmerged. No production
+Direct Trainer/Launcher changes, no new CUDA evidence, no checkpoint
+changes, and no experimental Full-BF16 Start permission.
+
+### Next stage
+
+Proceed to QG-2-B Direct Trainer / Launcher control-plane parity with its
+own Tests-only RED. It must independently parse a strict one-job direct-CLI
+opt-in, preserve all live dtype/root/optimizer/device/Checkpoint checks, and
+match the same first-party Admission decisions. Only after B312 GREEN and a
+new independent full-chain Strict Review can the experimental Host candidate
+HOLD be reconsidered.
