@@ -340,7 +340,15 @@ class QG2A2TargetedRed(unittest.TestCase):
                 effective_config=_config(), purpose="preview",
             )
         prepared = _fake_prepared(True, admission)
-        fn = _api_function("_prepared_payload")
+        fn = _api_function(
+            "_prepared_payload",
+            _prepared_parameter_policy_preview=lambda obj: {
+                "version": 1, "train_type": "sd-lora",
+                "profiles": [], "components": [],
+                "runtime_ready": False,
+                "runtime_blockers": list(obj.runtime_blockers),
+            },
+        )
         result = fn(prepared)
         self.assertEqual(result["admission"]["status"], "ack_required")
         self.assertEqual(result["admission"]["evidence_tier"], "unverified")
