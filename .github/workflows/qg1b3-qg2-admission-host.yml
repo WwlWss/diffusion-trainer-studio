@@ -38,6 +38,17 @@ on:
     paths:
       - ".github/workflows/qg1b3-qg2-admission-host.yml"
       - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "docs/qualification-gate-qg2b0-direct-trainer-architecture-review.md"
+      - "docs/qualification-gate-qg2b1-direct-trainer-tests-only-red.md"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/stable/library/train_util.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_qg2a2_api_red.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/parameter_policy_admission.py"
       - "mikazuki/parameter_policy_readiness.py"
@@ -61,7 +72,7 @@ permissions:
 
 jobs:
   admission-host:
-    name: QG-2-B1 Direct Trainer parity: B301-B311 GREEN + B312 one RED; frozen 42 prior GREEN (${{ matrix.os }})
+    name: "QG-2-B1 Direct Trainer parity: B301-B311 GREEN + B312 one RED; frozen 42 prior GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
