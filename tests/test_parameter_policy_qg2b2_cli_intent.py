@@ -256,16 +256,8 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 )
             }
             self.assertIn("admission_intent", arguments, path)
-            self.assertTrue(
-                any(
-                    item.arg == "admission_intent"
-                    and isinstance(item, ast.Constant)
-                    and item.value is None
-                    for item in train.args.defaults + train.args.kw_defaults
-                    if item is not None
-                ),
-                path,
-            )
+            train_text = ast.get_source_segment(_train_source, train)
+            self.assertIn("admission_intent=None", train_text, path)
 
 
 if __name__ == "__main__":
