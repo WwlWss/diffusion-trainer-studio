@@ -8,6 +8,7 @@ on:
       - ".github/workflows/qg2a2-api-host.yml"
       - "docs/qualification-gate-qg2a2-api-ui-contract.md"
       - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "tests/test_parameter_policy_frontend_behavior.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_request.py"
@@ -17,6 +18,7 @@ on:
       - ".github/workflows/qg2a2-api-host.yml"
       - "docs/qualification-gate-qg2a2-api-ui-contract.md"
       - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "tests/test_parameter_policy_frontend_behavior.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_request.py"
@@ -27,6 +29,38 @@ permissions:
   contents: read
 
 jobs:
+  frontend-smoke:
+    name: QG-2-A2 pinned frontend patch and Node behavior smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout DTS and exact frontend submodule
+        uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify exact pinned frontend asset exists
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path("frontend/dist/assets/layout.96d49288.js")
+          if not path.is_file():
+              raise SystemExit(f"QG-2-A2 missing pinned frontend asset: {path}")
+          print(f"QG-2-A2 pinned frontend asset: {path} ({path.stat().st_size} bytes)")
+          PY
+      - name: Run actual patched layout JavaScript syntax and Node behavior
+        run: python -m unittest tests.test_parameter_policy_frontend_behavior -v
+
   a2-host:
     name: QG-2-A2 exact 12 API/UI RED plus four actual baselines (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
