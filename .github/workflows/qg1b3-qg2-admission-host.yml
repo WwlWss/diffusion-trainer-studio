@@ -117,7 +117,6 @@ jobs:
           # intentionally RED. Never treat the unfinished full contract as
           # global GREEN, nor accept unexpected failures as qualification.
           expected = {
-              "test_b311_preview_export_start_expose_typed_admission_and_keep_asset_order",
               "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent",
           }
           actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
@@ -126,14 +125,14 @@ jobs:
                   case.id() for case, trace in result.failures
                   if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
               ]
-              if len(result.failures) != 2 or actual != expected or unrelated:
+              if len(result.failures) != 1 or actual != expected or unrelated:
                   raise SystemExit(
                       f"QG-1B3-QG2 INVALID RED: failures={len(result.failures)} "
                       f"actual={sorted(actual)} unrelated={unrelated}"
                   )
               print(
                   "QG-2-A1 STAGED FULL CONTRACT RED: B301-B310 10 GREEN + "
-                  "B311/B312 TWO INTENTIONAL RED + 4 baseline PASS, "
+                  "B312 ONE INTENTIONAL RED + 4 baseline PASS, B311 GREEN, "
                   "0 ERROR/SKIP/xfail/xpass; QG-2-A2/B unfinished, "
                   "no execution or certificate unlock"
               )
