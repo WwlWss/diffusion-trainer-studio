@@ -18,7 +18,10 @@ import unittest
 import uuid
 from unittest.mock import patch
 
-from mikazuki.parameter_policy_admission import assess_component_training_admission
+from mikazuki.parameter_policy_admission import (
+    ComponentAdmission,
+    assess_component_training_admission,
+)
 from mikazuki.parameter_policy_execution import FULL_BF16_BACKEND_QUALIFICATIONS
 from mikazuki.training_config import PreparedTrainingConfig, RequestAdmissionIntent
 from tests.test_parameter_policy_admission_red import _config, _pending, _policy
@@ -134,6 +137,7 @@ def _api_function(name, **overrides):
         "decode_training_request": decode_training_request,
         "_decode_training_admission_request": _decode_v1,
         "RequestAdmissionIntent": RequestAdmissionIntent,
+        "ComponentAdmission": ComponentAdmission,
         "APIResponseSuccess": lambda message="", data=None: _response(
             "success", message, data,
         ),
