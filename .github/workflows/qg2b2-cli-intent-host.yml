@@ -9,6 +9,11 @@ on:
       - "mikazuki/direct_trainer_admission_intent.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "scripts/stable/sdxl_train_network.py"
+      - "scripts/dev/sdxl_train_network.py"
+      - "scripts/dev/sd3_train_network.py"
+      - "scripts/dev/flux_train_network.py"
+      - "scripts/dev/lumina_train_network.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/dev/library/train_util.py"
       - "tests/test_parameter_policy_qg2b2_cli_intent.py"
@@ -22,6 +27,11 @@ on:
       - "mikazuki/direct_trainer_admission_intent.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "scripts/stable/sdxl_train_network.py"
+      - "scripts/dev/sdxl_train_network.py"
+      - "scripts/dev/sd3_train_network.py"
+      - "scripts/dev/flux_train_network.py"
+      - "scripts/dev/lumina_train_network.py"
       - "scripts/stable/library/train_util.py"
       - "scripts/dev/library/train_util.py"
       - "tests/test_parameter_policy_qg2b2_cli_intent.py"
@@ -52,8 +62,8 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Compile B2 and cumulative host test harnesses
-        run: python -m py_compile mikazuki/direct_trainer_admission_intent.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_qg1b_trusted_producer.py tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_evidence_coverage.py
+      - name: Compile B2 and all NetworkTrainer entrypoints
+        run: python -m py_compile mikazuki/direct_trainer_admission_intent.py scripts/stable/train_network.py scripts/dev/train_network.py scripts/stable/sdxl_train_network.py scripts/dev/sdxl_train_network.py scripts/dev/sd3_train_network.py scripts/dev/flux_train_network.py scripts/dev/lumina_train_network.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_qg1b_trusted_producer.py tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_evidence_coverage.py
       - name: Preserve 42 prior QG-1B and SR1 host tests
         shell: bash
         run: |
@@ -97,7 +107,7 @@ jobs:
                   f"SKIP={len(result.skipped)} xfail={len(result.expectedFailures)} "
                   f"xpass={len(result.unexpectedSuccesses)}"
               )
-          print("QG-2-B2 CLI INTENT GREEN: 8/8 PASS; strict one-shot intent, "
+          print("QG-2-B2 CLI INTENT GREEN: 8/8 PASS; all seven NetworkTrainer entrypoints, "
                 "Stable/Dev CLI, TOML rejection, output_config isolation")
           PY
       - name: Preserve exact B301-B311 GREEN and one B312 integration RED
