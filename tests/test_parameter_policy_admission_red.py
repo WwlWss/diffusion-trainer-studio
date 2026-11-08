@@ -12,6 +12,7 @@ import importlib
 import importlib.util
 import inspect
 from pathlib import Path
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -22,6 +23,7 @@ from mikazuki.parameter_policy_execution import (
     build_parameter_policy_execution_contract,
     parameter_policy_execution_blockers,
 )
+from mikazuki.parameter_policy_admission import assess_component_training_admission
 from mikazuki.parameter_policy_readiness import ExecutionReadiness
 
 MARKER = "QG-1B3-QG2 ADMISSION CONTRACT ABSENT"
@@ -42,6 +44,65 @@ def _source_fn(path, func):
         and n.name == func
     )
     return ast.get_source_segment(source, node) or "", node
+
+
+def _source_method(path, class_name, method):
+    source = _source(path)
+    tree = ast.parse(source, filename=path)
+    owner = next(
+        n for n in tree.body
+        if isinstance(n, ast.ClassDef) and n.name == class_name
+    )
+    node = next(
+        n for n in owner.body
+        if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and n.name == method
+    )
+    return ast.get_source_segment(source, node) or "", node
+
+
+def _main_guard_source(path):
+    source = _source(path)
+    tree = ast.parse(source, filename=path)
+    for node in tree.body:
+        if not isinstance(node, ast.If) or not isinstance(node.test, ast.Compare):
+            continue
+        if (
+            isinstance(node.test.left, ast.Name)
+            and node.test.left.id == "__name__"
+            and any(
+                isinstance(item, ast.Constant) and item.value == "__main__"
+                for item in node.test.comparators
+            )
+        ):
+            return ast.get_source_segment(source, node) or ""
+    return ""
+
+
+def _call_lines(node, name):
+    lines = []
+    for item in ast.walk(node):
+        if not isinstance(item, ast.Call):
+            continue
+        function = item.func
+        if (
+            isinstance(function, ast.Name) and function.id == name
+        ) or (
+            isinstance(function, ast.Attribute) and function.attr == name
+        ):
+            lines.append(item.lineno)
+    return sorted(lines)
+
+
+def _argument_names(node):
+    return {
+        item.arg
+        for item in (
+            list(node.args.posonlyargs)
+            + list(node.args.args)
+            + list(node.args.kwonlyargs)
+        )
+    }
 
 
 def _called_names(node):
@@ -312,29 +373,255 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         )
 
     def test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent(self):
-        code, fn = _source_fn(
+        missing = []
+        admission_source = _source("mikazuki/parameter_policy_admission.py")
+        if "class DirectTrainerAdmissionIntent" not in admission_source:
+            missing.append("immutable DirectTrainerAdmissionIntent")
+        if "class DirectTrainerAdmissionSnapshot" not in admission_source:
+            missing.append("immutable Policy/config admission snapshot")
+        if "def extract_direct_trainer_admission_intent" not in admission_source:
+            missing.append("one-shot CLI intent extraction")
+        direct_admission, direct_admission_fn = _source_fn(
+            "mikazuki/parameter_policy_admission.py",
+            "prepare_direct_trainer_admission",
+        )
+        if not direct_admission:
+            missing.append("pure first-party Direct Trainer admission preparation")
+        elif (
+            "assess_component_training_admission" not in _called_names(direct_admission_fn)
+            or 'purpose="direct_trainer"' not in direct_admission
+            or "experimental_ack" not in direct_admission
+        ):
+            missing.append("Direct Trainer purpose + strict acknowledgement at first-party gate")
+
+        # CLI intent is parsed once, removed from argparse, and kept separate
+        # from the Effective Config. TOML cannot supply the reserved key.
+        for util_path in (
+            "scripts/stable/library/train_util.py",
+            "scripts/dev/library/train_util.py",
+        ):
+            util = _source(util_path)
+            if "--experimental_full_bf16_ack" not in util:
+                missing.append(f"{util_path}: strict CLI opt-in parser")
+            read_code, _read_fn = _source_fn(util_path, "read_config_from_file")
+            namespace_marker = "argparse.Namespace(**ignore_nesting_dict)"
+            if (
+                "experimental_full_bf16_ack" not in read_code
+                or namespace_marker not in read_code
+                or read_code.index("experimental_full_bf16_ack") > read_code.index(namespace_marker)
+            ):
+                missing.append(f"{util_path}: reject TOML acknowledgement before Namespace merge")
+
+        # Both CLI entrypoints must extract the ephemeral intent before config
+        # loading and pass it separately to the model-family Trainer.
+        for trainer_path in (
+            "scripts/stable/train_network.py",
+            "scripts/dev/train_network.py",
+        ):
+            main = _main_guard_source(trainer_path)
+            if not main:
+                missing.append(f"{trainer_path}: executable CLI entrypoint")
+                continue
+            required = (
+                "extract_direct_trainer_admission_intent",
+                "read_config_from_file",
+                "admission_intent=",
+                "trainer.train",
+            )
+            if any(token not in main for token in required):
+                missing.append(f"{trainer_path}: separate CLI intent handoff")
+            elif not (
+                main.index("extract_direct_trainer_admission_intent")
+                < main.index("read_config_from_file")
+                < main.index("trainer.train")
+            ):
+                missing.append(f"{trainer_path}: intent must be extracted before TOML/output-config handling")
+
+            train_code, train_fn = _source_method(
+                trainer_path, "NetworkTrainer", "train"
+            )
+            if "admission_intent" not in _argument_names(train_fn):
+                missing.append(f"{trainer_path}: Trainer train() admission-intent parameter")
+            preflights = _call_lines(train_fn, "preflight_component_training_admission")
+            dataset = _call_lines(train_fn, "prepare_dataset_args")
+            extra = _call_lines(train_fn, "assert_extra_args")
+            accelerator = _call_lines(train_fn, "prepare_accelerator")
+            if (
+                len(preflights) < 2 or not dataset or not extra or not accelerator
+                or not (preflights[0] < min(dataset))
+                or not (preflights[1] > max(extra) and preflights[1] < min(accelerator))
+            ):
+                missing.append(
+                    f"{trainer_path}: early Host gate plus final-config gate before Accelerator/model load"
+                )
+
+        # The early bridge remains torch-free and must not import the late,
+        # model-aware trainer module.
+        for bridge_path in (
+            "scripts/stable/library/dts_parameter_policy_bridge.py",
+            "scripts/dev/library/dts_parameter_policy_bridge.py",
+        ):
+            bridge_code, bridge_fn = _source_fn(
+                bridge_path, "preflight_component_training_admission"
+            )
+            if (
+                not bridge_code
+                or "prepare_direct_trainer_admission" not in _called_names(bridge_fn)
+                or "parameter_policy_trainer" in bridge_code
+            ):
+                missing.append(f"{bridge_path}: pure lazy Direct Trainer admission bridge")
+
+        # Late Session must revalidate the exact snapshot before scanning live
+        # roots, and retain the original semantic/assets/runtime contracts.
+        session_code, session_fn = _source_fn(
             "mikazuki/parameter_policy_trainer.py",
             "create_parameter_policy_session",
         )
+        session_args = _argument_names(session_fn)
+        if not {"admission_intent", "admission_snapshot"}.issubset(session_args):
+            missing.append("late Session typed intent + immutable preflight snapshot")
+        if "assess_component_training_admission" not in _called_names(session_fn):
+            missing.append("late Session first-party Direct Trainer Admission")
         if (
-            "assess_component_training_admission" not in _called_names(fn)
-            or "experimental_full_bf16_ack" not in code
-            or "load_parameter_policy_file" not in code
+            "load_parameter_policy_file" not in session_code
+            or "policy_hash" not in session_code
+            or "effective_config_fingerprint" not in session_code
+            or "admission_snapshot" not in session_code
+            or "require_assets=True" not in session_code
+            or "scan_parameter_roots" not in session_code
         ):
-            self.fail(
-                f"{MARKER}: Direct Trainer has no shared first-party "
-                "admission / explicit direct-CLI acknowledgement"
+            missing.append("late Session Policy/config identity + mandatory asset gate")
+        else:
+            if not (
+                session_code.index("load_parameter_policy_file")
+                < session_code.index("assess_component_training_admission")
+                < session_code.index("scan_parameter_roots")
+            ):
+                missing.append("late Admission and identity comparison must precede live root scan")
+        if (
+            "parameter_policy_v1_semantic_blockers" not in _called_names(session_fn)
+            or not (
+                "parameter_policy_execution_blockers" in _called_names(session_fn)
+                or "parameter_policy_runtime_blockers" in _called_names(session_fn)
             )
-        entire = _source("mikazuki/parameter_policy_trainer.py")
+        ):
+            missing.append("late Session semantic + hard execution/asset blockers")
+
+        trainer_source = _source("mikazuki/parameter_policy_trainer.py")
         for name in (
             "assert_execution_dtype_contract",
             "assert_live_root_identity_contract",
+            "assert_execution_environment_contract",
+            "_audit_prepared_optimizer_and_device",
             "register_checkpoint_manifest",
+            "validate_checkpoint_manifest",
         ):
-            self.assertIn(name, entire)
-        self.assertLess(
-            code.index("load_parameter_policy_file"), code.index("scan_roots:")
+            if name not in trainer_source:
+                missing.append(f"preserve live runtime invariant: {name}")
+        manifest_code, _manifest_fn = _source_method(
+            "mikazuki/parameter_policy_trainer.py",
+            "ParameterPolicyTrainerSession",
+            "checkpoint_manifest",
         )
+        if "experimental_full_bf16_ack" in manifest_code:
+            missing.append("acknowledgement must never enter Checkpoint identity")
+
+        # API -> Launcher -> Accelerate -> child CLI: per-job only. The flag
+        # must follow trainer_file and must not enter env or task metadata.
+        launcher_code, launcher_fn = _source_fn(
+            "mikazuki/training_launcher.py", "run_prepared_train"
+        )
+        if (
+            not launcher_code
+            or "admission_intent" not in _argument_names(launcher_fn)
+            or "--experimental_full_bf16_ack" not in launcher_code
+            or "experimental_full_bf16_ack" not in launcher_code
+        ):
+            missing.append("typed per-job Launcher intent and child CLI flag")
+        elif "args = [" in launcher_code:
+            args_start = launcher_code.index("args = [")
+            trainer_index = launcher_code.find("trainer_file", args_start)
+            flag_index = launcher_code.find('"--experimental_full_bf16_ack"', args_start)
+            if trainer_index < 0 or flag_index < 0 or trainer_index > flag_index:
+                missing.append("Launcher acknowledgement argument must follow trainer_file")
+        if 'env["experimental_full_bf16_ack"]' in launcher_code:
+            missing.append("Launcher must not transport acknowledgement through environment")
+        for item in ast.walk(launcher_fn):
+            if isinstance(item, ast.Dict):
+                keys = {
+                    key.value for key in item.keys
+                    if isinstance(key, ast.Constant) and isinstance(key.value, str)
+                }
+                if "experimental_full_bf16_ack" in keys or "admission_intent" in keys:
+                    missing.append("Launcher task metadata must not persist admission intent")
+                    break
+
+        api_start, _api_start_fn = _source_fn(
+            "mikazuki/app/training_api.py", "create_toml_file"
+        )
+        if "admission_intent=prepared.admission_intent" not in api_start:
+            missing.append("API must pass PreparedTrainingConfig intent to Launcher")
+        if 'prepared.config["experimental_full_bf16_ack"]' in api_start:
+            missing.append("API must not serialize acknowledgement into Trainer TOML")
+
+        if missing:
+            self.fail(
+                f"{MARKER}: Direct Trainer / Launcher parity missing: "
+                + "; ".join(dict.fromkeys(missing))
+            )
+
+        # Once the source contract exists, verify that the typed intent is
+        # strict and that the actual first-party classifier retains D1 legacy,
+        # pending acknowledgement and unsupported-backend distinctions.
+        module = importlib.import_module("mikazuki.parameter_policy_admission")
+        intent_type = getattr(module, "DirectTrainerAdmissionIntent", None)
+        snapshot_type = getattr(module, "DirectTrainerAdmissionSnapshot", None)
+        self.assertIsNotNone(intent_type)
+        self.assertTrue(is_dataclass(intent_type))
+        self.assertTrue(intent_type.__dataclass_params__.frozen)
+        self.assertTrue(is_dataclass(snapshot_type))
+        self.assertTrue(snapshot_type.__dataclass_params__.frozen)
+        self.assertTrue(
+            {"policy_hash", "effective_config_fingerprint", "admission"}.issubset(
+                set(snapshot_type.__dataclass_fields__)
+            )
+        )
+        with self.assertRaises(ValueError):
+            intent_type(experimental_full_bf16_ack="true")
+        with self.assertRaises(ValueError):
+            intent_type(experimental_full_bf16_ack=1)
+
+        extract = getattr(module, "extract_direct_trainer_admission_intent")
+        raw_args = SimpleNamespace(experimental_full_bf16_ack=True)
+        intent = extract(raw_args)
+        self.assertIs(intent.experimental_full_bf16_ack, True)
+        self.assertFalse(hasattr(raw_args, "experimental_full_bf16_ack"))
+
+        legacy = assess_component_training_admission(
+            _policy(), train_type="sd-lora", effective_config=_config(),
+            purpose="direct_trainer", experimental_ack=False,
+        )
+        self.assertEqual(legacy.status, "legacy_approved")
+        with patch.dict(
+            FULL_BF16_BACKEND_QUALIFICATIONS, {"sd-lora": _pending()}
+        ):
+            no_ack = assess_component_training_admission(
+                _policy(), train_type="sd-lora", effective_config=_config(),
+                purpose="direct_trainer", experimental_ack=False,
+            )
+            with_ack = assess_component_training_admission(
+                _policy(), train_type="sd-lora", effective_config=_config(),
+                purpose="direct_trainer", experimental_ack=True,
+            )
+        self.assertEqual(no_ack.status, "ack_required")
+        self.assertEqual(with_ack.status, "experimental_host_candidate")
+        unsupported = assess_component_training_admission(
+            _policy("sd3-lora"), train_type="sd3-lora",
+            effective_config=_config(), purpose="direct_trainer",
+            experimental_ack=True,
+        )
+        self.assertEqual(unsupported.status, "blocked")
+
 
 
 class QG1B3QG2ExistingBaselines(unittest.TestCase):
@@ -353,6 +640,12 @@ class QG1B3QG2ExistingBaselines(unittest.TestCase):
         self.assertEqual(
             contract.execution_identity()["train_type"], "sd-lora"
         )
+        direct = assess_component_training_admission(
+            policy, train_type="sd-lora", effective_config=_config(),
+            purpose="direct_trainer", experimental_ack=False,
+        )
+        self.assertEqual(direct.status, "legacy_approved")
+        self.assertTrue(direct.host_admissible)
 
     def test_b902_current_sd3_pending_gate_is_still_closed(self):
         blockers = parameter_policy_execution_blockers(
@@ -361,6 +654,13 @@ class QG1B3QG2ExistingBaselines(unittest.TestCase):
         )
         self.assertEqual(len(blockers), 1, blockers)
         self.assertIn("pending", blockers[0])
+        direct = assess_component_training_admission(
+            _policy("sd3-lora"), train_type="sd3-lora",
+            effective_config=_config(), purpose="direct_trainer",
+            experimental_ack=True,
+        )
+        self.assertEqual(direct.status, "blocked")
+        self.assertFalse(direct.host_admissible)
 
     def test_b903_inactive_and_quoted_false_legacy_semantics_unchanged(self):
         self.assertEqual(
@@ -376,6 +676,21 @@ class QG1B3QG2ExistingBaselines(unittest.TestCase):
         self.assertTrue(errors)
         self.assertIn("full_bf16", errors[0])
         self.assertIn("boolean", errors[0])
+        # Standard mode must keep the torch-heavy Trainer behind the existing
+        # opt-in bridge; importing either bridge alone stays lightweight.
+        for bridge_path in (
+            "scripts/stable/library/dts_parameter_policy_bridge.py",
+            "scripts/dev/library/dts_parameter_policy_bridge.py",
+        ):
+            source = _source(bridge_path)
+            tree = ast.parse(source, filename=bridge_path)
+            top_level_imports = [
+                node for node in tree.body
+                if isinstance(node, (ast.Import, ast.ImportFrom))
+            ]
+            imported = ast.dump(top_level_imports)
+            self.assertNotIn("parameter_policy_trainer", imported)
+            self.assertNotIn("torch", imported)
 
     def test_b904_current_start_and_direct_gates_precede_any_materialization(self):
         request = _source("mikazuki/training_request.py")
@@ -398,6 +713,22 @@ class QG1B3QG2ExistingBaselines(unittest.TestCase):
             direct.index("parameter_policy_execution_blockers"),
             direct.index("scan_roots:"),
         )
+        session = _source("mikazuki/parameter_policy_trainer.py")
+        for invariant in (
+            "assert_execution_dtype_contract",
+            "assert_live_root_identity_contract",
+            "assert_execution_environment_contract",
+            "_audit_prepared_optimizer_and_device",
+            "register_checkpoint_manifest",
+            "validate_checkpoint_manifest",
+        ):
+            self.assertIn(invariant, session)
+        manifest, _ = _source_method(
+            "mikazuki/parameter_policy_trainer.py",
+            "ParameterPolicyTrainerSession",
+            "checkpoint_manifest",
+        )
+        self.assertNotIn("experimental_full_bf16_ack", manifest)
 
 
 if __name__ == "__main__":
