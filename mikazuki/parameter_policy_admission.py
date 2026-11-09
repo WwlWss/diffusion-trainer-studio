@@ -15,6 +15,9 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
+import json
+import math
 from typing import Any, Literal
 
 from mikazuki.optimizer_profiles import get_optimizer_capability
@@ -124,6 +127,57 @@ class ComponentAdmission:
                 raise ValueError("Experimental host admission requires an advisory.")
             if self.status == "legacy_approved" and self.readiness.decision == "block":
                 raise ValueError("Legacy admission cannot override a hard runtime error.")
+
+
+def _canonical_effective_config_value(value: object, active: set[int]) -> object:
+    """Build a detached JSON tree; reject aliases that form reference cycles."""
+    if value is None or type(value) in (str, bool, int):
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError("Effective training config cannot contain NaN or Infinity.")
+        return value
+    if isinstance(value, Mapping):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("Cyclic effective training config mapping.")
+        active.add(identity)
+        try:
+            result: dict[str, object] = {}
+            for key, item in value.items():
+                if type(key) is not str:
+                    raise TypeError("Effective training config keys must be strings.")
+                if key == "experimental_full_bf16_ack":
+                    raise ValueError("Experimental acknowledgement cannot enter training config.")
+                result[key] = _canonical_effective_config_value(item, active)
+            return result
+        finally:
+            active.remove(identity)
+    if type(value) in (list, tuple):
+        identity = id(value)
+        if identity in active:
+            raise ValueError("Cyclic effective training config sequence.")
+        active.add(identity)
+        try:
+            return [_canonical_effective_config_value(item, active) for item in value]
+        finally:
+            active.remove(identity)
+    raise TypeError(f"Unsupported effective training config value: {type(value).__name__}.")
+
+
+def fingerprint_effective_training_config(config: Mapping[str, Any]) -> str:
+    """Full stable SHA-256 of a strict canonical effective-config snapshot."""
+    if not isinstance(config, Mapping):
+        raise TypeError("Effective training config must be a Mapping.")
+    detached = _canonical_effective_config_value(config, set())
+    canonical = json.dumps(
+        detached,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _source_release_matches(row: object, expected_case: str) -> bool:
@@ -309,4 +363,5 @@ def assess_component_training_admission(
 __all__ = [
     "AdmissionPurpose", "AdmissionStatus", "ComponentAdmission",
     "assess_component_training_admission",
+    "fingerprint_effective_training_config",
 ]
