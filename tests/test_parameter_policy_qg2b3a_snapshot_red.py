@@ -183,6 +183,14 @@ class QG2B3APolicySnapshotTargetedRed(unittest.TestCase):
                 loader(root / "missing.json")
             with self.assertRaises((ValueError, OSError)):
                 loader(root)
+            # A path that is not a regular file must be refused *before*
+            # attempting to open it (e.g. a FIFO would otherwise block).
+            valid_path = root / "regular.json"
+            _write_policy(valid_path)
+            with patch("mikazuki.parameter_policy.Path.is_file", return_value=False):
+                with patch("builtins.open", side_effect=AssertionError("unexpected open")):
+                    with self.assertRaises((ValueError, OSError)):
+                        loader(valid_path)
 
     def test_b3a203_policy_hash_uses_full_canonical_serialized_content(self):
         loader = self._loader()
