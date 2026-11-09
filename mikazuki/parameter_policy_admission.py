@@ -15,13 +15,18 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import os
 import hashlib
 import json
 import math
 from typing import Any, Literal
 
 from mikazuki.optimizer_profiles import get_optimizer_capability
-from mikazuki.parameter_policy import validate_parameter_policy
+from mikazuki.parameter_policy import (
+    load_parameter_policy_sidecar,
+    validate_parameter_policy,
+)
+from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
 from mikazuki.parameter_policy_execution import (
     ExecutionFeatureQualification,
     FULL_BF16_BACKEND_QUALIFICATIONS,
@@ -223,6 +228,42 @@ class DirectTrainerAdmissionSnapshot:
             raise ValueError("Direct Trainer admission snapshot identity mismatch.")
 
 
+def prepare_direct_trainer_admission(
+    policy_path: str | os.PathLike[str], *,
+    train_type: str,
+    effective_config: Mapping[str, Any],
+    admission_intent: DirectTrainerAdmissionIntent,
+) -> DirectTrainerAdmissionSnapshot:
+    """Create a Host-only snapshot, detached from all caller-owned objects."""
+    if not isinstance(admission_intent, DirectTrainerAdmissionIntent):
+        raise TypeError("Direct Trainer requires a typed one-shot admission intent.")
+    if type(train_type) is not str or not train_type.strip():
+        raise ValueError("Direct Trainer requires a nonempty backend identifier.")
+    backend = train_type.strip().lower()
+    detached_config = _canonical_effective_config_value(effective_config, set())
+    if not isinstance(detached_config, dict):
+        raise TypeError("Effective training config must be a JSON mapping.")
+    policy, policy_hash = load_parameter_policy_sidecar(policy_path)
+    config_hash = fingerprint_effective_training_config(detached_config)
+    acknowledgement = admission_intent.experimental_full_bf16_ack
+    if type(acknowledgement) is not bool:
+        raise ValueError("Direct Trainer acknowledgement must be strict bool.")
+    admission = assess_component_training_admission(
+        policy,
+        train_type=backend,
+        effective_config=detached_config,
+        purpose="direct_trainer",
+        experimental_ack=acknowledgement,
+    )
+    return DirectTrainerAdmissionSnapshot(
+        policy_hash=policy_hash,
+        effective_config_fingerprint=config_hash,
+        train_type=backend,
+        experimental_ack=acknowledgement,
+        admission=admission,
+    )
+
+
 def _source_release_matches(row: object, expected_case: str) -> bool:
     """Exact first-party source ID, not the row's self-reported qualified flag."""
     return (
@@ -408,4 +449,5 @@ __all__ = [
     "assess_component_training_admission",
     "fingerprint_effective_training_config",
     "DirectTrainerAdmissionSnapshot",
+    "prepare_direct_trainer_admission",
 ]
