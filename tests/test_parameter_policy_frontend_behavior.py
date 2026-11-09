@@ -23,6 +23,12 @@ class ParameterPolicyFrontendBehaviorTests(unittest.TestCase):
         start = cls.patched.index("__profileNames=")
         end = cls.patched.index(",__presetPolicyMode=", start)
         cls.profile_helpers = cls.patched[start:end]
+        request_start = cls.patched.index("const __trainingRequest=")
+        request_end = cls.patched.index(",__requestEffective=", request_start)
+        cls.training_request_helper = cls.patched[request_start:request_end]
+        start_handler = cls.patched.index("O=async()=>{")
+        stop_handler = cls.patched.index(",K=async()=>", start_handler)
+        cls.start_handler = cls.patched[start_handler:stop_handler]
 
     def _run_node(self, body: str) -> None:
         script = f"""
@@ -110,6 +116,84 @@ __onPolicyOptimizerTypeChanged(
 if ("fallback_optimizer_profile" in a.value.parameter_policy_components.base) {
   throw new Error("new eligibility-constrained fallback reference survived");
 }
+"""
+        )
+
+    def test_patched_layout_is_valid_javascript(self):
+        completed = subprocess.run(
+            ["node", "--check", "--input-type=module"],
+            cwd=ROOT,
+            input=self.patched,
+            text=True,
+            encoding="utf-8",
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(
+            completed.returncode, 0,
+            f"patched frontend syntax failed: {completed.stderr}",
+        )
+
+    def test_request_envelope_carries_ack_only_for_explicit_start(self):
+        self._run_node(
+            f"""
+(async () => {{
+  const sent = [];
+  const post = async (url, body) => {{
+    sent.push({{url, body: JSON.parse(body)}});
+    return {{ok: true, json: async () => ({{status: "success", data: {{}}}})}};
+  }};
+  const t = "sd-lora";
+  {self.training_request_helper};
+  const raw = {{full_bf16: true}};
+  await __trainingRequest("/api/training/preview", raw);
+  await __trainingRequest("/api/training/export", raw, true);
+  await __trainingRequest("/api/run", raw, true);
+  await __trainingRequest("/api/run", raw, false);
+  if ("experimental_full_bf16_ack" in sent[0].body) throw new Error("Preview leaked ack");
+  if ("experimental_full_bf16_ack" in sent[1].body) throw new Error("Export leaked ack");
+  if (sent[2].body.experimental_full_bf16_ack !== true) throw new Error("Start lost explicit ack");
+  if ("experimental_full_bf16_ack" in sent[3].body) throw new Error("false ack should remain absent");
+  if ("experimental_full_bf16_ack" in raw) throw new Error("request helper mutated Trainer config");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
+"""
+        )
+
+    def test_ack_checkbox_is_visible_transient_and_start_consumes_once(self):
+        self.assertIn("我确认本次 Start 使用实验性 Full-BF16 路径", self.patched)
+        self.assertIn("__experimentalFullBf16Ack=ref(!1)", self.patched)
+        self.assertIn("__experimentalFullBf16Ack.value=!1", self.patched)
+        self.assertIn("__admission.value.requires_experimental_ack===!0", self.patched)
+        self._run_node(
+            f"""
+(async () => {{
+  const sent = [];
+  const post = async (url, body) => {{
+    sent.push({{url, body: JSON.parse(body)}});
+    return {{ok: true, json: async () => ({{status: "success", data: {{task_id: "one"}}, message: "held"}})}};
+  }};
+  const t = "sd-lora";
+  {self.training_request_helper};
+  let __startPending = {{value: false}};
+  let __policyBootstrapPending = {{value: false}};
+  let __runtimeReady = {{value: false}};
+  let __experimentalFullBf16Ack = {{value: true}};
+  let __admission = {{value: {{status: "ack_required", requires_experimental_ack: true}}}};
+  let __isComponentMode = () => true;
+  let T = () => ({{full_bf16: true}});
+  let sessionStorage = {{setItem: () => {{}}}};
+  let ElMessage = {{success: () => {{}}, error: () => {{}}}};
+  let v = () => "networkError";
+  let O;
+  {self.start_handler};
+  await O();
+  if (sent.length !== 1 || sent[0].body.experimental_full_bf16_ack !== true) {{
+    throw new Error("single Start did not carry the explicit acknowledgement");
+  }}
+  if (__experimentalFullBf16Ack.value !== false) throw new Error("ack was not consumed/reset");
+  await O();
+  if (sent.length !== 1) throw new Error("ack replayed into a later Start");
+}})().catch(error => {{ console.error(error); process.exit(1); }});
 """
         )
 

@@ -1,0 +1,183 @@
+name: DTS QG-2-A1-SR1 Strict Review RED to scoped GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - "docs/qualification-gate-qg2a1-sr1-review-repair-contract.md"
+      - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - "docs/qualification-gate-qg2a1-sr1-review-repair-contract.md"
+      - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
+      - "tests/test_parameter_policy_request_contract.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sr1:
+    name: QG2-A1-SR1 exact eight RED then scoped GREEN (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 14
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile SR1 and Request/Prepared source
+        run: python -m py_compile tests/test_parameter_policy_qg2a1_sr1.py tests/test_parameter_policy_qg2a1_sr1_lifecycle.py mikazuki/training_request.py mikazuki/training_config.py
+      - name: Fix D cold-import both orders and resolve first-party runtime type
+        shell: bash
+        run: |
+          python - <<'PY'
+          from typing import get_type_hints, get_args
+          from mikazuki.training_config import PreparedTrainingConfig
+          from mikazuki.parameter_policy_admission import ComponentAdmission
+          from mikazuki.parameter_policy_editor import parameter_policy_editor_metadata
+          resolved = get_args(get_type_hints(PreparedTrainingConfig)["admission"])
+          if set(resolved) != {ComponentAdmission, type(None)}:
+              raise SystemExit(f"Fix D failed config-first import: {resolved}")
+          print("Fix D cold config-first import, get_type_hints: PASS")
+          PY
+          python - <<'PY'
+          from typing import get_type_hints, get_args
+          from mikazuki.parameter_policy_admission import ComponentAdmission
+          from mikazuki.training_config import PreparedTrainingConfig
+          from mikazuki.parameter_policy_editor import parameter_policy_editor_metadata
+          resolved = get_args(get_type_hints(PreparedTrainingConfig)["admission"])
+          if set(resolved) != {ComponentAdmission, type(None)}:
+              raise SystemExit(f"Fix D failed admission-first import: {resolved}")
+          print("Fix D cold admission-first import, get_type_hints: PASS")
+          PY
+      - name: Preserve original A1 12 plus four real Host baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a1_request_red import (
+              QG2A1TargetedRed, QG2A1ExistingBaselines,
+          )
+          for cls, expected in ((QG2A1TargetedRed, 12),
+                                (QG2A1ExistingBaselines, 4)):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"QG2A1-SR1 BAD INHERITED DISCOVERY: {cls}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG2A1-SR1 INHERITED A1 GREEN LOST: {cls}")
+          print("QG2A1-SR1 prior A1 12/12 + four real baselines PASS.")
+          PY
+      - name: Fix C five live lifecycle, GPU and legacy error regressions
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a1_sr1_lifecycle import (
+              QG2A1SR1LifecycleAndGPU
+          )
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(
+              QG2A1SR1LifecycleAndGPU
+          )
+          if suite.countTestCases() != 5:
+              raise SystemExit("QG-2-A1-SR1 Fix C invalid 5-case discovery")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 5 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit("QG-2-A1-SR1 Fix C lifecycle/GPU not GREEN")
+          print("QG-2-A1-SR1 Fix C: five lifecycle/GPU/legacy-error checks PASS.")
+          PY
+      - name: Exact SR101-SR108 RED or independently demonstrated GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2a1_sr1 import (
+              QG2A1SR1TargetedRed, QG2A1SR1TrueBaselines, MARKER
+          )
+          targets = sorted(n for n in dir(QG2A1SR1TargetedRed)
+                           if n.startswith("test_sr1"))
+          baselines = sorted(n for n in dir(QG2A1SR1TrueBaselines)
+                             if n.startswith("test_sr9"))
+          if (len(targets) != 8 or len(baselines) != 4
+              or any(sum(x.startswith(f"test_sr{n}_") for x in targets) != 1
+                     for n in range(101, 109))
+              or any(sum(x.startswith(f"test_sr{n}_") for x in baselines) != 1
+                     for n in range(901, 905))):
+              raise SystemExit("QG-2-A1-SR1 INVALID 8+4 DISCOVERY")
+          target_suite = unittest.TestSuite(QG2A1SR1TargetedRed(n) for n in targets)
+          base_suite = unittest.TestSuite(QG2A1SR1TrueBaselines(n) for n in baselines)
+          target = unittest.TextTestRunner(verbosity=2).run(target_suite)
+          base = unittest.TextTestRunner(verbosity=2).run(base_suite)
+          if (target.testsRun != 8 or base.testsRun != 4 or target.errors
+                  or base.errors or base.failures or target.skipped or base.skipped
+                  or target.expectedFailures or base.expectedFailures
+                  or target.unexpectedSuccesses or base.unexpectedSuccesses):
+              raise SystemExit("QG-2-A1-SR1 INVALID RED/GREEN EXECUTION")
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in target.failures}
+          unexpected = [
+              case.id() for case, trace in target.failures if MARKER not in trace
+          ]
+          if len(target.failures) == 8 and actual == set(targets) and not unexpected:
+              print("QG-2-A1-SR1 VALID TESTS-ONLY RED: SR101–SR108 eight "
+                    "real missing-source failures, SR901–SR904 four PASS;"
+                    " zero ERROR/SKIP/xfail/xpass. No production edits.")
+              raise SystemExit(1)  # exact valid RED is genuinely FAILURE
+          if target.failures:
+              raise SystemExit(
+                  f"QG-2-A1-SR1 INVALID TARGET SHAPE: {sorted(actual)}"
+              )
+          print("QG-2-A1-SR1 TARGET+BASELINE GREEN: 8/8+4/4 PASS")
+          PY
+      - name: Hold B312 as the exact remaining Direct Trainer integration RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2TargetedRed, QG1B3QG2ExistingBaselines, MARKER
+          )
+          names = sorted(
+              n for n in dir(QG1B3QG2TargetedRed) if n.startswith("test_b3")
+          )
+          baseline = sorted(
+              n for n in dir(QG1B3QG2ExistingBaselines)
+              if n.startswith("test_b9")
+          )
+          if len(names) != 12 or len(baseline) != 4:
+              raise SystemExit("QG-2-A1-SR1 BAD B3 INTEGRATION DISCOVERY")
+          suite = unittest.TestSuite(
+              [QG1B3QG2TargetedRed(n) for n in names]
+              + [QG1B3QG2ExistingBaselines(n) for n in baseline]
+          )
+          result = unittest.TextTestRunner(verbosity=1).run(suite)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          expected = set(names[-1:])
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or len(result.failures) != 1 or actual != expected
+                  or result.expectedFailures or result.unexpectedSuccesses
+                  or any(MARKER not in trace for _, trace in result.failures)):
+              raise SystemExit(f"QG-2-A1-SR1 BAD B312 HOLD: {actual}")
+          print("QG-2-A1-SR1 scoped Host only: B301–B310+4 baselines PASS; "
+                "B311 GREEN; B312 exact one RED, no Direct Trainer permission.")
+          PY

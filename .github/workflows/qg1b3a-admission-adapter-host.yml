@@ -1,0 +1,169 @@
+name: DTS QG-1B3-A/B and QG-2-A1 staged Host GREEN (B312 Direct Trainer RED retained)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - "mikazuki/parameter_policy_admission.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - "mikazuki/parameter_policy_admission.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  adapter-scoped-host:
+    name: QG1B3-A 42 legacy +12 adapter +12 independent GREEN, B309-B311 GREEN, B312 RED (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact HEAD without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new adapter and independent tests
+        run: python -m py_compile mikazuki/parameter_policy_admission.py tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_admission_adapter_host.py
+      - name: Assert original 42 source Host baselines and 12 independent invariants GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_admission_adapter_host", 12),
+          ]
+          for module, count in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(module)
+              if suite.countTestCases() != count:
+                  raise SystemExit(
+                      f"QG-1B3-A INVALID DISCOVERY: {module} "
+                      f"has {suite.countTestCases()} instead of {count}"
+                  )
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG-1B3-A INVALID REGRESSION: {module}")
+          print(
+              "QG-1B3-A ORIGINAL 42/42 PASS + INDEPENDENT 12/12 PASS; "
+              "0 FAIL/ERROR/SKIP/xfail/xpass"
+          )
+          PY
+      - name: Verify QG-1B3-B eight typed migration contracts and four independent baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg1b3b_runtime_migration import (
+              QG1B3BTypedMigrationRed, QG1B3BTrueExistingBaselines,
+          )
+          for cls, count in (
+              (QG1B3BTypedMigrationRed, 8),
+              (QG1B3BTrueExistingBaselines, 4),
+          ):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              if suite.countTestCases() != count:
+                  raise SystemExit(f"QG1B3-B INVALID DISCOVERY: {cls.__name__}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B NOT GREEN: {cls.__name__}")
+          print("QG-1B3-B typed migration 8/8 PASS +4/4 real baselines PASS")
+          PY
+      - name: Assert B301-B308 and B901-B904 exact scoped GREEN, B309-B311 GREEN and B312 intentional RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import (
+              QG1B3QG2ExistingBaselines, QG1B3QG2TargetedRed,
+          )
+          adapter = sorted(
+              name for name in dir(QG1B3QG2TargetedRed)
+              if name.startswith("test_b30") and 301 <= int(name[6:9]) <= 308
+          )
+          baseline = sorted(
+              name for name in dir(QG1B3QG2ExistingBaselines)
+              if name.startswith("test_b90")
+          )
+          if len(adapter) != 8 or len(baseline) != 4:
+              raise SystemExit(
+                  f"QG-1B3-A INVALID SUBSET DISCOVERY: {adapter=} {baseline=}"
+              )
+          suite = unittest.TestSuite(
+              [QG1B3QG2TargetedRed(name) for name in adapter]
+              + [QG1B3QG2ExistingBaselines(name) for name in baseline]
+          )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 12 or result.failures or result.errors
+                  or result.skipped or result.expectedFailures
+                  or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "QG-1B3-A INVALID FIRST-PARTY ADAPTER SCOPED GREEN"
+              )
+          print(
+              "QG-1B3-A B301-B308 8/8 PASS + B901-B904 4/4 PASS; "
+              "old 42/42 and new independent 12/12 PASS"
+          )
+
+          pending = sorted(
+              name for name in dir(QG1B3QG2TargetedRed)
+              if name.startswith("test_b3")
+              and 309 <= int(name[6:9]) <= 312
+          )
+          if len(pending) != 4:
+              raise SystemExit("QG-1B3-B INVALID INTEGRATION DISCOVERY")
+          remaining = unittest.TestSuite(
+              QG1B3QG2TargetedRed(name) for name in pending
+          )
+          staged = unittest.TextTestRunner(verbosity=2).run(remaining)
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in staged.failures}
+          expected = set(pending[3:])
+          unrelated = [
+              case.id() for case, trace in staged.failures
+              if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
+          ]
+          if (staged.testsRun != 4 or len(staged.failures) != 1
+                  or actual != expected or unrelated or staged.errors
+                  or staged.skipped or staged.expectedFailures
+                  or staged.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1B3-B INVALID STAGED INTEGRATION: "
+                  f"failures={len(staged.failures)} actual={sorted(actual)}"
+              )
+          print(
+              "QG-1B3-A/B STAGED HOST GREEN: B301-B310 10/10 PASS, "
+              "B901-B904 4/4 PASS, independent 12/12 PASS, "
+              "prior 42/42 PASS; B312 EXACT ONE INTENTIONAL RED; B311 GREEN. "
+              "No QG-2 Request/Start/direct Trainer integration, "
+              "no CUDA, no permission to merge."
+          )
+          PY

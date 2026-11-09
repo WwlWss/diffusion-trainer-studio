@@ -7,6 +7,7 @@ import json
 import os
 import uuid
 from pathlib import Path
+from typing import Literal
 
 import toml
 from fastapi import Request
@@ -22,7 +23,11 @@ from mikazuki.parameter_policy_editor import (
     parameter_policy_editor_metadata,
     parameter_policy_editor_preview,
 )
-from mikazuki.training_config import PAGE_BACKEND_MAP
+from mikazuki.parameter_policy_admission import ComponentAdmission
+from mikazuki.training_config import (
+    PAGE_BACKEND_MAP,
+    RequestAdmissionIntent,
+)
 from mikazuki.training_launcher import run_prepared_train
 from mikazuki.training_rehydrate import rehydrate_trainer_config
 from mikazuki.training_request import (
@@ -55,6 +60,66 @@ router.routes[:] = [
         and "POST" in getattr(route, "methods", set())
     )
 ]
+
+
+def _decode_training_admission_request(
+    body: bytes,
+    *,
+    purpose: Literal["preview", "export", "start"],
+) -> tuple[str | None, dict, RequestAdmissionIntent]:
+    """Decode a nested API envelope and its transient, one-job Start intent.
+
+    The acknowledgement is deliberately outside Trainer config. Only the
+    server assigns its origin; Preview/Export always receive a neutral intent.
+    Legacy flat and nested payloads remain supported when no control is sent.
+    """
+    if type(purpose) is not str or purpose not in {"preview", "export", "start"}:
+        raise ValueError("Unknown training Admission request purpose.")
+    try:
+        payload = json.loads(body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("Training request must contain valid UTF-8 JSON.") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("训练配置必须是 JSON object。")
+
+    if "config" not in payload or not isinstance(payload.get("config"), dict):
+        if "experimental_full_bf16_ack" in payload:
+            raise ValueError(
+                "Experimental acknowledgement is only accepted as a "
+                "top-level field in a nested training request."
+            )
+        # Preserve the old decoder's flat-payload fallback when a legacy
+        # Trainer option happens to be named 'config' but is not an object.
+        # An explicit train_type marks the nested API envelope, where a
+        # non-object config is malformed and must fail closed.
+        if "config" in payload and "train_type" in payload:
+            raise ValueError("Nested training request config must be a JSON object.")
+        return None, dict(payload), RequestAdmissionIntent()
+
+    raw_config = payload["config"]
+    if {"experimental_full_bf16_ack", "admission_intent", "admission"}.intersection(raw_config):
+        raise ValueError(
+            "Admission controls are API-owned and cannot be supplied as Trainer config."
+        )
+    if {"admission_intent", "admission"}.intersection(payload):
+        raise ValueError("Admission diagnostics and intent are server-owned fields.")
+
+    page_type = payload.get("train_type")
+    if page_type is not None and type(page_type) is not str:
+        raise ValueError("Training request train_type must be a string.")
+
+    supplied_ack = payload.get("experimental_full_bf16_ack", False)
+    if type(supplied_ack) is not bool:
+        raise ValueError("experimental_full_bf16_ack must be a strict boolean.")
+
+    # Preview and Export are intentionally incapable of consuming consent.
+    # The positive bit is ignored and not copied into any returned config.
+    if purpose != "start" or not supplied_ack:
+        intent = RequestAdmissionIntent()
+    else:
+        intent = RequestAdmissionIntent(True, "webui_start")
+
+    return page_type, dict(raw_config), intent
 
 
 def _prepared_parameter_policy_preview(prepared) -> dict | None:
@@ -100,7 +165,22 @@ def _prepared_payload(prepared) -> dict:
         "bundle": json.dumps(bundle, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n",
     }
     policy_preview = _prepared_parameter_policy_preview(prepared)
+    admission = prepared.admission
     if policy_preview is not None:
+        if type(admission) is not ComponentAdmission:
+            raise RuntimeError(
+                "Prepared Component payload requires a first-party typed Admission diagnostic."
+            )
+        readiness = admission.readiness
+        payload["admission"] = {
+            "status": admission.status,
+            "purpose": admission.purpose,
+            "requires_experimental_ack": admission.requires_experimental_ack,
+            "host_admissible": admission.host_admissible,
+            "evidence_tier": readiness.evidence_tier if readiness is not None else None,
+            "warnings": list(admission.warnings),
+            "runtime_blockers": list(admission.runtime_blockers),
+        }
         payload["runtime_ready"] = policy_preview["runtime_ready"]
         payload["runtime_blockers"] = list(policy_preview["runtime_blockers"])
         payload["parameter_policy_preview"] = {
@@ -109,6 +189,10 @@ def _prepared_payload(prepared) -> dict:
             "profiles": policy_preview["profiles"],
             "components": policy_preview["components"],
         }
+    elif admission is not None:
+        raise RuntimeError(
+            "Standard payload cannot carry a caller-provided Admission diagnostic."
+        )
     return payload
 
 
@@ -179,8 +263,14 @@ async def bootstrap_parameter_policy(request: Request):
 @router.post("/training/preview")
 async def preview_training_config(request: Request):
     try:
-        page_type, config = decode_training_request(await request.body())
-        prepared = prepare_request_config(config, page_type, launch=False)
+        page_type, config, admission_intent = _decode_training_admission_request(
+            await request.body(), purpose="preview",
+        )
+        prepared = prepare_request_config(
+            config, page_type, launch=False,
+            admission_intent=admission_intent,
+            admission_purpose="preview",
+        )
         validate_prepared_config(prepared, False)
         payload = _prepared_payload(prepared)
     except (KeyError, TypeError, ValueError, RuntimeError) as exc:
@@ -191,8 +281,14 @@ async def preview_training_config(request: Request):
 @router.post("/training/export")
 async def export_training_config(request: Request):
     try:
-        page_type, config = decode_training_request(await request.body())
-        prepared = prepare_request_config(config, page_type, launch=False)
+        page_type, config, admission_intent = _decode_training_admission_request(
+            await request.body(), purpose="export",
+        )
+        prepared = prepare_request_config(
+            config, page_type, launch=False,
+            admission_intent=admission_intent,
+            admission_purpose="export",
+        )
         validate_prepared_config(prepared, False)
         payload = _prepared_payload(prepared)
         materialize_sidecars(prepared.sidecars)
@@ -238,8 +334,14 @@ async def create_toml_file(request: Request):
     run_id = uuid.uuid4().hex
     toml_path = os.path.join(os.getcwd(), "config", "autosave", f"{run_id}.toml")
     try:
-        page_type, config = decode_training_request(await request.body())
-        prepared = prepare_request_config(config, page_type, launch=True, toml_path=toml_path)
+        page_type, config, admission_intent = _decode_training_admission_request(
+            await request.body(), purpose="start",
+        )
+        prepared = prepare_request_config(
+            config, page_type, launch=True, toml_path=toml_path,
+            admission_intent=admission_intent,
+            admission_purpose="start",
+        )
         component_start = bool(prepared.config.get("parameter_policy_config"))
         if component_start:
             # Step 6F keeps blocked/invalid Component Start requests free of

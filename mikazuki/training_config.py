@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Literal, Optional
+
+# Runtime type resolution (typing.get_type_hints / future API serializers)
+# must see the real class, not only a TYPE_CHECKING forward name. This
+# low-dependency first-party adapter imports Policy and optimizer metadata,
+# but never imports training_config at module initialization.
+from mikazuki.parameter_policy_admission import ComponentAdmission
 
 from mikazuki.anima_effective_config import prepare_anima_config, validate_post_override_anima_config
 from mikazuki.full_trainer_contract import normalize_validate_flux_full, normalize_validate_sdxl_full
@@ -31,6 +37,34 @@ PAGE_BACKEND_MAP = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class RequestAdmissionIntent:
+    """Per-request control-plane intent; never a Trainer argument or proof.
+
+    A later API gate must capture a visible, explicit UI acknowledgement.
+    This object carries that single request's intent to the Host classifier;
+    it does not authorize Start or persist through Export/Checkpoint.
+    """
+
+    experimental_full_bf16_ack: bool = False
+    origin: Literal["default", "webui_start"] = "default"
+
+    def __post_init__(self) -> None:
+        if type(self.experimental_full_bf16_ack) is not bool:
+            raise ValueError(
+                "experimental_full_bf16_ack must be an explicit boolean."
+            )
+        if type(self.origin) is not str or self.origin not in {
+            "default", "webui_start"
+        }:
+            raise ValueError("Unknown Request Admission intent origin.")
+        if self.experimental_full_bf16_ack and self.origin != "webui_start":
+            raise ValueError(
+                "Experimental Full-BF16 acknowledgement requires a "
+                "dedicated per-job WebUI Start origin."
+            )
+
+
 @dataclass
 class PreparedTrainingConfig:
     train_type: str
@@ -40,6 +74,10 @@ class PreparedTrainingConfig:
     warnings: list[str] = field(default_factory=list)
     sidecars: dict[str, str] = field(default_factory=dict)
     runtime_blockers: list[str] = field(default_factory=list)
+    # QG-2-A1: host diagnostics and ephemeral intent are separate from the
+    # Trainer config/sidecars.  Append defaults to preserve positional ABI.
+    admission: ComponentAdmission | None = None
+    admission_intent: RequestAdmissionIntent | None = None
 
 
 def _as_bool(value: object) -> bool:

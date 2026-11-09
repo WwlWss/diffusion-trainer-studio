@@ -1,0 +1,167 @@
+name: DTS QG-2-B1 Direct Trainer parity Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "docs/qualification-gate-qg2b0-direct-trainer-architecture-review.md"
+      - "docs/qualification-gate-qg2b1-direct-trainer-tests-only-red.md"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/stable/library/train_util.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/training_validation.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "docs/qualification-gate-qg2b0-direct-trainer-architecture-review.md"
+      - "docs/qualification-gate-qg2b1-direct-trainer-tests-only-red.md"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/stable/library/train_util.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_qg2a2_api_red.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/training_request.py"
+      - "mikazuki/training_config.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/training_validation.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  admission-host:
+    name: "QG-2-B1 Direct Trainer parity: B301-B311 GREEN + B312 one RED; frozen 42 prior GREEN (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Exact checkout without optional submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Use Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile all test harnesses before discovery
+        run: python -m py_compile tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_qg1b_trusted_producer.py tests/test_parameter_policy_qg1b_sr1.py tests/test_parameter_policy_qg1b_evidence_coverage.py
+      - name: Preserve 42 prior QG-1B and SR1 host tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = [
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+          ]
+          for name, count in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != count:
+                  raise SystemExit(f"QG-1B3 INVALID OLD DISCOVERY: {name}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != count or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG-1B3 INVALID OLD GREEN: {name}")
+          print(
+              "QG-1B3-QG2 PRIOR 42/42 HOST GREEN: "
+              "16 QG1B +16 SR1 +10 D1, 0 FAIL/ERROR/SKIP/xfail/xpass"
+          )
+          PY
+      - name: "QG-2-B1 exact 16-case admission: B301-B311 GREEN + B312 RED"
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_admission_red"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit(
+                  f"QG-1B3-QG2 INVALID DISCOVERY: {suite.countTestCases()} != 16"
+              )
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"QG-1B3-QG2 INVALID RUN: {result.testsRun=} "
+                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
+                  f"xfail={len(result.expectedFailures)} "
+                  f"xpass={len(result.unexpectedSuccesses)}"
+              )
+          # Scoped QG-2-B1: only Direct Trainer / Launcher parity is still
+          # intentionally RED. Never treat the unfinished full contract as
+          # global GREEN, nor accept unexpected failures as qualification.
+          expected = {
+              "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent",
+          }
+          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
+          if result.failures:
+              unrelated = [
+                  case.id() for case, trace in result.failures
+                  if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
+              ]
+              if len(result.failures) != 1 or actual != expected or unrelated:
+                  raise SystemExit(
+                      f"QG-1B3-QG2 INVALID RED: failures={len(result.failures)} "
+                      f"actual={sorted(actual)} unrelated={unrelated}"
+                  )
+              print(
+                  "QG-2-B1 TESTS-ONLY RED: B301-B311 11 GREEN + "
+                  "B312 ONE INTENTIONAL RED + 4 baseline PASS, "
+                  "0 ERROR/SKIP/xfail/xpass; no production source changed, "
+                  "no execution or certificate unlock"
+              )
+              raise SystemExit(1)
+          print(
+              "QG-2-B1 CUMULATIVE HOST CONTRACT GREEN: "
+              "16/16 PASS and 42/42 prior GREEN; requires separate actual "
+              "launch-path/runtime/asset/Checkpoint review before merge"
+          )
+          PY

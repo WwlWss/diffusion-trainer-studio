@@ -13,8 +13,12 @@ from mikazuki.parameter_policy_editor import (
     bootstrap_parameter_policy_editor,
     normalize_parameter_policy_editor_state,
 )
+from mikazuki.parameter_policy_admission import (
+    ComponentAdmission, assess_component_training_admission,
+)
 from mikazuki.parameter_policy_matrix import PARAMETER_POLICY_RUNTIME_TRAIN_TYPES
-from mikazuki.training_config import prepare_training_config
+from mikazuki.training_config import RequestAdmissionIntent, prepare_training_config
+from mikazuki.training_gui_args import parse_ui_custom_params
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,6 +47,23 @@ def _load_prepare_request_config(**overrides):
         "parameter_policy_gpu_selection_blockers": lambda gpu_ids: [],
         "PARAMETER_POLICY_RUNTIME_TRAIN_TYPES": frozenset({"sd-lora"}),
         "materialize_sidecars": lambda sidecars: None,
+        "RequestAdmissionIntent": RequestAdmissionIntent,
+        "ComponentAdmission": ComponentAdmission,
+        "parse_ui_custom_params": parse_ui_custom_params,
+        # Mock Policy intentionally lacks canonical fields. Return a real
+        # validated inert diagnostic, never a None permission escape hatch;
+        # real-pipeline suites inject the actual first-party classifier.
+        "assess_component_training_admission": lambda policy, **kw: (
+            ComponentAdmission(
+                status="inactive",
+                purpose=kw["purpose"],
+                readiness=None,
+                runtime_blockers=(),
+                warnings=(),
+                requires_experimental_ack=False,
+                host_admissible=True,
+            )
+        ),
     }
     namespace.update(overrides)
     exec(compile(module, "mikazuki/training_request.py", "exec"), namespace)
@@ -74,15 +95,18 @@ def _component_gui_config(train_type, train_components, **extra):
     return config
 
 
-def _real_prepare_request(**overrides):
+def _real_prepare_request(*, gpu_blockers=None, **overrides):
     resolver = lambda config, requested: (requested, f"trainer/{requested}.py")
     return _load_prepare_request_config(
         normalize_parameter_policy_editor_state=normalize_parameter_policy_editor_state,
         build_parameter_policy_sidecar=build_parameter_policy_sidecar,
         prepare_training_config=prepare_training_config,
+        assess_component_training_admission=assess_component_training_admission,
         legacy_api=SimpleNamespace(resolve_training_backend=resolver),
         parameter_policy_runtime_blockers=parameter_policy_runtime_blockers,
-        parameter_policy_gpu_selection_blockers=lambda gpu_ids: [],
+        parameter_policy_gpu_selection_blockers=(
+            gpu_blockers if gpu_blockers is not None else (lambda gpu_ids: [])
+        ),
         PARAMETER_POLICY_RUNTIME_TRAIN_TYPES=PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
         **overrides,
     )
