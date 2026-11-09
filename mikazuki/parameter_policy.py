@@ -411,6 +411,48 @@ def serialize_parameter_policy(policy: Mapping[str, Any]) -> tuple[str, str]:
     return (PARAMETER_POLICY_DIR / f"{digest}.json").as_posix(), content
 
 
+
+def load_parameter_policy_sidecar(path: str | __import__("os").PathLike[str]) -> tuple[dict[str, Any], str]:
+    """Read a strict JSON sidecar without importing the Trainer or torch.
+
+    The full digest identifies the *canonical* serialized policy.  The short
+    digest embedded in an autosave filename remains a separate legacy ABI.
+    """
+    import os
+
+    if not isinstance(path, (str, os.PathLike)):
+        raise TypeError("Parameter Policy path must be a string or PathLike.")
+    location = os.fspath(path)
+    if not isinstance(location, str) or not location.strip():
+        raise ValueError("Parameter Policy path must be a nonempty text path.")
+
+    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"Duplicate Parameter Policy JSON key: {key!r}")
+            obj[key] = value
+        return obj
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"Non-standard Parameter Policy JSON constant: {value}")
+
+    # Explicit UTF-8 decoding fails closed, and is independent of platform
+    # default encoding.  Existing files are never modified.
+    with open(location, "r", encoding="utf-8") as source:
+        raw = json.load(
+            source,
+            object_pairs_hook=unique_keys,
+            parse_constant=reject_constant,
+        )
+    if not isinstance(raw, dict):
+        raise ValueError("Parameter Policy sidecar root must be an object.")
+    canonical = validate_parameter_policy(raw)
+    _autosave_path, canonical_text = serialize_parameter_policy(canonical)
+    digest = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+    return canonical, digest
+
+
 def _append_blocker(blockers: list[str], seen: set[str], message: str) -> None:
     if message in seen:
         return
@@ -824,6 +866,7 @@ __all__ = [
     "build_parameter_policy_sidecar",
     "canonicalize_parameter_policy",
     "extract_parameter_policy_gui_state",
+    "load_parameter_policy_sidecar",
     "parameter_policy_runtime_blockers",
     "parse_legacy_optimizer_args",
     "rehydrate_parameter_policy",
