@@ -14,6 +14,7 @@ import ast
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -412,14 +413,12 @@ def serialize_parameter_policy(policy: Mapping[str, Any]) -> tuple[str, str]:
 
 
 
-def load_parameter_policy_sidecar(path: str | __import__("os").PathLike[str]) -> tuple[dict[str, Any], str]:
+def load_parameter_policy_sidecar(path: str | os.PathLike[str]) -> tuple[dict[str, Any], str]:
     """Read a strict JSON sidecar without importing the Trainer or torch.
 
     The full digest identifies the *canonical* serialized policy.  The short
     digest embedded in an autosave filename remains a separate legacy ABI.
     """
-    import os
-
     if not isinstance(path, (str, os.PathLike)):
         raise TypeError("Parameter Policy path must be a string or PathLike.")
     location = os.fspath(path)
