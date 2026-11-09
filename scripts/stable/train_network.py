@@ -8,6 +8,7 @@ import time
 import json
 from multiprocessing import Value
 from mikazuki.direct_trainer_admission_intent import (
+    DirectTrainerAdmissionIntent,
     add_direct_trainer_admission_argument,
     extract_direct_trainer_admission_intent,
 )
@@ -171,6 +172,31 @@ class NetworkTrainer:
             args,
             parameter_policy_runtime_enabled=parameter_policy_train_type is not None,
         )
+        # B3-B early Host gate: no tokenizer cache, logging, dataset, model or
+        # Accelerator initialization is allowed before this first check.
+        admission_snapshot = None
+        if parameter_policy_requested:
+            if type(admission_intent) is not DirectTrainerAdmissionIntent:
+                raise ValueError("Component Direct Trainer requires a typed one-shot admission intent.")
+            initial_effective_config = dict(vars(args))
+            admission_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=initial_effective_config,
+                admission_intent=admission_intent,
+            )
+            # Host eligibility is never a launch permission. Candidate stays
+            # HOLD until the separately reviewed B3-C late-session gate.
+            if admission_snapshot.admission.status in (
+                "blocked", "ack_required", "experimental_host_candidate"
+            ):
+                raise ValueError(
+                    "Direct Trainer early Admission is held: "
+                    + admission_snapshot.admission.status
+                    + "; " + "; ".join(admission_snapshot.admission.runtime_blockers)
+                )
+            if admission_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError("Unsupported Direct Trainer early Admission status.")
         train_util.prepare_dataset_args(args, True)
         deepspeed_utils.prepare_deepspeed_args(args)
         setup_logging(args, reset=True)
@@ -259,6 +285,27 @@ class NetworkTrainer:
             ), "when caching latents, either color_aug or random_crop cannot be used / latentをキャッシュするときはcolor_augとrandom_cropは使えません"
 
         self.assert_extra_args(args, train_dataset_group)
+
+        # Re-evaluate the *final* effective config after model-family
+        # normalization, still before Accelerator and model allocation.
+        if parameter_policy_requested:
+            final_effective_config = dict(vars(args))
+            admission_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=final_effective_config,
+                admission_intent=admission_intent,
+            )
+            if admission_snapshot.admission.status in (
+                "blocked", "ack_required", "experimental_host_candidate"
+            ):
+                raise ValueError(
+                    "Direct Trainer final Host Admission is held: "
+                    + admission_snapshot.admission.status
+                    + "; " + "; ".join(admission_snapshot.admission.runtime_blockers)
+                )
+            if admission_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError("Unsupported Direct Trainer final Admission status.")
 
         # acceleratorを準備する
         logger.info("preparing accelerator")
