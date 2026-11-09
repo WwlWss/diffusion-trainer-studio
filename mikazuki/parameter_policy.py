@@ -15,6 +15,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -436,9 +437,15 @@ def load_parameter_policy_sidecar(path: str | os.PathLike[str]) -> tuple[dict[st
     def reject_constant(value: str) -> None:
         raise ValueError(f"Non-standard Parameter Policy JSON constant: {value}")
 
-    # Explicit UTF-8 decoding fails closed, and is independent of platform
-    # default encoding.  Existing files are never modified.
+    # Reject special files before opening (FIFO/device reads may block), and
+    # recheck the opened descriptor to defend against path replacement.
+    if not Path(location).is_file():
+        raise ValueError("Parameter Policy sidecar must be a regular file.")
+    # Explicit UTF-8 decoding fails closed, independent of platform defaults.
+    # Existing files are never modified.
     with open(location, "r", encoding="utf-8") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError("Parameter Policy sidecar must be a regular file.")
         raw = json.load(
             source,
             object_pairs_hook=unique_keys,
