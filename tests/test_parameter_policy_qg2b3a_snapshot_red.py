@@ -296,6 +296,24 @@ class QG2B3APolicySnapshotTargetedRed(unittest.TestCase):
         )
         with self.assertRaises(FrozenInstanceError):
             snapshot.policy_hash = "c" * 64
+        class SubclassAdmission(type(admission)):
+            pass
+        with self.assertRaises((TypeError, ValueError)):
+            kind(
+                policy_hash="a" * 64,
+                effective_config_fingerprint="b" * 64,
+                train_type="sd-lora",
+                experimental_ack=False,
+                admission=SubclassAdmission(
+                    status=admission.status,
+                    purpose=admission.purpose,
+                    readiness=admission.readiness,
+                    runtime_blockers=admission.runtime_blockers,
+                    warnings=admission.warnings,
+                    requires_experimental_ack=admission.requires_experimental_ack,
+                    host_admissible=admission.host_admissible,
+                ),
+            )
         for invalid in (
             {"policy_hash": "short"},
             {"effective_config_fingerprint": "not-a-hash"},
@@ -324,6 +342,15 @@ class QG2B3APolicySnapshotTargetedRed(unittest.TestCase):
                     train_type="sd-lora",
                     effective_config=_config(),
                     admission_intent=True,
+                )
+            class SubclassIntent(DirectTrainerAdmissionIntent):
+                pass
+            with self.assertRaises((TypeError, ValueError)):
+                prepare(
+                    path,
+                    train_type="sd-lora",
+                    effective_config=_config(),
+                    admission_intent=SubclassIntent(False),
                 )
             legacy = prepare(
                 path,
