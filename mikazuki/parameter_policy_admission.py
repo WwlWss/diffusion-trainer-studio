@@ -180,6 +180,49 @@ def fingerprint_effective_training_config(config: Mapping[str, Any]) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
+@dataclass(frozen=True, slots=True)
+class DirectTrainerAdmissionSnapshot:
+    """Identity-only Host admission snapshot; never a launch credential."""
+
+    policy_hash: str
+    effective_config_fingerprint: str
+    train_type: str
+    experimental_ack: bool
+    admission: ComponentAdmission
+
+    def __post_init__(self) -> None:
+        for field_name in ("policy_hash", "effective_config_fingerprint"):
+            digest = getattr(self, field_name)
+            if (type(digest) is not str or len(digest) != 64
+                    or any(char not in "0123456789abcdef" for char in digest)):
+                raise ValueError(f"{field_name} must be a full lowercase SHA-256.")
+        if type(self.train_type) is not str or not self.train_type.strip():
+            raise ValueError("Direct Trainer snapshot needs a nonempty train type.")
+        if self.train_type != self.train_type.strip().lower():
+            raise ValueError("Direct Trainer snapshot train type must be normalized.")
+        if type(self.experimental_ack) is not bool:
+            raise ValueError("Direct Trainer snapshot acknowledgement must be bool.")
+        if not isinstance(self.admission, ComponentAdmission):
+            raise TypeError("Direct Trainer snapshot needs first-party admission.")
+        if self.admission.purpose != "direct_trainer":
+            raise ValueError("Direct Trainer snapshot requires direct_trainer admission.")
+
+    def assert_matches(
+        self, *, policy_hash: str, effective_config_fingerprint: str,
+        train_type: str, experimental_ack: bool,
+    ) -> None:
+        """Fail closed on any identity/intent drift; do not grant permission."""
+        if (
+            type(policy_hash) is not str or policy_hash != self.policy_hash
+            or type(effective_config_fingerprint) is not str
+            or effective_config_fingerprint != self.effective_config_fingerprint
+            or type(train_type) is not str or train_type != self.train_type
+            or type(experimental_ack) is not bool
+            or experimental_ack != self.experimental_ack
+        ):
+            raise ValueError("Direct Trainer admission snapshot identity mismatch.")
+
+
 def _source_release_matches(row: object, expected_case: str) -> bool:
     """Exact first-party source ID, not the row's self-reported qualified flag."""
     return (
@@ -364,4 +407,5 @@ __all__ = [
     "AdmissionPurpose", "AdmissionStatus", "ComponentAdmission",
     "assess_component_training_admission",
     "fingerprint_effective_training_config",
+    "DirectTrainerAdmissionSnapshot",
 ]
