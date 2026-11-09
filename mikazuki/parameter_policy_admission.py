@@ -207,7 +207,7 @@ class DirectTrainerAdmissionSnapshot:
             raise ValueError("Direct Trainer snapshot train type must be normalized.")
         if type(self.experimental_ack) is not bool:
             raise ValueError("Direct Trainer snapshot acknowledgement must be bool.")
-        if not isinstance(self.admission, ComponentAdmission):
+        if type(self.admission) is not ComponentAdmission:
             raise TypeError("Direct Trainer snapshot needs first-party admission.")
         if self.admission.purpose != "direct_trainer":
             raise ValueError("Direct Trainer snapshot requires direct_trainer admission.")
@@ -235,7 +235,7 @@ def prepare_direct_trainer_admission(
     admission_intent: DirectTrainerAdmissionIntent,
 ) -> DirectTrainerAdmissionSnapshot:
     """Create a Host-only snapshot, detached from all caller-owned objects."""
-    if not isinstance(admission_intent, DirectTrainerAdmissionIntent):
+    if type(admission_intent) is not DirectTrainerAdmissionIntent:
         raise TypeError("Direct Trainer requires a typed one-shot admission intent.")
     if type(train_type) is not str or not train_type.strip():
         raise ValueError("Direct Trainer requires a nonempty backend identifier.")
