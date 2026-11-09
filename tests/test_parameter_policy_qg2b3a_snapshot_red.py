@@ -344,7 +344,7 @@ class QG2B3APolicySnapshotTargetedRed(unittest.TestCase):
                 )
             self.assertEqual(no_ack.admission.status, "ack_required")
             self.assertEqual(with_ack.admission.status, "experimental_host_candidate")
-            self.assertEqual(with_ack.admission.evidence_tier, "unverified")
+            self.assertEqual(with_ack.admission.readiness.evidence_tier, "unverified")
 
             sd3_path = Path(directory) / "sd3.json"
             _write_policy(sd3_path, _policy("sd3-lora"))
