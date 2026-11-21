@@ -1,8 +1,9 @@
 """Host-only D1-SD3C2-A SD3.5 Medium scoped Full-BF16 admission tests.
 
 There is no qualification promotion, model value load, Torch, or CUDA here.
-A temporarily patched test-only qualification record exercises the future
-release path while the real sd3-lora backend remains pending.
+A temporarily patched test-only qualification row exercises the legacy
+release path while the independent QG-1B2 source-capability audit remains
+HOLD for SD3; a spoofed release row cannot authorize Start.
 """
 from __future__ import annotations
 
@@ -522,6 +523,8 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                     prepare(copy.deepcopy(request), "sd3-lora", launch=True)
 
     def test_r1_r2_ui_request_uses_real_resolution_and_config_path(self):
+        # A synthetic *release row* does not satisfy the later QG-1B2
+        # independently source-audited SD3 implementation requirement.
         prepare = _real_prepare_request()
         qualified = execution.ExecutionFeatureQualification(
             "qualified", "test-only future R1/R2", "test:sd3c2a-production-shape",
@@ -548,7 +551,18 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                         enable_bucket=False,
                     )
                     prepared = prepare(raw, "sd3-lora", launch=False)
-                    self.assertEqual(prepared.runtime_blockers, [])
+                    self.assertEqual(
+                        len(prepared.runtime_blockers), 1,
+                        prepared.runtime_blockers,
+                    )
+                    self.assertTrue(
+                        prepared.runtime_blockers[0].startswith(
+                            "capability.backend.audit_required:"
+                        ),
+                        prepared.runtime_blockers,
+                    )
+                    self.assertEqual(prepared.admission.status, "blocked")
+                    self.assertFalse(prepared.admission.host_admissible)
                     self.assertEqual(prepared.config["resolution"], "512,512")
 
     def test_production_prepare_dataset_args_yields_qualifying_trainer_tuple(self):
@@ -608,8 +622,17 @@ class SD3C2AScopeContractTests(unittest.TestCase):
             "Preview/Export must not open a model"
         )):
             preview = prepare(self._ui_request_config(missing), "sd3-lora", launch=False)
-            self.assertEqual(preview.runtime_blockers, [])
+            self.assertEqual(len(preview.runtime_blockers), 1, preview.runtime_blockers)
+            self.assertTrue(
+                preview.runtime_blockers[0].startswith("capability.backend.audit_required:"),
+                preview.runtime_blockers,
+            )
+            self.assertEqual(preview.admission.status, "blocked")
+            self.assertFalse(preview.admission.host_admissible)
         self.assertNotIn("parameter_policy_config", preview.sidecars)
+        # The historical Step 6F first error retains priority for a missing
+        # actual model. Both the typed audit and the read-only asset check
+        # independently reject Start; do not weaken either gate.
         with patch.dict(
             execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
         ), self.assertRaisesRegex(ValueError, "existing absolute local"):
@@ -623,6 +646,40 @@ class SD3C2AScopeContractTests(unittest.TestCase):
         self.assertFalse(output_dir.exists(), "Start must not create output directory")
         self.assertFalse(toml_path.exists(), "Start must not emit training TOML")
         self.assertFalse(list(self.root.rglob("*parameter-policy*.json")))
+
+    def test_missing_sd3_model_still_fails_independent_readonly_asset_validation(self):
+        # Verify the actual first-party model path validator, detached from
+        # Admission: future approved backends must not bypass asset checks.
+        from mikazuki.training_config import PreparedTrainingConfig
+        from mikazuki.training_validation import validate_prepared_config
+        from mikazuki.utils import train_utils
+
+        missing = self.root / "missing-sd3-base.safetensors"
+        prepared = PreparedTrainingConfig(
+            train_type="sd3-lora",
+            trainer_file="trainer/sd3-lora.py",
+            config={
+                "pretrained_model_name_or_path": str(missing),
+                "train_data_dir": str(self.root / "missing-dataset"),
+            },
+        )
+        dataset_attempts = []
+        def forbidden_dataset_inspection(path):
+            dataset_attempts.append(path)
+            raise AssertionError("model asset rejection must precede dataset access")
+
+        with self.assertRaisesRegex(ValueError, "model not found"):
+            validate_prepared_config(
+                prepared, True, check_trainer=False,
+                is_file=lambda path: Path(path).is_file(),
+                is_dir=lambda path: Path(path).is_dir(),
+                exists=lambda path: Path(path).exists(),
+                inspect_data_dir=forbidden_dataset_inspection,
+                validate_model=train_utils.validate_model,
+            )
+        self.assertEqual(dataset_attempts, [])
+        self.assertFalse(missing.exists())
+        self.assertFalse((self.root / "missing-dataset").exists())
 
     def test_direct_trainer_preserves_independent_strict_asset_gate(self):
         if importlib.util.find_spec("torch") is None:
