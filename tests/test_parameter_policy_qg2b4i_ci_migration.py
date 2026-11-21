@@ -100,6 +100,14 @@ class QG2B4IInheritedWorkflowMigration(unittest.TestCase):
                 )
         self.assertIn("ubuntu-latest", source)
         self.assertIn("windows-latest", source)
+        # FSR-SR1: a present OS matrix is useless if runs-on contains
+        # a literal escaped Unicode dollar (a never-matching runner label).
+        expected_runner = "runs-on: $" + "{{ matrix.os }}"
+        run_labels = [line.strip() for line in source.splitlines()
+                      if line.strip().startswith("runs-on:")]
+        self.assertTrue(run_labels, f"{filename}: no runner selection")
+        self.assertTrue(all(label == expected_runner for label in run_labels),
+                        f"{filename}: invalid literal or unknown runner label: {run_labels}")
         # The historical RED suites of B3-A/B3-B/B3-C remain independently
         # present; only stale B312-specific failure requirements are forbidden.
         self.assertNotIn("QG-1B3-QG2 ADMISSION CONTRACT ABSENT", source)

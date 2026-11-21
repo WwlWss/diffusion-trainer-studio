@@ -1,4 +1,4 @@
-name: DTS QG-1B3-B FSR runner matrix exact Tests-only RED
+name: DTS QG-1B3-B FSR runner matrix scoped GREEN
 on:
   push:
     branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
@@ -46,25 +46,19 @@ jobs:
                   raise SystemExit(f"QG1B3-B historical typed contract FAIL: {cls.__name__}")
           print("QG1B3-B real 8/8 targeted +4/4 baselines PASS")
           PY
-      - name: One valid actual runner label RED, one true metadata baseline PASS
+      - name: Exact typed runner label and independent baseline both GREEN
         shell: bash
         run: |
           python - <<'PY'
           import unittest
           from tests.test_parameter_policy_qg1b3b_runner_label import (
-              QG1B3BRunnerLabelTarget, QG1B3BRunnerLabelBaseline, MARKER,
+              QG1B3BRunnerLabelTarget, QG1B3BRunnerLabelBaseline,
           )
-          positive = unittest.defaultTestLoader.loadTestsFromTestCase(QG1B3BRunnerLabelBaseline)
-          negative = unittest.defaultTestLoader.loadTestsFromTestCase(QG1B3BRunnerLabelTarget)
-          passed = unittest.TextTestRunner(verbosity=2).run(positive)
-          failed = unittest.TextTestRunner(verbosity=2).run(negative)
-          if (passed.testsRun != 1 or passed.failures or passed.errors or
-              failed.testsRun != 1 or len(failed.failures) != 1 or
-              MARKER not in failed.failures[0][1] or failed.errors or
-              passed.skipped or failed.skipped or passed.expectedFailures or
-              failed.expectedFailures or passed.unexpectedSuccesses or
-              failed.unexpectedSuccesses):
-              raise SystemExit("QG-1B3-B invalid runner RED shape")
-          print("QG-1B3-B VALID RUNNER TESTS-ONLY RED: 1 actual malformed-runner failure; 1 baseline and typed 8+4 PASS")
-          raise SystemExit(1)
+          for cls in (QG1B3BRunnerLabelTarget, QG1B3BRunnerLabelBaseline):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              outcome = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (outcome.testsRun != 1 or outcome.failures or outcome.errors or
+                  outcome.skipped or outcome.expectedFailures or outcome.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B RUNNER LABEL GREEN REGRESSION: {cls.__name__}")
+          print("QG-1B3-B VALID SCOPED GREEN: proper Ubuntu/Windows runner + 1+1 source test PASS +8/8 typed target +4/4 baseline PASS")
           PY
