@@ -11,6 +11,7 @@ from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
 from tests._parameter_policy_admission_fixtures import make_test_admission_kwargs
+from tests._parameter_policy_low_level_fixtures import build_test_only_full_bf16_session
 
 
 _REQUIRED_MODULES = ("torch", "accelerate")
@@ -214,7 +215,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             model = TinyFlux()
             model_ref = weakref.ref(model)
-            session = create_parameter_policy_session(
+            session = build_test_only_full_bf16_session(
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
@@ -260,7 +261,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             model = TinyFlux()
             model_ref = weakref.ref(model)
-            session = create_parameter_policy_session(
+            session = build_test_only_full_bf16_session(
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
@@ -317,7 +318,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         )
         model = TinyFlux()
         structural_bias = model.double_blocks[0].bias
-        session = create_parameter_policy_session(
+        session = build_test_only_full_bf16_session(
             args=args,
             train_type="flux-finetune",
             roots={"transformer": model},
@@ -555,6 +556,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                         args=args,
                         train_type="flux-finetune",
                         roots={"transformer": model},
+                        **make_test_admission_kwargs(args, "flux-finetune", expected_status="blocked"),
                     )
                 scan.assert_not_called()
 
