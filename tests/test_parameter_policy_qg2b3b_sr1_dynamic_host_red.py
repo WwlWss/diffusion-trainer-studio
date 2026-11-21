@@ -172,6 +172,7 @@ class QG2B3BSR1DynamicHost(unittest.TestCase):
             def prepare_network(self, args):
                 args.network_mutated_flag = True
 
+        unprotected = []
         for path in TRAINERS:
             args = types.SimpleNamespace(
                 scale_weight_norms=False, parameter_policy_config="policy.json",
@@ -189,9 +190,15 @@ class QG2B3BSR1DynamicHost(unittest.TestCase):
                          effective_config_fingerprint=fingerprint_effective_training_config(vars(args))
                      )),
             )
-            with self.subTest(path=path):
-                with self.assertRaisesRegex(ValueError, "identity|fingerprint|mismatch"):
-                    fn()
+            try:
+                fn()
+            except ValueError as exc:
+                if not any(token in str(exc).lower() for token in ("identity", "fingerprint", "mismatch")):
+                    unprotected.append(path + ": wrong reason " + str(exc))
+            else:
+                unprotected.append(path + ": no identity guard")
+        if unprotected:
+            self.fail(MARKER + ": " + "; ".join(unprotected))
 
 
 if __name__ == "__main__":
