@@ -15,6 +15,7 @@ import unittest
 
 from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
 from mikazuki.parameter_policy import load_parameter_policy_sidecar
+from mikazuki.parameter_policy_readiness import evaluate_execution_readiness
 from mikazuki.parameter_policy_admission import (
     ComponentAdmission,
     DirectTrainerAdmissionSnapshot,
@@ -161,8 +162,10 @@ class QG2B3CLateDynamicHost(unittest.TestCase):
             original = _snapshot(path, args, intent)
             for status in ("blocked", "ack_required", "experimental_host_candidate"):
                 admission = ComponentAdmission(
-                    status=status, purpose="direct_trainer", readiness=None,
-                    runtime_blockers=("held",), warnings=(),
+                    status=status, purpose="direct_trainer",
+                    readiness=evaluate_execution_readiness(capability="implemented"),
+                    runtime_blockers=() if status == "experimental_host_candidate" else ("held",),
+                    warnings=("advisory",) if status != "blocked" else (),
                     requires_experimental_ack=status == "ack_required",
                     host_admissible=status == "experimental_host_candidate",
                 )
@@ -189,7 +192,8 @@ class QG2B3CLateDynamicHost(unittest.TestCase):
             intent = DirectTrainerAdmissionIntent(False)
             snapshot = _snapshot(path, args, intent)
             different = ComponentAdmission(
-                status="blocked", purpose="direct_trainer", readiness=None,
+                status="blocked", purpose="direct_trainer",
+                readiness=evaluate_execution_readiness(capability="implemented"),
                 runtime_blockers=("changed readiness",), warnings=(),
                 requires_experimental_ack=False, host_admissible=False,
             )
