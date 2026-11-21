@@ -10,3 +10,11 @@ Treat older SD3 scope-test mismatch, queued QG1B3-B and required checks as indep
 ## Frozen evidence and staged Green
 
 Tests-only RED accepted at 4e42a9b4ce9d83d35e0dd7c87717043b3064cc66, dual-OS Actions run 44951637251: 15/15 genuine source-contract FAIL, 2/2 mutation baselines PASS and cumulative 16/16 Admission PASS. An earlier GitHub matrix-expression parse error on 22941499 was repaired before counting RED. SR1-Green staged the 13 inherited workflows as one commit, then the central trigger and CI harness as a separate commit; exact HEAD revalidation and Final Strict Review are required.
+
+## SR1 completion evidence
+
+Accepted exact RED at 4e42a9b4ce9d83d35e0dd7c87717043b3064cc66, Actions 44951637251: 15/15 real source-contract FAIL, 2/2 mutation baselines and B312 16/16 real PASS, on Ubuntu/Windows.
+
+Green via two staged commits, 1f3cee1ba8a06bc5b2679bc349d9b58827ca745e and e1d44b01d171eff8771934387a14773927224de2. FSR-SR1 dual-OS success Actions 44951795226, central B4-I dual-OS success Actions 44951795151. Original QG1B3-B runner now also passes on both systems after separate fix bc247daa90208b56c0eeac46610c760bcffc72eb.
+
+Code-bearing HEAD 7b02ee58aa730841db5708de9a8bb3baa095d049 completed 22 same-SHA Actions runs with SUCCESS, including Anima Host and pinned CPU runtime. A following doc-only commit requires exact-head recheck. Main branch protection endpoint is inaccessible through the connected integration (403); repo admin must verify Required Checks, and PRs #67 to #68 to #69 remain Draft/unmerged.

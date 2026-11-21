@@ -33,3 +33,13 @@ Other QG-1A/1B and isolated B3-B-SR1 workflows do not assert B312 and must not b
 ## 3. Safety boundaries
 
 Changing an expected-RED CI status to GREEN documents the one already-closed Host transport seam. **It is not** approval to bypass legacy Step 6F, actual Full-BF16 runtime gate, CUDA R1/R2, optimizer, checkpoint/resume, trust roots, or formal evidence qualification. PR #69 remains Draft and unmerged; B4-FSR independent source/code/CI audit remains required.
+
+## Accepted FSR-SR1 and follow-up evidence
+
+FSR-SR1 valid Tests-only RED commit 4e42a9b4ce9d83d35e0dd7c87717043b3064cc66: 15/15 genuine missing-source FAIL, 2/2 mutation baselines and cumulative B312 16/16 PASS, dual OS (Actions 44951637251). The earlier malformed YAML parse failure was not accepted as RED.
+
+CI-only GREEN commits 1f3cee1ba8a06bc5b2679bc349d9b58827ca745e and e1d44b01d171eff8771934387a14773927224de2: all 13 B312 consumers now use one unconditional standalone fail-closed Step; central B4-I push monitors main and feature plus broad source paths; pull_request is unfiltered. FSR 15/15+2/2 and B4-I 13/13+16/16 both SUCCESS on Ubuntu and Windows (Actions 44951795226, 44951795151).
+
+QG-1B3-B malformed escaped runner label was fixed by bc247daa90208b56c0eeac46610c760bcffc72eb after dedicated RED fa449024d3474b9e45885d26103d20e50940e99b. Original 8+4 typed migration job and runner regression job both Ubuntu/Windows SUCCESS (Actions 44952040459, 44952040376).
+
+Historical Anima tests reconciled with QG1B2 source audit, QG2A2 one-shot frontend Start and B3-C mandatory snapshot/Intent in test-only commits f3b63bcce1c7dab0c2294914ef95d0d5d818a653, 140bd1cb9b00d49c54496e1dcebcbc24c2e022e1 and 7b02ee58aa730841db5708de9a8bb3baa095d049. Whole Anima validate AND PyTorch CPU smoke SUCCESS (Actions 44952429781). No experimental SD3 Full-BF16 or CUDA permission changed.

@@ -14,3 +14,9 @@ On corrected SD3 scope tests, full Anima workflow run 44952097541 found one prev
 ## CPU runtime follow-up (real old ABI RED)
 
 After full Anima Host validate passed on 140bd1cb9b00d49c54496e1dcebcbc24c2e022e1, its CPU-runtime job 44952209689 executed 77 tests and failed with exactly three TypeErrors in old SD3 Direct Trainer tests: create_parameter_policy_session now requires admission_snapshot and admission_intent, added by B3-A/B/C after the historical Oct-2026 C2-A tests. The two legacy test functions previously omitted both, while their future-qualified fake row also ignored first-party source audit. The fix is test-only: build a real DirectTrainerAdmissionIntent and prepare_direct_trainer_admission snapshot, verify unreviewed SD3 is blocked before parameter scanning, retain R1/R2 geometry and missing model execution asset gate, and preserve the original test IDs used by the pinned CPU workflow. No production admission, GPU, optimizer, or Checkpoint changes. Exact-head complete Anima runtime smoke must pass before declaring full correction.
+
+## Final full Anima review: real validation and CPU smoke GREEN
+
+Test-only corrections f3b63bcce1c7dab0c2294914ef95d0d5d818a653, 140bd1cb9b00d49c54496e1dcebcbc24c2e022e1 and 7b02ee58aa730841db5708de9a8bb3baa095d049 align October SD3 fixtures with newer source-owned capability audit, one-shot GUI Start and mandatory B3-C Direct Trainer snapshot/Intent. The suite continues requiring a real SD3 audit blocker before live parameter scans and retains independent asset validation.
+
+At exact code-bearing HEAD 7b02ee58aa730841db5708de9a8bb3baa095d049, Anima Qwen3 review Actions 44952429781 had validate SUCCESS and downstream Parameter Policy runtime smoke SUCCESS (not skipped). Host/CPU correctness does not authorize real CUDA R1/R2 true Full-BF16 training.

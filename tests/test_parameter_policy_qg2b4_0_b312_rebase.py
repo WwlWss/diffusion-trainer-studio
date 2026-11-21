@@ -1,8 +1,9 @@
 """QG-2-B4-0 B312 contract-rebase baselines, Host-only and fail-closed.
 
-These tests prove the previous five B312 diagnostics were stale. The cumulative
-B312 case remains ONE intentional RED for precisely the two missing live
-API -> Launcher -> child CLI links. Do not change production authorization.
+These tests prove five earlier B312 diagnostics were stale. Historically the
+remaining gaps were Launcher and API child-CLI transport; B4-L2 and B4-A1
+closed both gaps. The cumulative suite now requires 16/16 real GREEN, while
+independent runtime authorization and SD3 Full-BF16 qualification remain held.
 """
 from __future__ import annotations
 

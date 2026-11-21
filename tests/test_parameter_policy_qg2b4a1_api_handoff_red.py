@@ -1,9 +1,9 @@
-"""QG-2-B4-A1: actual /run AST -> Launcher one-invocation Intent Tests-only RED.
+"""QG-2-B4-A1: actual API-to-Launcher one-shot Intent RED-to-GREEN suite.
 
-Execute the checked-in async API handler and the checked-in Launcher AST
-with inert collaborators. Synthetic successful Host preparation here tests
-only the transport seam: real experimental candidate Start is STILL HOLD
-in the independent Request / Step 6F / Direct Trainer gates.
+The original Tests-only RED exposed the missing API keyword; the unchanged
+eight target tests now require GREEN. Real API and Launcher AST are executed
+with inert Host collaborators. Synthetic positive preparation proves only
+transport; experimental candidate Start remains held in the real gates.
 """
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ class _ApiRunCase:
 
 
 class QG2B4A1ApiHandoffRed(unittest.TestCase):
-    """All eight targets must fail only on the genuine missing API handoff."""
+    """Eight original target RED cases now require real API handoff PASS."""
 
     def _absent(self, detail):
         self.fail(f"{MARKER}: {detail}")
