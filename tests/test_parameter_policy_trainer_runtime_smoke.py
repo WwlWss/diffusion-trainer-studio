@@ -105,12 +105,14 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
         args = _scheduler_args(policy_path, **(scheduler_overrides or {}))
         model = TinyFlux()
         structural_bias = model.double_blocks[0].bias
+        typed_admission = make_test_admission_kwargs(args, "flux-finetune")
         session = create_parameter_policy_session(
             args=args,
             train_type="flux-finetune",
             roots={"transformer": model},
             structural_frozen_parameters=(structural_bias,),
-            **make_test_admission_kwargs(args, "flux-finetune"),
+            admission_snapshot=typed_admission["admission_snapshot"],
+            admission_intent=typed_admission["admission_intent"],
         )
         observed = []
         scheduler = session.build_scheduler(
@@ -552,11 +554,13 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                     ParameterPolicyTrainerRuntimeError,
                     "capability\\.backend\\.audit_required",
                 ):
+                    typed_admission = make_test_admission_kwargs(args, "flux-finetune", expected_status="blocked")
                     create_parameter_policy_session(
                         args=args,
                         train_type="flux-finetune",
                         roots={"transformer": model},
-                        **make_test_admission_kwargs(args, "flux-finetune", expected_status="blocked"),
+                        admission_snapshot=typed_admission["admission_snapshot"],
+                        admission_intent=typed_admission["admission_intent"],
                     )
                 scan.assert_not_called()
 
@@ -875,12 +879,14 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             mixed_model = TinyFlux()
             mixed_bias = mixed_model.double_blocks[0].bias
+            typed_admission = make_test_admission_kwargs(mixed_args, "flux-finetune")
             mixed_session = create_parameter_policy_session(
                 args=mixed_args,
                 train_type="flux-finetune",
                 roots={"transformer": mixed_model},
                 structural_frozen_parameters=(mixed_bias,),
-                **make_test_admission_kwargs(mixed_args, "flux-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
             mixed_scheduler = mixed_session.build_scheduler(
                 self._scheduler_factory(mixed_args)
@@ -983,12 +989,14 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             )
             mixed_model = TinyFlux()
             mixed_bias = mixed_model.double_blocks[0].bias
+            typed_admission = make_test_admission_kwargs(mixed_args, "flux-finetune")
             mixed_session = create_parameter_policy_session(
                 args=mixed_args,
                 train_type="flux-finetune",
                 roots={"transformer": mixed_model},
                 structural_frozen_parameters=(mixed_bias,),
-                **make_test_admission_kwargs(mixed_args, "flux-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
             mixed_scheduler = mixed_session.build_scheduler(
                 self._scheduler_factory(mixed_args)
@@ -1685,11 +1693,13 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 lr_scheduler_args=["not-even-key-value"],
             )
             model = TinyFlux()
+            typed_admission = make_test_admission_kwargs(args, "flux-finetune")
             session = create_parameter_policy_session(
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
-                **make_test_admission_kwargs(args, "flux-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             def must_not_be_called(*_args, **_kwargs):
