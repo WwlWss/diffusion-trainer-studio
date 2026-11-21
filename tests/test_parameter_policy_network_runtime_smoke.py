@@ -8,6 +8,7 @@ import unittest
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
+from tests._parameter_policy_admission_fixtures import make_test_admission_kwargs
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -457,6 +458,7 @@ class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
+                **make_test_admission_kwargs(args, "flux-finetune"),
             )
 
             def get_scheduler_fix(child_args, optimizer, _num_processes):
