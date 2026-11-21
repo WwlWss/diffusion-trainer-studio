@@ -1,0 +1,141 @@
+name: DTS QG-2-B4-L1 Launcher one-job Intent transport Tests-only RED
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - "docs/qualification-gate-qg2b4l1-launcher-transport-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b4l1_launcher_red.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/training_api.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - "tests/test_parameter_policy_qg2b4l1_launcher_red.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/training_api.py"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  b4l1-exact:
+    name: "B4-L1 executable Launcher 8 RED, 6 PASS, B312 two-gap RED (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new and inherited Host suites
+        run: python -m py_compile tests/test_parameter_policy_qg2b4l1_launcher_red.py tests/test_parameter_policy_qg2b4_0_b312_rebase.py tests/test_parameter_policy_admission_red.py
+      - name: Six existing real Standard Launcher baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4l1_launcher_red import QG2B4L1LauncherBaselines
+          names = sorted(n for n in dir(QG2B4L1LauncherBaselines) if n.startswith("test_b4l90"))
+          if len(names) != 6 or any(sum(n.startswith(f"test_b4l{i}_") for n in names) != 1 for i in range(901,907)):
+              raise SystemExit(f"B4-L1 INVALID BASELINE DISCOVERY: {names}")
+          outcome = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B4L1LauncherBaselines(n) for n in names)
+          )
+          if (outcome.testsRun != 6 or outcome.failures or outcome.errors
+                  or outcome.skipped or outcome.expectedFailures or outcome.unexpectedSuccesses):
+              raise SystemExit("B4-L1 BASELINE REGRESSION")
+          print("QG-2-B4-L1 STANDARD LAUNCHER 6/6 PASS, no GPU/process creation")
+          PY
+      - name: Inherited 116, B4-0 six baselines and B312 exact two-gap RED
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import MARKER
+          from tests.test_parameter_policy_qg2b4_0_b312_rebase import QG2B40RebasedBaselines
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2B40RebasedBaselines)
+          if suite.countTestCases() != 6:
+              raise SystemExit("B4-L1 INVALID B4-0 BASELINE DISCOVERY")
+          result = unittest.TextTestRunner(verbosity=1).run(suite)
+          if (result.testsRun != 6 or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-L1 INHERITED B4-0 REGRESSION")
+          old = (
+              ("tests.test_parameter_policy_qg1b_trusted_producer",16),
+              ("tests.test_parameter_policy_qg1b_sr1",16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage",10),
+              ("tests.test_parameter_policy_qg2b2_cli_intent",8),
+              ("tests.test_parameter_policy_qg2b3a_snapshot_red",12),
+              ("tests.test_parameter_policy_qg2b3b_early_bridge_red",12),
+              ("tests.test_parameter_policy_qg2b3b_sr1_dynamic_host_red",8),
+              ("tests.test_parameter_policy_qg2b3c_late_session_red",10),
+              ("tests.test_parameter_policy_qg2b3c_late_dynamic_host",8),
+              ("tests.test_parameter_policy_qg2b3c_sr1_red",11),
+              ("tests.test_parameter_policy_qg2b3c_sr1_preapply_host",5),
+          )
+          total = 0
+          for name, count in old:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != count:
+                  raise SystemExit(f"B4-L1 INVALID INHERITED DISCOVERY {name}")
+              outcome = unittest.TextTestRunner(verbosity=1).run(suite)
+              total += outcome.testsRun
+              if (outcome.testsRun != count or outcome.failures or outcome.errors
+                      or outcome.skipped or outcome.expectedFailures
+                      or outcome.unexpectedSuccesses):
+                  raise SystemExit(f"B4-L1 INHERITED REGRESSION {name}")
+          if total != 116:
+              raise SystemExit(f"B4-L1 INVALID INHERITED TOTAL {total}")
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
+          if suite.countTestCases() != 16:
+              raise SystemExit("B4-L1 INVALID B312 DISCOVERY")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-L1 B312 ERROR/SKIP/xfail/xpass")
+          errors = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
+          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
+          if len(errors) != 1 or set(errors) != {expected}:
+              raise SystemExit(f"B4-L1 INVALID B312 FAILURE ID {list(errors)}")
+          prefix = MARKER + ": Direct Trainer / Launcher parity missing: "
+          trace = errors[expected]
+          if prefix not in trace:
+              raise SystemExit("B4-L1 B312 MARKER MISSING")
+          reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
+          if reasons != [
+              "typed strict-positive WebUI per-job Launcher intent and child CLI flag",
+              "API must pass PreparedTrainingConfig intent to Launcher",
+          ]:
+              raise SystemExit(f"B4-L1 B312 WRONG REASONS {reasons}")
+          print("QG-2-B4-L1 INHERITED VALID: 116 PASS + B4-0 six PASS + B312 one exact TWO-LINK RED")
+          PY
+      - name: Eight exact executable Launcher transport RED identities
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4l1_launcher_red import QG2B4L1LauncherRed, MARKER
+          names = sorted(n for n in dir(QG2B4L1LauncherRed) if n.startswith("test_b4l10"))
+          if len(names) != 8 or any(sum(n.startswith(f"test_b4l{i}_") for n in names) != 1 for i in range(101,109)):
+              raise SystemExit(f"B4-L1 INVALID RED DISCOVERY {names}")
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B4L1LauncherRed(n) for n in names)
+          )
+          if (result.testsRun != 8 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-L1 INVALID RED RUN: ERROR/SKIP/xfail/xpass")
+          errors = {case.id().rsplit(".",1)[-1]: trace for case, trace in result.failures}
+          bad = [name for name,trace in errors.items() if MARKER not in trace]
+          if len(errors) == 8 and set(errors) == set(names) and not bad:
+              print("QG-2-B4-L1 VALID TESTS-ONLY RED: B4L101-B4L108 EIGHT missing Launcher transport FAIL; B4L901-B4L906 SIX actual Standard PASS; B4-0 six PASS; inherited 116 PASS; B312 one exact two-gap RED")
+              raise SystemExit(1)
+          if errors:
+              raise SystemExit(f"B4-L1 INVALID RED IDENTITIES {list(errors)}, wrong markers={bad}")
+          print("QG-2-B4-L1 LAUNCHER GREEN CANDIDATE: requires independent review and B312/API still HOLD")
+          PY
