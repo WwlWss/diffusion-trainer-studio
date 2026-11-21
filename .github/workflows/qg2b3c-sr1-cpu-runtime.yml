@@ -7,6 +7,9 @@ on:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
       - "docs/qualification-gate-qg2b3c-sr1-cpu-runtime-tests-only-red.md"
       - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
       - "tests/test_parameter_policy_trainer_runtime_smoke.py"
       - "tests/test_parameter_policy_full_runtime_smoke.py"
       - "tests/test_parameter_policy_network_runtime_smoke.py"
@@ -18,6 +21,9 @@ on:
     paths:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
       - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
       - "tests/test_parameter_policy_trainer_runtime_smoke.py"
       - "tests/test_parameter_policy_full_runtime_smoke.py"
       - "tests/test_parameter_policy_network_runtime_smoke.py"
@@ -47,7 +53,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile new and inherited Host test suites
-        run: python -m py_compile tests/test_parameter_policy_qg2b3c_sr1_red.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py
+        run: python -m py_compile tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py tests/test_parameter_policy_qg2b3c_sr1_red.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py
       - name: Preserve inherited all-green and single B312 RED
         shell: bash
         run: |
@@ -84,6 +90,21 @@ jobs:
                   or "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in errors[expected]):
               raise SystemExit(f"SR1 UNEXPECTED CUMULATIVE RED: {sorted(errors)}")
           print("QG-2-B3-C-SR1 INHERITED VALID: 42 QG-1B/SR1, 8 B2, 12 B3-A, 12 B3-B, 8 B3-B-SR1, 10 B3-C, 8 Late Dynamic + 15 cumulative PASS, B312 one expected RED")
+          PY
+      - name: Execute real Stable and Dev Pre-Apply Host checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          name = "tests.test_parameter_policy_qg2b3c_sr1_preapply_host"
+          suite = unittest.defaultTestLoader.loadTestsFromName(name)
+          if suite.countTestCases() != 5:
+              raise SystemExit(f"SR1 PRE-APPLY DISCOVERY ERROR {suite.countTestCases()}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 5 or result.errors or result.failures or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("SR1 PRE-APPLY REGRESSION")
+          print("QG-2-B3-C-SR1 PRE-APPLY HOST 5/5 PASS")
           PY
       - name: Six exact historical missing-contract RED plus five baselines
         shell: bash
@@ -144,7 +165,7 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0"
-          python -m pip install "accelerate==1.6.0" "numpy==1.26.4"
+          python -m pip install "accelerate==1.6.0" "numpy==1.26.4" "schedulefree==1.4"
           python - <<'PY'
           import torch, accelerate
           assert torch.__version__.split("+")[0] == "2.7.0", torch.__version__
@@ -193,4 +214,34 @@ jobs:
               print("QG-2-B3-C-SR1 REAL CPU TORCH GREEN CANDIDATE: four actual Session smoke PASS")
           else:
               raise SystemExit(f"SR1 PARTIAL CPU MIGRATION: {errors}")
+          PY
+
+      - name: Run all 52 historical CPU Torch runtime smoke methods without skips
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = (
+              ("tests.test_parameter_policy_trainer_runtime_smoke", 40),
+              ("tests.test_parameter_policy_full_runtime_smoke", 3),
+              ("tests.test_parameter_policy_network_runtime_smoke", 8),
+              ("tests.test_parameter_policy_anima_runtime_smoke", 1),
+          )
+          total = 0
+          for name, expected in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"SR1 FULL CPU DISCOVERY MISMATCH {name}: {suite.countTestCases()}/{expected}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              total += result.testsRun
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(
+                      f"SR1 HISTORICAL CPU REGRESSION {name}: "
+                      f"failures={len(result.failures)} errors={len(result.errors)} "
+                      f"skips={len(result.skipped)}"
+                  )
+          if total != 52:
+              raise SystemExit(f"SR1 FULL CPU COUNT ERROR {total}")
+          print("QG-2-B3-C-SR1 FULL HISTORICAL CPU GREEN: 52/52 PASS, 0 ERROR/SKIP/xfail")
           PY
