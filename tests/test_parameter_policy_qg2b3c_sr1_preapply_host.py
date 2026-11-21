@@ -13,7 +13,10 @@ import textwrap
 import unittest
 
 from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
-from mikazuki.parameter_policy_admission import prepare_direct_trainer_admission
+from mikazuki.parameter_policy_admission import (
+    assess_component_training_admission,
+    prepare_direct_trainer_admission,
+)
 from tests.test_parameter_policy_qg2b3a_snapshot_red import _config, _policy, _write_policy
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,14 +120,15 @@ class QG2B3CSR1PreApplyHost(unittest.TestCase):
                     )
 
     def test_pa04_reclassification_drift_fails_even_if_hashes_match(self):
-        forged = replace(
-            self.snapshot,
-            admission=replace(
-                self.snapshot.admission, status="blocked",
-                runtime_blockers=("simulated late Host drift",),
-                host_admissible=False,
-            ),
+        held = assess_component_training_admission(
+            _policy("flux-finetune"),
+            train_type="flux-finetune",
+            effective_config=_config(full_bf16=True),
+            purpose="direct_trainer",
+            experimental_ack=False,
         )
+        self.assertEqual(held.status, "blocked")
+        forged = replace(self.snapshot, admission=held)
         bridge = SimpleNamespace(
             preflight_direct_trainer_admission=lambda **kwargs: forged,
         )
