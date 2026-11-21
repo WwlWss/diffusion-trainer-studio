@@ -1,4 +1,4 @@
-name: DTS QG-2-A2 API and WebUI scoped GREEN with B312 Direct Trainer RED (NO CUDA)
+name: DTS QG-2-A2 API and WebUI scoped GREEN with B312 Integrated GREEN (NO CUDA)
 
 on:
   push:
@@ -13,6 +13,9 @@ on:
       - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/training_launcher.py"
   pull_request:
     paths:
       - ".github/workflows/qg2a2-api-host.yml"
@@ -23,6 +26,9 @@ on:
       - "mikazuki/frontend_training_patch.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/training_launcher.py"
   workflow_dispatch:
 
 permissions:
@@ -114,34 +120,12 @@ jobs:
           print("QG-2-A2 inherited GREEN: 42 QG1B +12 adapter +12 B3B "
                 "+16 A1 +12 SR1 +5 lifecycle + legacy public API overlay")
           PY
-      - name: Preserve B301-B311 GREEN and precisely B312 integration RED
+      - name: Require B301-B312 and B901-B904 16/16 Integrated GREEN
         shell: bash
         run: |
           python - <<'PY'
-          import unittest
-          from tests.test_parameter_policy_admission_red import (
-              QG1B3QG2TargetedRed, QG1B3QG2ExistingBaselines, MARKER
-          )
-          targets = sorted(n for n in dir(QG1B3QG2TargetedRed)
-                           if n.startswith("test_b3"))
-          baselines = sorted(n for n in dir(QG1B3QG2ExistingBaselines)
-                             if n.startswith("test_b9"))
-          if len(targets) != 12 or len(baselines) != 4:
-              raise SystemExit("QG-2-A2 INVALID B3 DISCOVERY")
-          suite = unittest.TestSuite(
-              [QG1B3QG2TargetedRed(n) for n in targets]
-              + [QG1B3QG2ExistingBaselines(n) for n in baselines]
-          )
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or len(result.failures) != 1
-                  or actual != set(targets[-1:])
-                  or result.expectedFailures or result.unexpectedSuccesses
-                  or any(MARKER not in trace for _, trace in result.failures)):
-              raise SystemExit(f"QG-2-A2 INVALID B312 HOLD: {sorted(actual)}")
-          print("QG-2-A2 inherited: B301-B311+4 baselines GREEN; "
-                "B312 EXACT ONE INTENTIONAL RED, no Direct Trainer permission")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2a2-api-host")
           PY
       - name: Exact A201-A212 source RED or later fully tested scoped GREEN
         shell: bash

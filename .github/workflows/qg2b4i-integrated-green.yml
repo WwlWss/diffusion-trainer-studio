@@ -1,4 +1,4 @@
-name: DTS QG-2-B4-I all 13 inherited B312 workflow CI contract Tests-only RED
+name: DTS QG-2-B4-I all 13 inherited B312 workflows integrated GREEN
 on:
   push:
     branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
@@ -49,7 +49,7 @@ permissions:
   contents: read
 jobs:
   all-13-source-contracts:
-    name: "B4-I thirteen actual inherited CI RED + cumulative B312 already GREEN (${{ matrix.os }})"
+    name: "B4-I thirteen inherited CI GREEN + cumulative B312 GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 18
     strategy:
@@ -72,13 +72,13 @@ jobs:
           from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
           assert_cumulative_admission_green("QG-2-B4-I parent real Host baseline")
           PY
-      - name: Exactly thirteen actual stale workflow source failures (Tests-only RED)
+      - name: Thirteen real inherited workflow source contract tests GREEN
         shell: bash
         run: |
           python - <<'PY'
           import unittest
           from tests.test_parameter_policy_qg2b4i_ci_migration import (
-              QG2B4IInheritedWorkflowMigration, WORKFLOWS, MARKER,
+              QG2B4IInheritedWorkflowMigration, WORKFLOWS,
           )
           cases = sorted(n for n in dir(QG2B4IInheritedWorkflowMigration) if n.startswith("test_i1"))
           if len(WORKFLOWS) != 13 or len(cases) != 13 or len(set(WORKFLOWS)) != 13:
@@ -86,13 +86,11 @@ jobs:
           result = unittest.TextTestRunner(verbosity=2).run(
               unittest.TestSuite(QG2B4IInheritedWorkflowMigration(name) for name in cases)
           )
-          failures = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
-          if (result.testsRun != 13 or len(result.failures) != 13 or
-              set(failures) != set(cases) or
-              any(MARKER not in trace for trace in failures.values()) or
-              result.errors or result.skipped or result.expectedFailures or
-              result.unexpectedSuccesses):
-              raise SystemExit(f"B4-I INVALID MIGRATION RED: {sorted(failures)}, errors={len(result.errors)}")
-          print("QG-2-B4-I VALID TESTS-ONLY RED: 13 old workflow consumers fail exactly their true stale B312 contract; cumulative B312 remains real 16/16 PASS")
-          raise SystemExit(1)
+          if (result.testsRun != 13 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B4-I WORKFLOW CONTRACT REGRESSION: 13 actual PASS required; "
+                  f"fail={len(result.failures)}, error={len(result.errors)}"
+              )
+          print("QG-2-B4-I MIGRATION GREEN: 13/13 workflows require B312 16/16 true PASS; no stale expected-RED gate")
           PY

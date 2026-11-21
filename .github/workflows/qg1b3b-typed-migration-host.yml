@@ -13,6 +13,9 @@ on:
       - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "docs/qualification-gate-qg1b3b-typed-migration-contract.md"
+      - "tests/qg2b4i_ci_contract.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   pull_request:
     paths:
       - ".github/workflows/qg1b3b-typed-migration-host.yml"
@@ -23,6 +26,9 @@ on:
       - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "docs/qualification-gate-qg1b3b-typed-migration-contract.md"
+      - "tests/qg2b4i_ci_contract.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   workflow_dispatch:
 
 permissions:
@@ -76,7 +82,7 @@ jobs:
                   raise SystemExit("QG-1B3-B INVALID RED SHAPE")
               raise SystemExit("QG-1B3-B VALID TESTS-ONLY RED: 8 target FAIL /4 baseline PASS; intentionally failing")
           PY
-      - name: Preserve prior 42, B3-A 12, B301-B311 GREEN, and B312 staged RED
+      - name: Preserve prior 42, B3-A 12, B301-B312 Integrated GREEN
         shell: bash
         run: |
           python - <<'PY'
@@ -108,14 +114,6 @@ jobs:
               if (len(names) != high-low or result.testsRun != len(names)
                   or result.failures or result.errors or result.skipped):
                   raise SystemExit(f"QG1B3-B PREVIOUS GREEN REGRESSION: {cls}")
-          names = sorted(n for n in dir(QG1B3QG2TargetedRed)
-                         if n.startswith("test_b3") and 309 <= int(n[6:9]) <= 312)
-          suite = unittest.TestSuite(QG1B3QG2TargetedRed(n) for n in names)
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          if (len(names) != 4 or result.testsRun != 4 or actual != set(names[3:])
-              or len(result.failures) != 1 or result.errors or result.skipped
-              or any(MARKER not in trace for _, trace in result.failures)):
-              raise SystemExit(f"QG1B3-B INVALID INTEGRATION STAGE: {actual}")
-          print("QG1B3-B SCOPED GREEN: B309-B311 PASS, B312 EXACT ONE RED; QG2-A2/B STILL HOLD")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg1b3b-typed-migration-host")
           PY

@@ -18,6 +18,10 @@ on:
       - "mikazuki/parameter_policy_trainer.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   pull_request:
     paths:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
@@ -33,6 +37,10 @@ on:
       - "mikazuki/parameter_policy_trainer.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   workflow_dispatch:
 
 permissions:
@@ -56,7 +64,7 @@ jobs:
           python-version: "3.11"
       - name: Compile new and inherited Host test suites
         run: python -m py_compile tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py tests/test_parameter_policy_qg2b3c_sr1_red.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py
-      - name: Preserve inherited all-green and single B312 RED
+      - name: Preserve inherited all-green and B312 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'
@@ -80,18 +88,8 @@ jobs:
               if (result.testsRun != expected or result.failures or result.errors
                       or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
                   raise SystemExit(f"SR1 INHERITED GREEN REGRESSION {name}")
-          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
-          if suite.countTestCases() != 16:
-              raise SystemExit("SR1 INVALID CUMULATIVE DISCOVERY")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          errors = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
-          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or result.expectedFailures or result.unexpectedSuccesses
-                  or len(errors) != 1 or expected not in errors
-                  or "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in errors[expected]):
-              raise SystemExit(f"SR1 UNEXPECTED CUMULATIVE RED: {sorted(errors)}")
-          print("QG-2-B3-C-SR1 INHERITED VALID: 42 QG-1B/SR1, 8 B2, 12 B3-A, 12 B3-B, 8 B3-B-SR1, 10 B3-C, 8 Late Dynamic + 15 cumulative PASS, B312 one expected RED")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2b3c-sr1-cpu-runtime")
           PY
       - name: Execute real Stable and Dev Pre-Apply Host checks
         shell: bash

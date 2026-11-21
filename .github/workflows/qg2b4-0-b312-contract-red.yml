@@ -1,4 +1,4 @@
-name: DTS QG-2-B4-0 B312 rebased Host contract with API-only HOLD
+name: DTS QG-2-B4-0 B312 rebased Host contract Integrated GREEN
 
 on:
   push:
@@ -10,6 +10,7 @@ on:
       - "tests/test_parameter_policy_qg2b4_0_b312_rebase.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/app/training_api.py"
+      - "tests/qg2b4i_ci_contract.py"
   pull_request:
     paths:
       - ".github/workflows/qg2b4-0-b312-contract-red.yml"
@@ -18,6 +19,7 @@ on:
       - "tests/test_parameter_policy_qg2b4_0_b312_rebase.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/app/training_api.py"
+      - "tests/qg2b4i_ci_contract.py"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +27,7 @@ permissions:
 
 jobs:
   b312-exact-red:
-    name: "B4-0 6 baselines + 116 inherited + B312 API-only expected RED (${{ matrix.os }})"
+    name: "B4-0 6 baselines + 116 inherited + B312 integrated 16/16 GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -96,32 +98,10 @@ jobs:
               raise SystemExit(f"B4-0 INVALID INHERITED EXECUTION TOTAL: {total}")
           print("QG-2-B4-0 INHERITED 116/116 HOST PASS; 0 ERROR/SKIP/xfail/xpass")
           PY
-      - name: One exact B312 expected RED for the sole missing API handoff
+      - name: Cumulative B312 integrated 16/16 GREEN after API handoff
         shell: bash
         run: |
           python - <<'PY'
-          import unittest
-          from tests.test_parameter_policy_admission_red import MARKER
-          suite = unittest.defaultTestLoader.loadTestsFromName(
-              "tests.test_parameter_policy_admission_red"
-          )
-          if suite.countTestCases() != 16:
-              raise SystemExit(f"B4-0 INVALID CUMULATIVE DISCOVERY: {suite.countTestCases()} != 16")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or result.expectedFailures or result.unexpectedSuccesses):
-              raise SystemExit("B4-0 INVALID CUMULATIVE EXECUTION, SKIP, ERROR, xfail or xpass")
-          expected_case = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
-          observed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
-          if len(observed) != 1 or set(observed) != {expected_case}:
-              raise SystemExit(f"B4-0 INVALID B312 FAILURE IDENTITIES: {sorted(observed)}")
-          prefix = MARKER + ": Direct Trainer / Launcher parity missing: "
-          trace = observed[expected_case]
-          if prefix not in trace:
-              raise SystemExit(f"B4-0 B312 LOST ITS EXACT CUMULATIVE MARKER: {trace}")
-          reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
-          expected = ["API must pass PreparedTrainingConfig intent to Launcher"]
-          if reasons != expected:
-              raise SystemExit(f"B4-0 INVALID B312 REASONS: actual={reasons!r}; expected={expected!r}")
-          print("QG-2-B4-L2 REBASED B312 HOST VALID: 15 cumulative PASS, B312 exactly one expected API HANDOFF RED; B4001-B4006 6 PASS; inherited 116 PASS")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2b4-0-b312-contract-red")
           PY

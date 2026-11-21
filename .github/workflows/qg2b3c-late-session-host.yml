@@ -12,6 +12,10 @@ on:
       - "mikazuki/parameter_policy.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   pull_request:
     paths:
       - ".github/workflows/qg2b3c-late-session-host.yml"
@@ -19,6 +23,10 @@ on:
       - "mikazuki/parameter_policy_trainer.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   workflow_dispatch:
 permissions:
   contents: read
@@ -40,7 +48,7 @@ jobs:
           python-version: "3.11"
       - name: Compile Host harness (no torch/CUDA)
         run: python -m py_compile tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py
-      - name: Preserve QG-1B/SR1 B2 B3-A B3-B B3-B-SR1 green and single B312 red
+      - name: Preserve QG-1B/SR1 B2 B3-A B3-B B3-B-SR1 green and B312 integrated GREEN
         shell: bash
         run: |
           python - <<'PY'
@@ -62,18 +70,8 @@ jobs:
               if (result.testsRun != expected or result.failures or result.errors
                       or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
                   raise SystemExit(f"B3C INHERITED REGRESSION: {name}")
-          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
-          if suite.countTestCases() != 16:
-              raise SystemExit("B3C INVALID B312 DISCOVERY")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          failures = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
-          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or result.expectedFailures or result.unexpectedSuccesses
-                  or len(failures) != 1 or expected not in failures
-                  or "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in failures[expected]):
-              raise SystemExit(f"B3C B312 REGRESSION: {list(failures)}")
-          print("B3C INHERITED VALID: 42 QG-1B/SR1; 8 B2; 12 B3-A; 12 B3-B; 8 B3-B-SR1; 15 cumulative GREEN + exactly one B312 RED")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2b3c-late-session-host")
           PY
       - name: Dynamic late Host actual executed checks
         shell: bash
@@ -124,5 +122,5 @@ jobs:
               raise SystemExit(1)
           if fails:
               raise SystemExit(f"B3C INVALID RED IDENTITIES: {sorted(fails)} bad marker={bad}")
-          print("QG-2-B3-C SOURCE GREEN CANDIDATE: Late full-chain strict review required, B312 still HOLD")
+          print("QG-2-B3-C SOURCE GREEN CANDIDATE: Late full-chain strict review required, CUDA qualification still pending")
           PY

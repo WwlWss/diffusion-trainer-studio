@@ -1,4 +1,4 @@
-name: DTS QG-2-B1 Direct Trainer parity Tests-only RED (NO CUDA)
+name: DTS QG-2-B1 Direct Trainer parity integrated GREEN (NO CUDA)
 
 on:
   push:
@@ -34,6 +34,7 @@ on:
       - "tests/test_parameter_policy_qg1b_trusted_producer.py"
       - "tests/test_parameter_policy_qg1b_sr1.py"
       - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/qg2b4i_ci_contract.py"
   pull_request:
     paths:
       - ".github/workflows/qg1b3-qg2-admission-host.yml"
@@ -65,6 +66,7 @@ on:
       - "tests/test_parameter_policy_qg1b_trusted_producer.py"
       - "tests/test_parameter_policy_qg1b_sr1.py"
       - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/qg2b4i_ci_contract.py"
   workflow_dispatch:
 
 permissions:
@@ -72,7 +74,7 @@ permissions:
 
 jobs:
   admission-host:
-    name: "QG-2-B1 Direct Trainer parity: B301-B311 GREEN + B312 one RED; frozen 42 prior GREEN (${{ matrix.os }})"
+    name: "QG-2-B1 Direct Trainer parity: B301-B312 12 GREEN; frozen 42 prior GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 12
     strategy:
@@ -114,54 +116,10 @@ jobs:
               "16 QG1B +16 SR1 +10 D1, 0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
-      - name: "QG-2-B1 exact 16-case admission: B301-B311 GREEN + B312 RED"
+      - name: "QG-2-B1 exact 16-case admission: B301-B312 + B901-B904 GREEN"
         shell: bash
         run: |
           python - <<'PY'
-          import unittest
-          suite = unittest.defaultTestLoader.loadTestsFromName(
-              "tests.test_parameter_policy_admission_red"
-          )
-          if suite.countTestCases() != 16:
-              raise SystemExit(
-                  f"QG-1B3-QG2 INVALID DISCOVERY: {suite.countTestCases()} != 16"
-              )
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or result.expectedFailures or result.unexpectedSuccesses):
-              raise SystemExit(
-                  f"QG-1B3-QG2 INVALID RUN: {result.testsRun=} "
-                  f"ERROR={len(result.errors)} SKIP={len(result.skipped)} "
-                  f"xfail={len(result.expectedFailures)} "
-                  f"xpass={len(result.unexpectedSuccesses)}"
-              )
-          # Scoped QG-2-B1: only Direct Trainer / Launcher parity is still
-          # intentionally RED. Never treat the unfinished full contract as
-          # global GREEN, nor accept unexpected failures as qualification.
-          expected = {
-              "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent",
-          }
-          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          if result.failures:
-              unrelated = [
-                  case.id() for case, trace in result.failures
-                  if "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in trace
-              ]
-              if len(result.failures) != 1 or actual != expected or unrelated:
-                  raise SystemExit(
-                      f"QG-1B3-QG2 INVALID RED: failures={len(result.failures)} "
-                      f"actual={sorted(actual)} unrelated={unrelated}"
-                  )
-              print(
-                  "QG-2-B1 TESTS-ONLY RED: B301-B311 11 GREEN + "
-                  "B312 ONE INTENTIONAL RED + 4 baseline PASS, "
-                  "0 ERROR/SKIP/xfail/xpass; no production source changed, "
-                  "no execution or certificate unlock"
-              )
-              raise SystemExit(1)
-          print(
-              "QG-2-B1 CUMULATIVE HOST CONTRACT GREEN: "
-              "16/16 PASS and 42/42 prior GREEN; requires separate actual "
-              "launch-path/runtime/asset/Checkpoint review before merge"
-          )
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg1b3-qg2-admission-host")
           PY

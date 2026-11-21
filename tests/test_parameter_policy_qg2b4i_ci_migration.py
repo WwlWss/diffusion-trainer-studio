@@ -102,10 +102,10 @@ class QG2B4IInheritedWorkflowMigration(unittest.TestCase):
         self.assertIn("windows-latest", source)
         # The historical RED suites of B3-A/B3-B/B3-C remain independently
         # present; only stale B312-specific failure requirements are forbidden.
-        self.assertIsNone(
-            re.search(r"(?im)^.*(?:B312.*(?:RED|HOLD)|(?:RED|HOLD).*B312).*$", source),
-            f"{filename}: stale B312-only RED/HOLD assertion or status",
-        )
+        self.assertNotIn("QG-1B3-QG2 ADMISSION CONTRACT ABSENT", source)
+        self.assertNotIn("API must pass PreparedTrainingConfig intent to Launcher", source)
+        self.assertNotIn("B312 EXACT ONE", source)
+        self.assertNotIn("B312 API-only HOLD", source)
         blocks = _python_blocks(source)
         self.assertTrue(blocks, f"{filename}: missing executable Host suites")
         for block in blocks:

@@ -12,6 +12,10 @@ on:
       - "tests/test_parameter_policy_request_contract.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   pull_request:
     paths:
       - ".github/workflows/qg2a1-sr1-host.yml"
@@ -21,6 +25,10 @@ on:
       - "tests/test_parameter_policy_request_contract.py"
       - "mikazuki/training_request.py"
       - "mikazuki/training_config.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
   workflow_dispatch:
 
 permissions:
@@ -149,35 +157,10 @@ jobs:
               )
           print("QG-2-A1-SR1 TARGET+BASELINE GREEN: 8/8+4/4 PASS")
           PY
-      - name: Hold B312 as the exact remaining Direct Trainer integration RED
+      - name: Check cumulative B312 Integrated GREEN without granting CUDA qualification
         shell: bash
         run: |
           python - <<'PY'
-          import unittest
-          from tests.test_parameter_policy_admission_red import (
-              QG1B3QG2TargetedRed, QG1B3QG2ExistingBaselines, MARKER
-          )
-          names = sorted(
-              n for n in dir(QG1B3QG2TargetedRed) if n.startswith("test_b3")
-          )
-          baseline = sorted(
-              n for n in dir(QG1B3QG2ExistingBaselines)
-              if n.startswith("test_b9")
-          )
-          if len(names) != 12 or len(baseline) != 4:
-              raise SystemExit("QG-2-A1-SR1 BAD B3 INTEGRATION DISCOVERY")
-          suite = unittest.TestSuite(
-              [QG1B3QG2TargetedRed(n) for n in names]
-              + [QG1B3QG2ExistingBaselines(n) for n in baseline]
-          )
-          result = unittest.TextTestRunner(verbosity=1).run(suite)
-          actual = {case.id().rsplit(".", 1)[-1] for case, _ in result.failures}
-          expected = set(names[-1:])
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or len(result.failures) != 1 or actual != expected
-                  or result.expectedFailures or result.unexpectedSuccesses
-                  or any(MARKER not in trace for _, trace in result.failures)):
-              raise SystemExit(f"QG-2-A1-SR1 BAD B312 HOLD: {actual}")
-          print("QG-2-A1-SR1 scoped Host only: B301–B310+4 baselines PASS; "
-                "B311 GREEN; B312 exact one RED, no Direct Trainer permission.")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2a1-sr1-host")
           PY

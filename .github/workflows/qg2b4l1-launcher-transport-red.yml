@@ -8,18 +8,22 @@ on:
       - "tests/test_parameter_policy_qg2b4l1_launcher_red.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/app/training_api.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
   pull_request:
     paths:
       - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
       - "tests/test_parameter_policy_qg2b4l1_launcher_red.py"
       - "mikazuki/training_launcher.py"
       - "mikazuki/app/training_api.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   b4l1-exact:
-    name: "B4-L2 Launcher 8 GREEN, 6 Standard PASS, B312 API-only HOLD (${{ matrix.os }})"
+    name: "B4-L2 Launcher 8 GREEN, 6 Standard PASS, B312 Integrated GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -52,7 +56,7 @@ jobs:
               raise SystemExit("B4-L1 BASELINE REGRESSION")
           print("QG-2-B4-L1 STANDARD LAUNCHER 6/6 PASS, no GPU/process creation")
           PY
-      - name: Inherited 116, B4-0 six baselines and B312 exactly one API Handoff RED
+      - name: Inherited 116, B4-0 six baselines and B312 integrated 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'
@@ -92,25 +96,8 @@ jobs:
                   raise SystemExit(f"B4-L1 INHERITED REGRESSION {name}")
           if total != 116:
               raise SystemExit(f"B4-L1 INVALID INHERITED TOTAL {total}")
-          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
-          if suite.countTestCases() != 16:
-              raise SystemExit("B4-L1 INVALID B312 DISCOVERY")
-          result = unittest.TextTestRunner(verbosity=2).run(suite)
-          if (result.testsRun != 16 or result.errors or result.skipped
-                  or result.expectedFailures or result.unexpectedSuccesses):
-              raise SystemExit("B4-L1 B312 ERROR/SKIP/xfail/xpass")
-          errors = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
-          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
-          if len(errors) != 1 or set(errors) != {expected}:
-              raise SystemExit(f"B4-L1 INVALID B312 FAILURE ID {list(errors)}")
-          prefix = MARKER + ": Direct Trainer / Launcher parity missing: "
-          trace = errors[expected]
-          if prefix not in trace:
-              raise SystemExit("B4-L1 B312 MARKER MISSING")
-          reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
-          if reasons != ["API must pass PreparedTrainingConfig intent to Launcher"]:
-              raise SystemExit(f"B4-L1 B312 WRONG REASONS {reasons}")
-          print("QG-2-B4-L2 INHERITED VALID: 116 PASS + B4-0 six PASS + B312 exactly ONE API handoff RED")
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2b4l1-launcher-transport-red")
           PY
       - name: Eight exact executable Launcher transport GREEN plus six Standard baselines
         shell: bash
@@ -130,5 +117,5 @@ jobs:
           errors = {case.id().rsplit(".",1)[-1]: trace for case, trace in result.failures}
           if errors:
               raise SystemExit(f"B4-L2 LAUNCHER GREEN REGRESSION {list(errors)}")
-          print("QG-2-B4-L2 VALID SCOPED GREEN: B4L101-B4L108 EIGHT PASS; B4L901-B4L906 SIX Standard PASS; B4-0 six PASS; inherited 116 PASS; B312 sole API handoff expected RED")
+          print("QG-2-B4-L2 VALID SCOPED GREEN: B4L101-B4L108 EIGHT PASS; B4L901-B4L906 SIX Standard PASS; B4-0 six PASS; inherited 116 PASS; B312 integrated 16/16 GREEN")
           PY
