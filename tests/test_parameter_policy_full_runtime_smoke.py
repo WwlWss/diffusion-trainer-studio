@@ -118,11 +118,13 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
             unet = TinyDreamUNet()
             text_encoder = TinyTextEncoder()
             case_args = _args(policy_path)
+            typed_admission = make_test_admission_kwargs(case_args, "sd-dreambooth")
             session = create_parameter_policy_session(
                 args=case_args,
                 train_type="sd-dreambooth",
                 roots={"unet": unet, "text_encoder": text_encoder},
-                **make_test_admission_kwargs(case_args, "sd-dreambooth"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
             self.assertFalse(session.trains_prefix("unet."))
             self.assertTrue(session.trains_component("text_encoder"))
@@ -162,6 +164,7 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
                 te1.text_model.final_layer_norm.parameters()
             )
             case_args = _args(policy_path, train_text_encoder=True)
+            typed_admission = make_test_admission_kwargs(case_args, "sdxl-finetune")
             session = create_parameter_policy_session(
                 args=case_args,
                 train_type="sdxl-finetune",
@@ -171,7 +174,8 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
                     "text_encoder_2": te2,
                 },
                 structural_frozen_parameters=structural,
-                **make_test_admission_kwargs(case_args, "sdxl-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             owned = session.trainable_parameter_ids
@@ -203,11 +207,13 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
             policy_path = self._write_policy(temp_dir, _policy(components))
             flux = TinyFlux()
             case_args = _args(policy_path)
+            typed_admission = make_test_admission_kwargs(case_args, "flux-finetune")
             session = create_parameter_policy_session(
                 args=case_args,
                 train_type="flux-finetune",
                 roots={"transformer": flux},
-                **make_test_admission_kwargs(case_args, "flux-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             self.assertTrue(session.trains_component("transformer.double_stream"))
