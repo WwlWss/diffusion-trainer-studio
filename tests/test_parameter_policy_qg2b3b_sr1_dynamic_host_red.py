@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
+from mikazuki.parameter_policy_admission import fingerprint_effective_training_config
 
 ROOT = Path(__file__).resolve().parents[1]
 TRAINERS = ("scripts/stable/train_network.py", "scripts/dev/train_network.py")
@@ -153,7 +154,7 @@ class QG2B3BSR1DynamicHost(unittest.TestCase):
             fn = _as_host_function(
                 path, start, end,
                 dict(args=args, network=network, logger=logger, parameter_policy_requested=True,
-                     admission_snapshot=types.SimpleNamespace(effective_config_fingerprint="a" * 64)),
+                     admission_snapshot=types.SimpleNamespace(effective_config_fingerprint=fingerprint_effective_training_config(vars(args)))),
             )
             try:
                 fn()
@@ -164,6 +165,33 @@ class QG2B3BSR1DynamicHost(unittest.TestCase):
                 args.scale_weight_norms, True,
                 f"{MARKER}: {path} mutated an identity-bound arg after final Host snapshot",
             )
+
+
+    def test_sr106_network_prepare_cannot_mutate_snapshot_identity_silently(self):
+        class MutatingNetwork:
+            def prepare_network(self, args):
+                args.network_mutated_flag = True
+
+        for path in TRAINERS:
+            args = types.SimpleNamespace(
+                scale_weight_norms=False, parameter_policy_config="policy.json",
+                network_mutated_flag=False,
+            )
+            logger = types.SimpleNamespace(warning=lambda *a: None)
+            start = '        if hasattr(network, "prepare_network"):'
+            end = ("        train_unet = not args.network_train_text_encoder_only"
+                   if "/stable/" in path else "        self.post_process_network(")
+            fn = _as_host_function(
+                path, start, end,
+                dict(args=args, network=MutatingNetwork(), logger=logger,
+                     parameter_policy_requested=True,
+                     admission_snapshot=types.SimpleNamespace(
+                         effective_config_fingerprint=fingerprint_effective_training_config(vars(args))
+                     )),
+            )
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, "identity|fingerprint|mismatch"):
+                    fn()
 
 
 if __name__ == "__main__":
