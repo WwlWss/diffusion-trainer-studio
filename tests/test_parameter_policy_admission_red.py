@@ -1,8 +1,8 @@
-"""QG-1B3/QG-2 admission contract: 12 targeted RED + 4 real-source baselines.
+"""QG-1B3/QG-2 cumulative admission: B301-B311 GREEN, B312 scoped RED.
 
-The new admission adapter and Preview/Export/Start/Direct Trainer wiring do not
-exist yet. The 12 failures must identify exactly those absent contracts.
-No xfail/skip, no side effects, no physical CUDA or credential issuance.
+B4-0 rebases B312 onto the actual B3-A/B/C first-party contracts; the single
+intentional RED identifies ONLY missing API -> Launcher -> child CLI transport.
+It does not certify experimental Full-BF16 Start or live CUDA qualification.
 """
 from __future__ import annotations
 
@@ -407,16 +407,30 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
         ):
             missing.append("Direct Trainer purpose + strict acknowledgement + pure canonical Policy loader")
         policy_source = _source("mikazuki/parameter_policy.py")
-        if (
-            "def load_parameter_policy_sidecar" not in policy_source
-            or "import torch" in policy_source
-            or "from torch" in policy_source
-        ):
+        policy_tree = ast.parse(policy_source, filename="mikazuki/parameter_policy.py")
+        # B4-0: inspect actual AST imports, never unparsed documentation text.
+        # A module docstring explaining that we do not "import torch" is not
+        # a real heavy dependency and must not manufacture a B312 failure.
+        torch_imports = any(
+            (
+                isinstance(item, ast.Import)
+                and any(
+                    alias.name == "torch" or alias.name.startswith("torch.")
+                    for alias in item.names
+                )
+            ) or (
+                isinstance(item, ast.ImportFrom)
+                and item.module is not None
+                and (item.module == "torch" or item.module.startswith("torch."))
+            )
+            for item in ast.walk(policy_tree)
+        )
+        if "def load_parameter_policy_sidecar" not in policy_source or torch_imports:
             missing.append("shared torch-free canonical Policy sidecar loader/hash")
 
-        # The B2 CLI/parser/TOML contract is independently GREEN in the
-        # QG-2-B2 suite. B312 remains focused on the still-missing Admission
-        # preflight, model-aware Session and Launcher parity.
+        # B2 CLI and B3-A/B/C Host/Late contracts have separate verified
+        # tests. Check their real function names here; B312 now targets
+        # only the remaining Launcher/API transport gap.
 
         for trainer_path in (
             "scripts/stable/train_network.py",
@@ -427,7 +441,7 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             )
             if "admission_intent" not in _argument_names(train_fn):
                 missing.append(f"{trainer_path}: Trainer train() admission-intent parameter")
-            preflights = _call_lines(train_fn, "preflight_component_training_admission")
+            preflights = _call_lines(train_fn, "preflight_direct_trainer_admission")
             dataset = _call_lines(train_fn, "prepare_dataset_args")
             extra = _call_lines(train_fn, "assert_extra_args")
             accelerator = _call_lines(train_fn, "prepare_accelerator")
@@ -487,12 +501,18 @@ class QG1B3QG2TargetedRed(unittest.TestCase):
             "scripts/dev/library/dts_parameter_policy_bridge.py",
         ):
             bridge_code, bridge_fn = _maybe_source_fn(
-                bridge_path, "preflight_component_training_admission"
+                bridge_path, "preflight_direct_trainer_admission"
             )
             if (
                 not bridge_code
-                or "prepare_direct_trainer_admission" not in _called_names(bridge_fn)
-                or "parameter_policy_trainer" in bridge_code
+                # The actual first-party factory is invoked as an attribute:
+                # admission.prepare_direct_trainer_admission(...), not a bare
+                # function call. _called_names() intentionally misses this.
+                or not _call_lines(bridge_fn, "prepare_direct_trainer_admission")
+                or 'importlib.import_module("mikazuki.parameter_policy_admission")'
+                not in bridge_code
+                or "load_parameter_policy_trainer(" in bridge_code
+                or "mikazuki.parameter_policy_trainer" in bridge_code
             ):
                 missing.append(f"{bridge_path}: pure lazy Direct Trainer admission bridge")
 
