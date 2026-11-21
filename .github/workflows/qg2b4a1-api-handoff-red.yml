@@ -1,4 +1,4 @@
-name: DTS QG-2-B4-A1 API to Launcher one-job Handoff exact Tests-only RED
+name: DTS QG-2-B4-A1 API to Launcher one-job Handoff scoped GREEN
 on:
   push:
     branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
@@ -19,7 +19,7 @@ permissions:
   contents: read
 jobs:
   b4a1-exact-red:
-    name: "B4-A1 API 8 genuine RED, 6 baseline PASS, B312 API-only HOLD (${{ matrix.os }})"
+    name: "B4-A1 API 8 GREEN, 6 baseline PASS, B312 cumulative GREEN (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -70,30 +70,20 @@ jobs:
               raise SystemExit(f"B4-A1 WRONG INHERITED TOTAL: {total}")
           print("B4-A1 PRIOR HOST 116/116 + B4-0 6/6 + B4-L2 14/14 GREEN")
           PY
-      - name: Preserve B312 exact sole API-handoff RED identity
+      - name: All cumulative 16 first-party Admission cases truly PASS
         shell: bash
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_admission_red import MARKER
-          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_admission_red")
           if suite.countTestCases() != 16:
-              raise SystemExit("B4-A1 BAD CUMULATIVE B312 DISCOVERY")
+              raise SystemExit(f"B4-A1 INVALID CUMULATIVE DISCOVERY {suite.countTestCases()}")
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
-          failures = {t.id().rsplit(".", 1)[-1]: trace for t, trace in result.failures}
-          if (result.testsRun != 16 or result.errors or result.skipped or
-              result.expectedFailures or result.unexpectedSuccesses or
-              set(failures) != {expected} or len(result.failures) != 1):
-              raise SystemExit(f"B4-A1 WRONG B312 FAILURE ID OR COUNT: {list(failures)}")
-          prefix = MARKER + ": Direct Trainer / Launcher parity missing: "
-          trace = failures[expected]
-          if prefix not in trace:
-              raise SystemExit("B4-A1 B312 LOST ORIGINAL MARKER")
-          reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
-          if reasons != ["API must pass PreparedTrainingConfig intent to Launcher"]:
-              raise SystemExit(f"B4-A1 WRONG B312 REASONS: {reasons}")
-          print("B4-A1 inherited cumulative 15 PASS + B312 exactly one API-handoff RED")
+          if (result.testsRun != 16 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-A1 CUMULATIVE REGRESSION: B301-B312 + B901-B904 MUST BE 16 PASS")
+          print("B4-A1 cumulative 16/16 GREEN including real B312 API-to-Launcher handoff")
           PY
       - name: Six actual existing API / Launcher baseline PASS
         shell: bash
@@ -111,25 +101,19 @@ jobs:
               raise SystemExit("B4-A1 INVALID BASELINE: must be six real PASS")
           print("B4-A1 API baseline B4A901-B4A906 SIX REAL PASS")
           PY
-      - name: Eight exact real API handoff RED and no unrelated exceptions
+      - name: Eight exact real API-to-Launcher Handoff tests GREEN
         shell: bash
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_qg2b4a1_api_handoff_red import (
-              QG2B4A1ApiHandoffRed, MARKER,
-          )
+          from tests.test_parameter_policy_qg2b4a1_api_handoff_red import QG2B4A1ApiHandoffRed
           names = sorted(n for n in dir(QG2B4A1ApiHandoffRed) if n.startswith("test_b4a10"))
           if len(names) != 8 or any(sum(n.startswith(f"test_b4a{i}_") for n in names) != 1 for i in range(101,109)):
               raise SystemExit(f"B4-A1 INVALID EIGHT TARGET DISCOVERY: {names}")
           suite = unittest.TestSuite(QG2B4A1ApiHandoffRed(n) for n in names)
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          failures = {t.id().rsplit(".", 1)[-1]: trace for t, trace in result.failures}
-          if (result.testsRun != 8 or result.errors or result.skipped or
-              result.expectedFailures or result.unexpectedSuccesses or
-              len(result.failures) != 8 or set(failures) != set(names) or
-              any(MARKER not in trace for trace in failures.values())):
-              raise SystemExit(f"B4-A1 INVALID RED: {list(failures)}, errors={len(result.errors)}")
-          print("QG-2-B4-A1 VALID TESTS-ONLY RED: 8 actual missing-Handoff FAIL + 6 genuine baseline PASS; inherited 136 PASS; B312 sole API RED; 0 ERROR/SKIP/xfail/xpass")
-          raise SystemExit(1)
+          if (result.testsRun != 8 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-A1 TARGET REGRESSION: ALL EIGHT REAL HANDOFF CASES MUST PASS")
+          print("QG-2-B4-A1 SCOPED GREEN: 8/8 real API Handoff PASS + 6/6 baseline PASS; inherited 136/136 PASS; cumulative B312 16/16 PASS; no ERROR/SKIP/xfail/xpass")
           PY

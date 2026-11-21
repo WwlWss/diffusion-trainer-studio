@@ -370,6 +370,7 @@ async def create_toml_file(request: Request):
         threads,
         page_train_type=str(page_type or prepared.train_type),
         run_id=run_id,
+        admission_intent=prepared.admission_intent,
     )
     if result.status == "success" and prepared.warnings:
         result.data = dict(result.data or {})
