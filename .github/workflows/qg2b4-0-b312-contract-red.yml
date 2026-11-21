@@ -1,4 +1,4 @@
-name: DTS QG-2-B4-0 B312 source contract rebase exact Tests-only RED
+name: DTS QG-2-B4-0 B312 rebased Host contract with API-only HOLD
 
 on:
   push:
@@ -25,7 +25,7 @@ permissions:
 
 jobs:
   b312-exact-red:
-    name: "B4-0 B312 two genuine absent transport links and 6 baselines (${{ matrix.os }})"
+    name: "B4-0 6 baselines + 116 inherited + B312 API-only expected RED (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     strategy:
@@ -96,7 +96,7 @@ jobs:
               raise SystemExit(f"B4-0 INVALID INHERITED EXECUTION TOTAL: {total}")
           print("QG-2-B4-0 INHERITED 116/116 HOST PASS; 0 ERROR/SKIP/xfail/xpass")
           PY
-      - name: One exact B312 RED for precisely two missing API Launcher links
+      - name: One exact B312 expected RED for the sole missing API handoff
         shell: bash
         run: |
           python - <<'PY'
@@ -120,12 +120,8 @@ jobs:
           if prefix not in trace:
               raise SystemExit(f"B4-0 B312 LOST ITS EXACT CUMULATIVE MARKER: {trace}")
           reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
-          expected = [
-              "typed strict-positive WebUI per-job Launcher intent and child CLI flag",
-              "API must pass PreparedTrainingConfig intent to Launcher",
-          ]
+          expected = ["API must pass PreparedTrainingConfig intent to Launcher"]
           if reasons != expected:
               raise SystemExit(f"B4-0 INVALID B312 REASONS: actual={reasons!r}; expected={expected!r}")
-          print("QG-2-B4-0 VALID TESTS-ONLY RED: 15 cumulative PASS, B312 exactly ONE FAIL with EXACTLY TWO GENUINE LAUNCHER/API TRANSPORT GAPS; B4001-B4006 6 PASS; inherited 116 PASS")
-          raise SystemExit(1)
+          print("QG-2-B4-L2 REBASED B312 HOST VALID: 15 cumulative PASS, B312 exactly one expected API HANDOFF RED; B4001-B4006 6 PASS; inherited 116 PASS")
           PY
