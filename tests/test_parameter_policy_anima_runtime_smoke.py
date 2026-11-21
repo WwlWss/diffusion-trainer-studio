@@ -93,11 +93,13 @@ class ParameterPolicyAnimaRuntimeSmokeTests(unittest.TestCase):
             dit = TinyAnima()
             qwen = TinyQwen()
             case_args = _args(path)
+            typed_admission = make_test_admission_kwargs(case_args, "anima-finetune")
             session = create_parameter_policy_session(
                 args=case_args,
                 train_type="anima-finetune",
                 roots={"dit": dit, "qwen3": qwen},
-                **make_test_admission_kwargs(case_args, "anima-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
             self.assertTrue(session.trains_component("dit.self_attention"))
             self.assertFalse(session.trains_component("dit.cross_attention"))
