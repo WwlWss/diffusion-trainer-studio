@@ -5,6 +5,8 @@ Python Host harness; it never imports sd-scripts, torch, or a real model.
 """
 import ast
 import sys
+import runpy
+import tempfile
 import textwrap
 import types
 import unittest
@@ -199,6 +201,62 @@ class QG2B3BSR1DynamicHost(unittest.TestCase):
                 unprotected.append(path + ": no identity guard")
         if unprotected:
             self.fail(MARKER + ": " + "; ".join(unprotected))
+
+
+    def test_sr107_real_pure_bridges_reload_changed_sidecar_and_rehash(self):
+        from tests.test_parameter_policy_qg2b3a_snapshot_red import _policy, _write_policy, _config
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.json"
+            _write_policy(path)
+            for bridge_path in (
+                "scripts/stable/library/dts_parameter_policy_bridge.py",
+                "scripts/dev/library/dts_parameter_policy_bridge.py",
+            ):
+                bridge = runpy.run_path(str(ROOT / bridge_path))
+                gate = bridge["preflight_direct_trainer_admission"]
+                first = gate(
+                    policy_path=path, train_type="sd-lora",
+                    effective_config=_config(),
+                    admission_intent=DirectTrainerAdmissionIntent(False),
+                )
+                updated = _policy()
+                updated["components"]["unet.attention.adapter"]["learning_rate"] = 2e-4
+                _write_policy(path, updated)
+                changed = gate(
+                    policy_path=path, train_type="sd-lora",
+                    effective_config=_config(),
+                    admission_intent=DirectTrainerAdmissionIntent(False),
+                )
+                self.assertNotEqual(first.policy_hash, changed.policy_hash)
+                self.assertEqual(first.effective_config_fingerprint, changed.effective_config_fingerprint)
+                _write_policy(path)
+
+    def test_sr108_supported_network_does_not_trigger_false_identity_error(self):
+        class SupportedNetwork:
+            def prepare_network(self, args):
+                pass
+            def apply_max_norm_regularization(self):
+                pass
+
+        for path in TRAINERS:
+            args = types.SimpleNamespace(
+                scale_weight_norms=True, parameter_policy_config="policy.json",
+                unchanged=True,
+            )
+            snapshot = types.SimpleNamespace(
+                effective_config_fingerprint=fingerprint_effective_training_config(vars(args))
+            )
+            start = '        if hasattr(network, "prepare_network"):'
+            end = ("        train_unet = not args.network_train_text_encoder_only"
+                   if "/stable/" in path else "        self.post_process_network(")
+            fn = _as_host_function(
+                path, start, end,
+                dict(args=args, network=SupportedNetwork(),
+                     logger=types.SimpleNamespace(warning=lambda *a: None),
+                     parameter_policy_requested=True, admission_snapshot=snapshot),
+            )
+            fn()
+            self.assertTrue(args.scale_weight_norms)
 
 
 if __name__ == "__main__":
