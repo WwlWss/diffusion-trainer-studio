@@ -399,10 +399,29 @@ class NetworkTrainer:
         if hasattr(network, "prepare_network"):
             network.prepare_network(args)
         if args.scale_weight_norms and not hasattr(network, "apply_max_norm_regularization"):
+            if parameter_policy_requested:
+                raise ValueError(
+                    "Component Policy cannot silently disable scale_weight_norms "
+                    "after the final Host Admission identity snapshot."
+                )
             logger.warning(
                 "warning: scale_weight_norms is specified but the network does not support it / scale_weight_normsが指定されていますが、ネットワークが対応していません"
             )
             args.scale_weight_norms = False
+        if parameter_policy_requested:
+            # A model/network hook may mutate args even without explicit
+            # assignments in this Trainer. All fields are identity-bound:
+            # never ignore drift or silently recanonicalize the snapshot.
+            from mikazuki.parameter_policy_admission import (
+                fingerprint_effective_training_config,
+            )
+            if (
+                fingerprint_effective_training_config(vars(args))
+                != admission_snapshot.effective_config_fingerprint
+            ):
+                raise ValueError(
+                    "Direct Trainer post-network effective config identity mismatch."
+                )
 
         train_unet = not args.network_train_text_encoder_only
         train_text_encoder = self.is_train_text_encoder(args)
