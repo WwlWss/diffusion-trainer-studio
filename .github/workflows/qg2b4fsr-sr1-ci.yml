@@ -27,8 +27,8 @@ permissions:
   contents: read
 jobs:
   sr1-ci-exact:
-    name: "B4-FSR-SR1 source contract (\${{ matrix.os }})"
-    runs-on: \${{ matrix.os }}
+    name: "B4-FSR-SR1 source contract (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 17
     strategy:
       fail-fast: false
