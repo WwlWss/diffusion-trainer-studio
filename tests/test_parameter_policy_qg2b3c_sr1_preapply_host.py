@@ -31,9 +31,13 @@ END = "        # B3-C-SR1 PRE-APPLY IDENTITY GUARD END"
 def _run_guard(path, *, args, frozen, intent, bridge, active=True):
     text = (ROOT / path).read_text(encoding="utf-8")
     start = text.index(BEGIN)
-    stop = text.index(END, start)
+    # Execute through the actual attach call to prove denied identity never
+    # enters network.apply_to(), not just that the guard raises somewhere.
+    apply_position = text.index("network.apply_to(", text.index(END, start))
+    stop = text.index("\n", apply_position)
     statements = textwrap.dedent(text[start:stop])
     script = "def check():\n" + textwrap.indent(statements, "    ")
+    applied = []
     local = dict(
         args=args,
         admission_snapshot=frozen,
@@ -41,9 +45,16 @@ def _run_guard(path, *, args, frozen, intent, bridge, active=True):
         parameter_policy_requested=active,
         parameter_policy_train_type="sd-lora",
         dts_parameter_policy_bridge=bridge,
+        self=SimpleNamespace(is_train_text_encoder=lambda _args: True),
+        network=SimpleNamespace(apply_to=lambda *params: applied.append(params)),
+        train_unet=True,
+        train_text_encoder=True,
+        text_encoder=object(),
+        unet=object(),
     )
     exec(compile(script, path, "exec"), local)
     local["check"]()
+    return applied
 
 
 class QG2B3CSR1PreApplyHost(unittest.TestCase):
@@ -81,10 +92,11 @@ class QG2B3CSR1PreApplyHost(unittest.TestCase):
         for path in PATHS:
             with self.subTest(path=path):
                 calls = []
-                _run_guard(
+                applied = _run_guard(
                     path, args=self.args, frozen=self.snapshot,
                     intent=self.intent, bridge=self._bridge(calls),
                 )
+                self.assertEqual(len(applied), 1)
                 self.assertEqual(len(calls), 1)
                 self.assertIs(calls[0]["admission_intent"], self.intent)
                 self.assertEqual(calls[0]["effective_config"], vars(self.args))
@@ -148,10 +160,11 @@ class QG2B3CSR1PreApplyHost(unittest.TestCase):
         )
         for path in PATHS:
             with self.subTest(path=path):
-                _run_guard(
+                applied = _run_guard(
                     path, args=self.args, frozen=self.snapshot,
                     intent=None, bridge=bridge, active=False,
                 )
+                self.assertEqual(len(applied), 1)
 
 
 if __name__ == "__main__":
