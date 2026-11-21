@@ -102,6 +102,7 @@ class _LauncherCase:
         ast.fix_missing_locations(module)
         globals_ = {
             "APIResponse": SimpleNamespace,
+            "RequestAdmissionIntent": RequestAdmissionIntent,
             "ACCELERATE_GPU_CONFIG": self.config,
             "validate_cuda_training_runtime": self._gpu,
             "tm": self.task_manager,
