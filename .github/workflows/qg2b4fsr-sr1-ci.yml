@@ -1,4 +1,4 @@
-name: DTS QG-2-B4-FSR-SR1 exact CI source contract Tests-only RED
+name: DTS QG-2-B4-FSR-SR1 exact CI coverage and reachability scoped GREEN
 on:
   push:
     branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
@@ -63,22 +63,20 @@ jobs:
               raise SystemExit("B4-FSR-SR1 2 BASELINE FAILURES")
           print("B4-FSR-SR1 2/2 real mutation parser PASS")
           PY
-      - name: Exactly fifteen real source contract RED before CI migration
+      - name: Exactly fifteen real executable CI and trigger contracts GREEN
         shell: bash
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_qg2b4fsr_sr1_ci import QG2B4FSRSR1Targeted, MARKER
+          from tests.test_parameter_policy_qg2b4fsr_sr1_ci import QG2B4FSRSR1Targeted
           suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2B4FSRSR1Targeted)
           if suite.countTestCases() != 15:
               raise SystemExit(f"B4-FSR-SR1 BAD DISCOVERY {suite.countTestCases()}")
           result = unittest.TextTestRunner(verbosity=2).run(suite)
-          fails = [trace for _, trace in result.failures]
-          if (result.testsRun != 15 or len(fails) != 15 or
-              any(MARKER not in trace for trace in fails) or
-              result.errors or result.skipped or result.expectedFailures or
-              result.unexpectedSuccesses):
-              raise SystemExit(f"B4-FSR-SR1 BAD RED: {len(fails)} failures, {len(result.errors)} errors")
-          print("B4-FSR-SR1 VALID TESTS-ONLY RED: 15 actual source failure identities, 2/2 baseline PASS, cumulative 16/16 PASS")
-          raise SystemExit(1)
+          if (result.testsRun != 15 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B4-FSR-SR1 NOT GREEN: {len(result.failures)} FAIL "
+                  f"{len(result.errors)} ERROR")
+          print("B4-FSR-SR1 VALID SCOPED GREEN: 15/15 true contract PASS, 2/2 mutation baselines PASS, B312 16/16 PASS")
           PY

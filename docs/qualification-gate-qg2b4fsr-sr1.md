@@ -7,3 +7,6 @@ Tests-only RED: 15 genuine independent source failures. SR101 checks integration
 Minimal GREEN after exact dual-OS RED: update B4-I central push path dependency coverage with broad mikazuki/**, scripts/stable/**, scripts/dev/**, tests/** prefixes; include main branch; make pull_request unfiltered. Preserve its stable job ID. Move the existing B312 assertion of each of 13 workflows into one standalone bash/Python 3.11 Step without erasing other inherited checks. Turn this SR1 workflow from explicit expected-RED to 15/15 real GREEN. Do not edit production training, Step 6F, CUDA or optimizer gates.
 
 Treat older SD3 scope-test mismatch, queued QG1B3-B and required checks as independent merge dependencies. No PR merge until later independent FSR.
+## Frozen evidence and staged Green
+
+Tests-only RED accepted at 4e42a9b4ce9d83d35e0dd7c87717043b3064cc66, dual-OS Actions run 44951637251: 15/15 genuine source-contract FAIL, 2/2 mutation baselines PASS and cumulative 16/16 Admission PASS. An earlier GitHub matrix-expression parse error on 22941499 was repaired before counting RED. SR1-Green staged the 13 inherited workflows as one commit, then the central trigger and CI harness as a separate commit; exact HEAD revalidation and Final Strict Review are required.

@@ -111,6 +111,11 @@ class QG2B4IInheritedWorkflowMigration(unittest.TestCase):
         for block in blocks:
             ast.parse(block, filename=f"{filename}:embedded-python")
 
+        # SR1: the actual cumulative check must be in one dedicated, enabled,
+        # fail-closed execution step; source-string membership is insufficient.
+        from tests.test_parameter_policy_qg2b4fsr_sr1_ci import require_executable_step
+        require_executable_step(source, filename)
+
     def test_i101_qg1b3_qg2_admission_host(self):
         self._verify("qg1b3-qg2-admission-host.yml")
 
