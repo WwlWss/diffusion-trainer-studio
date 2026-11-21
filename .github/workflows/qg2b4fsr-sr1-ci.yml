@@ -1,0 +1,84 @@
+name: DTS QG-2-B4-FSR-SR1 exact CI source contract Tests-only RED
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b4fsr-sr1-ci.yml"
+      - "tests/test_parameter_policy_qg2b4fsr_sr1_ci.py"
+      - ".github/workflows/qg2b4i-integrated-green.yml"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - ".github/workflows/qg2a2-api-host.yml"
+      - ".github/workflows/qg2b2-cli-intent-host.yml"
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - ".github/workflows/qg2b3b-early-bridge-host.yml"
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sr1-ci-exact:
+    name: "B4-FSR-SR1 source contract (\${{ matrix.os }})"
+    runs-on: \${{ matrix.os }}
+    timeout-minutes: 17
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile SR1 tests and original Admission gate
+        run: python -m py_compile tests/test_parameter_policy_qg2b4fsr_sr1_ci.py tests/qg2b4i_ci_contract.py
+      - name: Existing cumulative 16/16 Admission must remain GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("B4-FSR-SR1 parent baseline")
+          PY
+      - name: Two true mutation parser baselines must PASS
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4fsr_sr1_ci import QG2B4FSRSR1Baselines
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2B4FSRSR1Baselines)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 2 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-FSR-SR1 2 BASELINE FAILURES")
+          print("B4-FSR-SR1 2/2 real mutation parser PASS")
+          PY
+      - name: Exactly fifteen real source contract RED before CI migration
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4fsr_sr1_ci import QG2B4FSRSR1Targeted, MARKER
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2B4FSRSR1Targeted)
+          if suite.countTestCases() != 15:
+              raise SystemExit(f"B4-FSR-SR1 BAD DISCOVERY {suite.countTestCases()}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          fails = [trace for _, trace in result.failures]
+          if (result.testsRun != 15 or len(fails) != 15 or
+              any(MARKER not in trace for trace in fails) or
+              result.errors or result.skipped or result.expectedFailures or
+              result.unexpectedSuccesses):
+              raise SystemExit(f"B4-FSR-SR1 BAD RED: {len(fails)} failures, {len(result.errors)} errors")
+          print("B4-FSR-SR1 VALID TESTS-ONLY RED: 15 actual source failure identities, 2/2 baseline PASS, cumulative 16/16 PASS")
+          raise SystemExit(1)
+          PY
