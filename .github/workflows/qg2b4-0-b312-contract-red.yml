@@ -1,0 +1,131 @@
+name: DTS QG-2-B4-0 B312 source contract rebase exact Tests-only RED
+
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - "docs/qualification-gate-qg2b4-0-b312-contract-tests-only-red.md"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_qg2b4_0_b312_rebase.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/training_api.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - "docs/qualification-gate-qg2b4-0-b312-contract-tests-only-red.md"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/test_parameter_policy_qg2b4_0_b312_rebase.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/app/training_api.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  b312-exact-red:
+    name: "B4-0 B312 two genuine absent transport links and 6 baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile source contract and real B4-0 baseline tests
+        run: python -m py_compile tests/test_parameter_policy_admission_red.py tests/test_parameter_policy_qg2b4_0_b312_rebase.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3c_late_dynamic_host.py
+      - name: Run six real independent B4-0 Host baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4_0_b312_rebase import QG2B40RebasedBaselines
+          names = sorted(n for n in dir(QG2B40RebasedBaselines) if n.startswith("test_b400"))
+          if len(names) != 6:
+              raise SystemExit(f"B4-0 INVALID BASELINE DISCOVERY: {names}")
+          for n in range(1, 7):
+              if sum(name.startswith(f"test_b400{n}_") for name in names) != 1:
+                  raise SystemExit(f"B4-0 INVALID BASELINE ID: B400{n}")
+          suite = unittest.TestSuite(QG2B40RebasedBaselines(n) for n in names)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 6 or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B4-0 BASELINE REGRESSION: fail={len(result.failures)}, "
+                  f"error={len(result.errors)}, skipped={len(result.skipped)}"
+              )
+          print("QG-2-B4-0 SIX REAL MODERNIZED BASELINES PASS; 0 ERROR/SKIP/xfail/xpass")
+          PY
+      - name: Preserve source-qualified inherited Host gate coverage
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          checks = (
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_qg2b2_cli_intent", 8),
+              ("tests.test_parameter_policy_qg2b3a_snapshot_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_early_bridge_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_sr1_dynamic_host_red", 8),
+              ("tests.test_parameter_policy_qg2b3c_late_session_red", 10),
+              ("tests.test_parameter_policy_qg2b3c_late_dynamic_host", 8),
+              ("tests.test_parameter_policy_qg2b3c_sr1_red", 11),
+              ("tests.test_parameter_policy_qg2b3c_sr1_preapply_host", 5),
+          )
+          total = 0
+          for name, expected in checks:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"B4-0 INVALID INHERITED DISCOVERY {name}: {suite.countTestCases()} != {expected}")
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              total += result.testsRun
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures
+                      or result.unexpectedSuccesses):
+                  raise SystemExit(f"B4-0 INHERITED REGRESSION {name}")
+          if total != 116:
+              raise SystemExit(f"B4-0 INVALID INHERITED EXECUTION TOTAL: {total}")
+          print("QG-2-B4-0 INHERITED 116/116 HOST PASS; 0 ERROR/SKIP/xfail/xpass")
+          PY
+      - name: One exact B312 RED for precisely two missing API Launcher links
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_admission_red import MARKER
+          suite = unittest.defaultTestLoader.loadTestsFromName(
+              "tests.test_parameter_policy_admission_red"
+          )
+          if suite.countTestCases() != 16:
+              raise SystemExit(f"B4-0 INVALID CUMULATIVE DISCOVERY: {suite.countTestCases()} != 16")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B4-0 INVALID CUMULATIVE EXECUTION, SKIP, ERROR, xfail or xpass")
+          expected_case = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
+          observed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
+          if len(observed) != 1 or set(observed) != {expected_case}:
+              raise SystemExit(f"B4-0 INVALID B312 FAILURE IDENTITIES: {sorted(observed)}")
+          prefix = MARKER + ": Direct Trainer / Launcher parity missing: "
+          trace = observed[expected_case]
+          if prefix not in trace:
+              raise SystemExit(f"B4-0 B312 LOST ITS EXACT CUMULATIVE MARKER: {trace}")
+          reasons = trace.split(prefix, 1)[1].splitlines()[0].split("; ")
+          expected = [
+              "typed strict-positive WebUI per-job Launcher intent and child CLI flag",
+              "API must pass PreparedTrainingConfig intent to Launcher",
+          ]
+          if reasons != expected:
+              raise SystemExit(f"B4-0 INVALID B312 REASONS: actual={reasons!r}; expected={expected!r}")
+          print("QG-2-B4-0 VALID TESTS-ONLY RED: 15 cumulative PASS, B312 exactly ONE FAIL with EXACTLY TWO GENUINE LAUNCHER/API TRANSPORT GAPS; B4001-B4006 6 PASS; inherited 116 PASS")
+          raise SystemExit(1)
+          PY
