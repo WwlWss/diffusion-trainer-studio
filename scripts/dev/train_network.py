@@ -835,6 +835,8 @@ class NetworkTrainer:
                 args=args,
                 train_type=parameter_policy_train_type,
                 roots={"network": network},
+                admission_snapshot=admission_snapshot,
+                admission_intent=admission_intent,
             )
             train_unet, train_text_encoder = self.configure_parameter_policy_training(
                 args,
