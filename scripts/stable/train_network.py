@@ -425,6 +425,38 @@ class NetworkTrainer:
 
         train_unet = not args.network_train_text_encoder_only
         train_text_encoder = self.is_train_text_encoder(args)
+        # B3-C-SR1 PRE-APPLY IDENTITY GUARD START
+        # Pure read-only Host recheck before any LoRA adapter is attached to
+        # the actual model. The post-apply Late Session remains mandatory.
+        if parameter_policy_requested:
+            pre_apply_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=dict(vars(args)),
+                admission_intent=admission_intent,
+            )
+            try:
+                admission_snapshot.assert_matches(
+                    policy_hash=pre_apply_snapshot.policy_hash,
+                    effective_config_fingerprint=pre_apply_snapshot.effective_config_fingerprint,
+                    train_type=pre_apply_snapshot.train_type,
+                    experimental_ack=pre_apply_snapshot.experimental_ack,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Direct Trainer Pre-Apply Admission snapshot identity mismatch."
+                ) from exc
+            if pre_apply_snapshot.admission != admission_snapshot.admission:
+                raise ValueError(
+                    "Direct Trainer Pre-Apply first-party Admission classification drift."
+                )
+            if pre_apply_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError(
+                    "Direct Trainer Pre-Apply Admission is held: "
+                    + pre_apply_snapshot.admission.status
+                )
+        # B3-C-SR1 PRE-APPLY IDENTITY GUARD END
+
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
 
         if args.network_weights is not None:
