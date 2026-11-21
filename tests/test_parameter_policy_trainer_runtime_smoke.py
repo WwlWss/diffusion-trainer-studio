@@ -550,7 +550,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             ) as scan:
                 with self.assertRaisesRegex(
                     ParameterPolicyTrainerRuntimeError,
-                    "full_bf16",
+                    "capability\\.backend\\.audit_required",
                 ):
                     create_parameter_policy_session(
                         args=args,
