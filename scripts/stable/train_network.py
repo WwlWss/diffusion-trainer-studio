@@ -441,6 +441,8 @@ class NetworkTrainer:
                 args=args,
                 train_type=parameter_policy_train_type,
                 roots={"network": network},
+                admission_snapshot=admission_snapshot,
+                admission_intent=admission_intent,
             )
             train_unet = parameter_policy_session.trains_prefix("unet.")
             train_text_encoder = parameter_policy_session.trains_prefix("text_encoder")
