@@ -22,7 +22,11 @@ from typing import Any
 
 import torch
 
-from mikazuki.parameter_policy import serialize_parameter_policy, validate_parameter_policy
+from mikazuki.parameter_policy import (
+    load_parameter_policy_sidecar,
+    serialize_parameter_policy,
+    validate_parameter_policy,
+)
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
 from mikazuki.parameter_policy_execution import (
     ParameterPolicyExecutionContract,
@@ -185,25 +189,16 @@ def _policy_path(args: object) -> str:
 
 
 def load_parameter_policy_file(path: str | os.PathLike[str]) -> tuple[dict[str, Any], str]:
-    target = Path(path)
-    if not target.is_file():
-        raise ParameterPolicyTrainerRuntimeError(
-            f"Parameter Policy file does not exist: {target}"
-        )
-    try:
-        payload = json.loads(target.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise ParameterPolicyTrainerRuntimeError(
-            f"Unable to read Parameter Policy JSON: {target}: {exc}"
-        ) from exc
-    try:
-        canonical = validate_parameter_policy(payload)
-    except ValueError as exc:
-        raise ParameterPolicyTrainerRuntimeError(str(exc)) from exc
+    """Share the strict canonical Host parser with Early Admission.
 
-    _canonical_path, canonical_text = serialize_parameter_policy(canonical)
-    digest = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
-    return canonical, digest
+    Preserve the existing Trainer-specific error contract for late callers.
+    """
+    try:
+        return load_parameter_policy_sidecar(path)
+    except (TypeError, ValueError, OSError, UnicodeError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            f"Unable to read Parameter Policy JSON: {path}: {exc}"
+        ) from exc
 
 
 def load_parameter_policy_train_flags(
