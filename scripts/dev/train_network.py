@@ -816,6 +816,10 @@ class NetworkTrainer:
 
         self.post_process_network(args, accelerator, network, text_encoders, unet)
 
+        # apply network to unet and text_encoder
+        train_unet = not args.network_train_text_encoder_only
+        train_text_encoder = self.is_train_text_encoder(args)
+        # Revalidate immediately before this actual model mutation.
         # B3-C-SR1 PRE-APPLY IDENTITY GUARD START
         # Pure read-only Host recheck before any LoRA adapter is attached to
         # the actual model. The post-apply Late Session remains mandatory.
@@ -847,10 +851,6 @@ class NetworkTrainer:
                     + pre_apply_snapshot.admission.status
                 )
         # B3-C-SR1 PRE-APPLY IDENTITY GUARD END
-
-        # apply network to unet and text_encoder
-        train_unet = not args.network_train_text_encoder_only
-        train_text_encoder = self.is_train_text_encoder(args)
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
 
         if args.network_weights is not None:
