@@ -1,0 +1,113 @@
+name: DTS QG-2-B3-C Late Session Tests-only RED (NO CUDA)
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - "docs/qualification-gate-qg2b3c-late-session-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b3c_late_session_red.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - "tests/test_parameter_policy_qg2b3c_late_session_red.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  b3c-exact:
+    name: QG-2-B3-C 6 RED + 4 PASS
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Host harness (no torch/CUDA)
+        run: python -m py_compile tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py
+      - name: Preserve QG-1B/SR1 B2 B3-A B3-B B3-B-SR1 green and single B312 red
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          green = (
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_qg2b2_cli_intent", 8),
+              ("tests.test_parameter_policy_qg2b3a_snapshot_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_early_bridge_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_sr1_dynamic_host_red", 8),
+          )
+          for name, expected in green:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"B3C INVALID GREEN DISCOVERY: {name} expected {expected}, got {suite.countTestCases()}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(f"B3C INHERITED REGRESSION: {name}")
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_admission_red")
+          if suite.countTestCases() != 16:
+              raise SystemExit("B3C INVALID B312 DISCOVERY")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          failures = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
+          expected = "test_b312_direct_trainer_uses_same_admission_and_explicit_cli_intent"
+          if (result.testsRun != 16 or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses
+                  or len(failures) != 1 or expected not in failures
+                  or "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in failures[expected]):
+              raise SystemExit(f"B3C B312 REGRESSION: {list(failures)}")
+          print("B3C INHERITED VALID: 42 QG-1B/SR1; 8 B2; 12 B3-A; 12 B3-B; 8 B3-B-SR1; 15 cumulative GREEN + exactly one B312 RED")
+          PY
+      - name: Assert six exact new RED identities with four passing baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b3c_late_session_red import (
+              QG2B3CLateTargetedRed, QG2B3CLateBaselines, MARKER,
+          )
+          target = sorted(x for x in dir(QG2B3CLateTargetedRed) if x.startswith("test_b3c3"))
+          baseline = sorted(x for x in dir(QG2B3CLateBaselines) if x.startswith("test_b3c9"))
+          if len(target) != 6 or len(baseline) != 4:
+              raise SystemExit(f"B3C INVALID DISCOVERY: {len(target)} + {len(baseline)}")
+          for i in range(301, 307):
+              if sum(x.startswith(f"test_b3c{i}_") for x in target) != 1:
+                  raise SystemExit(f"B3C TARGET ID {i} INVALID")
+          for i in range(901, 905):
+              if sum(x.startswith(f"test_b3c{i}_") for x in baseline) != 1:
+                  raise SystemExit(f"B3C BASELINE ID {i} INVALID")
+          a = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B3CLateTargetedRed(x) for x in target)
+          )
+          b = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B3CLateBaselines(x) for x in baseline)
+          )
+          if (a.testsRun != 6 or b.testsRun != 4 or a.errors or b.errors
+                  or a.skipped or b.skipped or a.expectedFailures or b.expectedFailures
+                  or a.unexpectedSuccesses or b.unexpectedSuccesses or b.failures):
+              raise SystemExit("B3C INVALID EXECUTION")
+          fails = {case.id().rsplit(".", 1)[-1]: trace for case, trace in a.failures}
+          bad = [case for case, trace in fails.items() if MARKER not in trace]
+          if len(fails) == 6 and set(fails) == set(target) and not bad:
+              print("QG-2-B3-C VALID TESTS-ONLY RED: B3C301-B3C306 6 exact FAIL + B3C901-B3C904 4 genuine PASS; 0 ERROR/SKIP/xfail/xpass")
+              raise SystemExit(1)
+          if fails:
+              raise SystemExit(f"B3C INVALID RED IDENTITIES: {sorted(fails)} bad marker={bad}")
+          print("QG-2-B3-C SOURCE GREEN CANDIDATE: Late full-chain strict review required, B312 still HOLD")
+          PY
