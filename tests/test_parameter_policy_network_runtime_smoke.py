@@ -454,11 +454,13 @@ class ParameterPolicyNetworkRuntimeSmokeTests(unittest.TestCase):
             policy_path.write_text(json.dumps(policy), encoding="utf-8")
             args = _args(policy_path)
             model = TinyFlux()
+            typed_admission = make_test_admission_kwargs(args, "flux-finetune")
             session = create_parameter_policy_session(
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
-                **make_test_admission_kwargs(args, "flux-finetune"),
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             def get_scheduler_fix(child_args, optimizer, _num_processes):
