@@ -684,6 +684,8 @@ class SD3C2AScopeContractTests(unittest.TestCase):
     def test_direct_trainer_preserves_independent_strict_asset_gate(self):
         if importlib.util.find_spec("torch") is None:
             self.skipTest("direct-trainer integration runs in pinned CPU runtime smoke")
+        from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
+        from mikazuki.parameter_policy_admission import prepare_direct_trainer_admission
         from mikazuki.parameter_policy_trainer import (
             ParameterPolicyTrainerRuntimeError,
             create_parameter_policy_session,
@@ -696,27 +698,60 @@ class SD3C2AScopeContractTests(unittest.TestCase):
         spec = config(missing)
         spec["parameter_policy_config"] = str(sidecar)
         fake = execution.ExecutionFeatureQualification(
-            "qualified", "test-only qualified", "test:sd3c2a-future",
+            "qualified", "test-only historical release row", "test:sd3c2a-future",
         )
         with patch.dict(
             execution.FULL_BF16_BACKEND_QUALIFICATIONS, {"sd3-lora": fake},
         ), patch(
             "mikazuki.parameter_policy_trainer.scan_parameter_roots",
             side_effect=AssertionError("must reject before scanning roots"),
-        ), self.assertRaisesRegex(
-            ParameterPolicyTrainerRuntimeError, "existing absolute local",
-        ):
-            create_parameter_policy_session(
-                args=spec, train_type="sd3-lora", roots={},
+        ) as scan:
+            # The original execution/asset gate continues to inspect the
+            # *actual* missing local model, even under a synthetic release row.
+            asset_blockers = execution.parameter_policy_execution_blockers(
+                policy,
+                train_type="sd3-lora", effective_config=spec, require_assets=True,
             )
+            self.assertIn("existing absolute local", " ".join(asset_blockers))
+
+            # New B3-A/B/C production API requires exact immutable Early
+            # Snapshot and typed CLI intent, not a nullable fake permission.
+            intent = DirectTrainerAdmissionIntent()
+            snapshot = prepare_direct_trainer_admission(
+                str(sidecar),
+                train_type="sd3-lora", effective_config=spec,
+                admission_intent=intent,
+            )
+            self.assertEqual(snapshot.admission.status, "blocked")
+            self.assertIn(
+                "capability.backend.audit_required",
+                " ".join(snapshot.admission.runtime_blockers),
+            )
+            with self.assertRaisesRegex(
+                ParameterPolicyTrainerRuntimeError,
+                "Late Direct Trainer Admission remains held: blocked",
+            ):
+                create_parameter_policy_session(
+                    args=spec, train_type="sd3-lora", roots={},
+                    admission_snapshot=snapshot, admission_intent=intent,
+                )
+            scan.assert_not_called()
 
     def test_direct_trainer_r1_r2_production_namespace_reaches_parameter_scan(self):
+        # Retain this historical test ID for the pinned runtime-smoke workflow.
+        # After B3-C it must prove R1/R2 never *reach* parameter scan while
+        # SD3 source capability is unreviewed, even when a legacy release row
+        # claims qualified. Scope geometry remains tested independently.
         if importlib.util.find_spec("torch") is None:
             self.skipTest("direct-trainer integration runs in pinned CPU runtime smoke")
-        from mikazuki.parameter_policy_trainer import create_parameter_policy_session
-
-        qualified = execution.ExecutionFeatureQualification(
-            "qualified", "test-only qualified", "test:sd3c2a-future",
+        from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
+        from mikazuki.parameter_policy_admission import prepare_direct_trainer_admission
+        from mikazuki.parameter_policy_trainer import (
+            ParameterPolicyTrainerRuntimeError,
+            create_parameter_policy_session,
+        )
+        fake = execution.ExecutionFeatureQualification(
+            "qualified", "test-only historical release row", "test:sd3c2a-future",
         )
         for label, policy, accumulation in (
             ("r1", make_policy(), 1),
@@ -726,8 +761,6 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                 _name, canonical = serialize_parameter_policy(policy)
                 sidecar = self.root / (label + "-policy.json")
                 sidecar.write_text(canonical, encoding="utf-8")
-                # This is the representation the production Trainer passes to
-                # create_parameter_policy_session after prepare_dataset_args.
                 spec = config(self.model, accumulation=accumulation)
                 spec.update(
                     parameter_policy_config=str(sidecar),
@@ -735,20 +768,39 @@ class SD3C2AScopeContractTests(unittest.TestCase):
                     network_dropout=None,
                     enable_bucket=False,
                 )
-                sentinel = "R1_R2_SCOPE_ACCEPTED_REACHED_PARAMETER_SCAN"
+                self.assertEqual(
+                    sd3.sd3_full_bf16_config_blockers(policy, spec), [],
+                )
+                intent = DirectTrainerAdmissionIntent()
                 with patch.dict(
                     execution.FULL_BF16_BACKEND_QUALIFICATIONS,
-                    {"sd3-lora": qualified},
+                    {"sd3-lora": fake},
                 ), patch(
                     "mikazuki.parameter_policy_trainer.scan_parameter_roots",
-                    side_effect=RuntimeError(sentinel),
-                ) as scan, self.assertRaisesRegex(RuntimeError, sentinel):
-                    create_parameter_policy_session(
-                        args=argparse.Namespace(**spec),
-                        train_type="sd3-lora",
-                        roots={},
+                    side_effect=AssertionError(
+                        "unreviewed SD3 must never scan live parameter roots"
+                    ),
+                ) as scan:
+                    snapshot = prepare_direct_trainer_admission(
+                        str(sidecar),
+                        train_type="sd3-lora", effective_config=spec,
+                        admission_intent=intent,
                     )
-                scan.assert_called_once()
+                    self.assertEqual(snapshot.admission.status, "blocked")
+                    self.assertIn(
+                        "capability.backend.audit_required",
+                        " ".join(snapshot.admission.runtime_blockers),
+                    )
+                    with self.assertRaisesRegex(
+                        ParameterPolicyTrainerRuntimeError,
+                        "Late Direct Trainer Admission remains held: blocked",
+                    ):
+                        create_parameter_policy_session(
+                            args=argparse.Namespace(**spec),
+                            train_type="sd3-lora", roots={},
+                            admission_snapshot=snapshot, admission_intent=intent,
+                        )
+                    scan.assert_not_called()
 
     def test_actual_safetensors_header_reader_on_small_cpu_fixture(self):
         if (
