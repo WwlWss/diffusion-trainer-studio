@@ -175,42 +175,42 @@ class QG2B4L1LauncherRed(unittest.TestCase):
         self.assertEqual(fixture.submissions, baseline.submissions)
         self.assertNotIn(ACK, fixture.submissions[0][0])
 
+    def _verify_bad_intents_before_gpu(self, values):
+        # Aggregate every variant into ONE test-method failure, so the strict
+        # CI can freeze eight exact RED identities without losing coverage.
+        wrong = []
+        for value in values:
+            fixture = _LauncherCase()
+            descriptor = repr(value)
+            try:
+                fixture.invoke(intent=value)
+            except (TypeError, ValueError) as exc:
+                if "unexpected keyword argument 'admission_intent'" in str(exc):
+                    wrong.append(f"{descriptor}: Launcher lacks admission_intent parameter")
+                elif "intent" not in str(exc).lower():
+                    wrong.append(f"{descriptor}: rejection did not identify invalid intent: {exc}")
+            except Exception as exc:
+                wrong.append(f"{descriptor}: wrong exception {type(exc).__name__}: {exc}")
+            else:
+                wrong.append(f"{descriptor}: improperly accepted invalid intent")
+            if fixture.gpu_calls or fixture.submissions or fixture.scheduled:
+                wrong.append(f"{descriptor}: invoked GPU/task/async before rejecting intent")
+        if wrong:
+            self.missing("; ".join(wrong))
+
     def test_b4l104_structural_impostors_fail_before_gpu_or_task(self):
-        bad_values = (
+        self._verify_bad_intents_before_gpu((
             True, {"experimental_full_bf16_ack": True, "origin": "webui_start"},
             SimpleNamespace(experimental_full_bf16_ack=True, origin="webui_start"),
             object(),
-        )
-        for value in bad_values:
-            fixture = _LauncherCase()
-            with self.subTest(value=type(value).__name__):
-                with self.assertRaises((TypeError, ValueError)) as raised:
-                    self.launch_with_intent(
-                        fixture, value,
-                        "nontyped Request intent must be rejected before GPU",
-                    )
-                self.assertIn("intent", str(raised.exception).lower())
-                self.assertEqual(fixture.gpu_calls, [])
-                self.assertEqual(fixture.submissions, [])
-                self.assertEqual(fixture.scheduled, [])
+        ))
 
     def test_b4l105_corrupted_typed_origin_or_bool_fail_before_side_effects(self):
         wrong_origin = RequestAdmissionIntent(True, "webui_start")
         object.__setattr__(wrong_origin, "origin", "default")
         wrong_boolean = RequestAdmissionIntent(True, "webui_start")
         object.__setattr__(wrong_boolean, "experimental_full_bf16_ack", 1)
-        for intent in (wrong_origin, wrong_boolean):
-            fixture = _LauncherCase()
-            with self.subTest(intent=repr(intent)):
-                with self.assertRaises((TypeError, ValueError)) as raised:
-                    self.launch_with_intent(
-                        fixture, intent,
-                        "corrupted typed Request intent must be rejected before GPU",
-                    )
-                self.assertIn("intent", str(raised.exception).lower())
-                self.assertEqual(fixture.gpu_calls, [])
-                self.assertEqual(fixture.submissions, [])
-                self.assertEqual(fixture.scheduled, [])
+        self._verify_bad_intents_before_gpu((wrong_origin, wrong_boolean))
 
     def test_b4l106_positive_then_absent_or_false_never_replays_or_persists(self):
         positive = _LauncherCase()
