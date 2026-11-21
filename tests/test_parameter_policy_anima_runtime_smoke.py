@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from tests._parameter_policy_admission_fixtures import make_test_admission_kwargs
 
 
 _RUNTIME_DEPS_AVAILABLE = all(
@@ -91,10 +92,12 @@ class ParameterPolicyAnimaRuntimeSmokeTests(unittest.TestCase):
             path = self._write(temp_dir, policy)
             dit = TinyAnima()
             qwen = TinyQwen()
+            case_args = _args(path)
             session = create_parameter_policy_session(
-                args=_args(path),
+                args=case_args,
                 train_type="anima-finetune",
                 roots={"dit": dit, "qwen3": qwen},
+                **make_test_admission_kwargs(case_args, "anima-finetune"),
             )
             self.assertTrue(session.trains_component("dit.self_attention"))
             self.assertFalse(session.trains_component("dit.cross_attention"))
