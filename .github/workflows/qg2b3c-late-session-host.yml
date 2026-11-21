@@ -6,6 +6,7 @@ on:
       - ".github/workflows/qg2b3c-late-session-host.yml"
       - "docs/qualification-gate-qg2b3c-late-session-tests-only-red.md"
       - "tests/test_parameter_policy_qg2b3c_late_session_red.py"
+      - "tests/test_parameter_policy_qg2b3c_late_dynamic_host.py"
       - "mikazuki/parameter_policy_trainer.py"
       - "mikazuki/parameter_policy_admission.py"
       - "mikazuki/parameter_policy.py"
@@ -38,7 +39,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile Host harness (no torch/CUDA)
-        run: python -m py_compile tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py
+        run: python -m py_compile tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/test_parameter_policy_admission_red.py
       - name: Preserve QG-1B/SR1 B2 B3-A B3-B B3-B-SR1 green and single B312 red
         shell: bash
         run: |
@@ -73,6 +74,20 @@ jobs:
                   or "QG-1B3-QG2 ADMISSION CONTRACT ABSENT" not in failures[expected]):
               raise SystemExit(f"B3C B312 REGRESSION: {list(failures)}")
           print("B3C INHERITED VALID: 42 QG-1B/SR1; 8 B2; 12 B3-A; 12 B3-B; 8 B3-B-SR1; 15 cumulative GREEN + exactly one B312 RED")
+          PY
+      - name: Dynamic late Host actual executed checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_qg2b3c_late_dynamic_host")
+          if suite.countTestCases() != 8:
+              raise SystemExit(f"B3C INVALID DYNAMIC DISCOVERY: {suite.countTestCases()}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("B3C LATE DYNAMIC HOST REGRESSION")
+          print("QG-2-B3-C DYNAMIC LATE HOST 8/8 PASS")
           PY
       - name: Assert six exact new RED identities with four passing baselines
         shell: bash
