@@ -10,6 +10,7 @@ import weakref
 from unittest import mock
 from pathlib import Path
 from types import SimpleNamespace
+from tests._parameter_policy_admission_fixtures import make_test_admission_kwargs
 
 
 _REQUIRED_MODULES = ("torch", "accelerate")
@@ -108,6 +109,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
             train_type="flux-finetune",
             roots={"transformer": model},
             structural_frozen_parameters=(structural_bias,),
+            **make_test_admission_kwargs(args, "flux-finetune"),
         )
         observed = []
         scheduler = session.build_scheduler(
@@ -876,6 +878,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 train_type="flux-finetune",
                 roots={"transformer": mixed_model},
                 structural_frozen_parameters=(mixed_bias,),
+                **make_test_admission_kwargs(mixed_args, "flux-finetune"),
             )
             mixed_scheduler = mixed_session.build_scheduler(
                 self._scheduler_factory(mixed_args)
@@ -983,6 +986,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 train_type="flux-finetune",
                 roots={"transformer": mixed_model},
                 structural_frozen_parameters=(mixed_bias,),
+                **make_test_admission_kwargs(mixed_args, "flux-finetune"),
             )
             mixed_scheduler = mixed_session.build_scheduler(
                 self._scheduler_factory(mixed_args)
@@ -1683,6 +1687,7 @@ class ParameterPolicyTrainerRuntimeSmokeTests(unittest.TestCase):
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
+                **make_test_admission_kwargs(args, "flux-finetune"),
             )
 
             def must_not_be_called(*_args, **_kwargs):
