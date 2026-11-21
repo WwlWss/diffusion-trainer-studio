@@ -27,6 +27,12 @@ from mikazuki.parameter_policy import (
     serialize_parameter_policy,
     validate_parameter_policy,
 )
+from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
+from mikazuki.parameter_policy_admission import (
+    DirectTrainerAdmissionSnapshot,
+    assess_component_training_admission,
+    fingerprint_effective_training_config,
+)
 from mikazuki.parameter_policy_compat import parameter_policy_v1_semantic_blockers
 from mikazuki.parameter_policy_execution import (
     ParameterPolicyExecutionContract,
@@ -1615,12 +1621,63 @@ def create_parameter_policy_session(
     args: object,
     train_type: str,
     roots: Mapping[str, Any],
+    admission_snapshot: DirectTrainerAdmissionSnapshot,
+    admission_intent: DirectTrainerAdmissionIntent,
     structural_frozen_parameters: Iterable[Any] = (),
 ) -> ParameterPolicyTrainerSession:
     """Compile one trainer job into routing/runtime ownership exactly once."""
 
+    # Late gate requires the exact out-of-band invocation identity. Neither a
+    # caller-owned bool nor a serialized config field may authorize execution.
+    if type(admission_snapshot) is not DirectTrainerAdmissionSnapshot:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission requires a first-party frozen snapshot."
+        )
+    if type(admission_intent) is not DirectTrainerAdmissionIntent:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission requires typed one-shot CLI intent."
+        )
     effective_config = _effective_config(args)
     policy, policy_hash = load_parameter_policy_file(_policy_path(args))
+
+    # The final B3-B snapshot was bound before model allocation. Independently
+    # re-read the sidecar and all effective args before touching parameter roots.
+    late_backend = str(train_type or "").strip().lower()
+    try:
+        admission_snapshot.assert_matches(
+            policy_hash=policy_hash,
+            effective_config_fingerprint=fingerprint_effective_training_config(effective_config),
+            train_type=late_backend,
+            experimental_ack=admission_intent.experimental_full_bf16_ack,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission snapshot identity mismatch."
+        ) from exc
+
+    # The Early decision is not a launch credential. Reclassify the *actual*
+    # reloaded Policy and current config through the first-party Host gate.
+    late_admission = assess_component_training_admission(
+        policy,
+        train_type=late_backend,
+        effective_config=effective_config,
+        purpose="direct_trainer",
+        experimental_ack=admission_intent.experimental_full_bf16_ack,
+    )
+    if late_admission != admission_snapshot.admission:
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission result drifted from the frozen snapshot."
+        )
+    if late_admission.status in ("blocked", "ack_required", "experimental_host_candidate"):
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission remains held: "
+            + late_admission.status + "; "
+            + "; ".join(late_admission.runtime_blockers)
+        )
+    if late_admission.status not in ("inactive", "legacy_approved"):
+        raise ParameterPolicyTrainerRuntimeError(
+            "Late Direct Trainer Admission status is not executable."
+        )
 
     semantic_blockers = parameter_policy_v1_semantic_blockers(
         effective_config,
