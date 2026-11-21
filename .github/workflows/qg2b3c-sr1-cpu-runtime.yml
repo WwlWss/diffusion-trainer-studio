@@ -8,6 +8,7 @@ on:
       - "docs/qualification-gate-qg2b3c-sr1-cpu-runtime-tests-only-red.md"
       - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
       - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_real_late_cpu.py"
       - "tests/_parameter_policy_admission_fixtures.py"
       - "tests/_parameter_policy_low_level_fixtures.py"
       - "tests/test_parameter_policy_trainer_runtime_smoke.py"
@@ -22,6 +23,7 @@ on:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
       - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
       - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_real_late_cpu.py"
       - "tests/_parameter_policy_admission_fixtures.py"
       - "tests/_parameter_policy_low_level_fixtures.py"
       - "tests/test_parameter_policy_trainer_runtime_smoke.py"
@@ -244,4 +246,23 @@ jobs:
           if total != 52:
               raise SystemExit(f"SR1 FULL CPU COUNT ERROR {total}")
           print("QG-2-B3-C-SR1 FULL HISTORICAL CPU GREEN: 52/52 PASS, 0 ERROR/SKIP/xfail")
+          PY
+
+      - name: Six genuine imported Late Session pre-scan CPU safety checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          name = "tests.test_parameter_policy_qg2b3c_sr1_real_late_cpu"
+          suite = unittest.defaultTestLoader.loadTestsFromName(name)
+          if suite.countTestCases() != 6:
+              raise SystemExit(f"SR1 REAL LATE CPU DISCOVERY: {suite.countTestCases()} != 6")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 6 or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"SR1 REAL LATE CPU REGRESSION: fail={len(result.failures)} "
+                  f"error={len(result.errors)} skip={len(result.skipped)}"
+              )
+          print("QG-2-B3-C-SR1 REAL IMPORTED LATE CPU SECURITY: 6/6 PASS")
           PY
