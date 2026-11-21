@@ -70,6 +70,11 @@ jobs:
               if (result.testsRun != expected or result.failures or result.errors
                       or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
                   raise SystemExit(f"B3C INHERITED REGRESSION: {name}")
+          PY
+      - name: B312 Integrated Admission 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
           from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
           assert_cumulative_admission_green("QG-2-B4-I:qg2b3c-late-session-host")
           PY

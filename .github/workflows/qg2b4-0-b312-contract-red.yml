@@ -98,7 +98,7 @@ jobs:
               raise SystemExit(f"B4-0 INVALID INHERITED EXECUTION TOTAL: {total}")
           print("QG-2-B4-0 INHERITED 116/116 HOST PASS; 0 ERROR/SKIP/xfail/xpass")
           PY
-      - name: Cumulative B312 integrated 16/16 GREEN after API handoff
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'

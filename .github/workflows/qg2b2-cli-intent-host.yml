@@ -116,7 +116,7 @@ jobs:
           print("QG-2-B2 CLI INTENT GREEN: 8/8 PASS; all seven NetworkTrainer entrypoints, "
                 "Stable/Dev CLI, TOML rejection, output_config isolation")
           PY
-      - name: Require B312 Integrated GREEN
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'

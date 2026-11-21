@@ -116,7 +116,7 @@ jobs:
               "16 QG1B +16 SR1 +10 D1, 0 FAIL/ERROR/SKIP/xfail/xpass"
           )
           PY
-      - name: "QG-2-B1 exact 16-case admission: B301-B312 + B901-B904 GREEN"
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'

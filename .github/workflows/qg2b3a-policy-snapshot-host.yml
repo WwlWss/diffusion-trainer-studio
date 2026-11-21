@@ -100,7 +100,7 @@ jobs:
               raise SystemExit("QG-2-B3-A QG-2-B2 CLI INTENT REGRESSION")
           print("QG-2-B3-A QG-2-B2 CLI INTENT GREEN: 8/8 PASS")
           PY
-      - name: Preserve cumulative B301-B312 16/16 GREEN
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'

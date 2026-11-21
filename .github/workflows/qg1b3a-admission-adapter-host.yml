@@ -140,6 +140,11 @@ jobs:
               "old 42/42 and new independent 12/12 PASS"
           )
 
+          PY
+      - name: B312 Integrated Admission 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
           from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
           assert_cumulative_admission_green("QG-2-B4-I:qg1b3a-admission-adapter-host")
           PY

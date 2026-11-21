@@ -78,6 +78,11 @@ jobs:
                       or result.skipped or result.expectedFailures
                       or result.unexpectedSuccesses):
                   raise SystemExit(f"QG-2-A1 INVALID OLD GREEN: {module}")
+          PY
+      - name: B312 Integrated Admission 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
           from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
           assert_cumulative_admission_green("QG-2-B4-I:qg2a1-request-intent-host")
           PY

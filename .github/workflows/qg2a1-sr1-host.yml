@@ -157,7 +157,7 @@ jobs:
               )
           print("QG-2-A1-SR1 TARGET+BASELINE GREEN: 8/8+4/4 PASS")
           PY
-      - name: Check cumulative B312 Integrated GREEN without granting CUDA qualification
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'

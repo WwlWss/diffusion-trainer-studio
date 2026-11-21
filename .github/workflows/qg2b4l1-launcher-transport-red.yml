@@ -96,6 +96,11 @@ jobs:
                   raise SystemExit(f"B4-L1 INHERITED REGRESSION {name}")
           if total != 116:
               raise SystemExit(f"B4-L1 INVALID INHERITED TOTAL {total}")
+          PY
+      - name: B312 Integrated Admission 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
           from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
           assert_cumulative_admission_green("QG-2-B4-I:qg2b4l1-launcher-transport-red")
           PY

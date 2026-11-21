@@ -120,7 +120,7 @@ jobs:
           print("QG-2-A2 inherited GREEN: 42 QG1B +12 adapter +12 B3B "
                 "+16 A1 +12 SR1 +5 lifecycle + legacy public API overlay")
           PY
-      - name: Require B301-B312 and B901-B904 16/16 Integrated GREEN
+      - name: B312 Integrated Admission 16/16 GREEN
         shell: bash
         run: |
           python - <<'PY'
