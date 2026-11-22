@@ -4,7 +4,7 @@ on:
     branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
     paths:
       - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
-      - "tests/test_parameter_policy_qg2mr_sr1_red.py"
+      - "tests/qg2mr_sr1_contract.py"
       - "tests/test_parameter_policy_qg2b2_cli_intent.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "tests/qg2b4i_ci_contract.py"
@@ -25,7 +25,7 @@ on:
   pull_request:
     paths:
       - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
-      - "tests/test_parameter_policy_qg2mr_sr1_red.py"
+      - "tests/qg2mr_sr1_contract.py"
       - "tests/test_parameter_policy_qg2b2_cli_intent.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "tests/qg2b4i_ci_contract.py"
@@ -54,13 +54,13 @@ jobs:
         with:
           python-version: "3.11"
       - name: Compile real extracted readers, subprocess checks and frozen B2 tests
-        run: python -m py_compile tests/test_parameter_policy_qg2mr_sr1_red.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/qg2b4i_ci_contract.py
+        run: python -m py_compile tests/qg2mr_sr1_contract.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/qg2b4i_ci_contract.py
       - name: Confirm four real independent MR-SR1 baselines PASS
         shell: bash
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_qg2mr_sr1_red import QG2MRSR1Baselines
+          from tests.qg2mr_sr1_contract import QG2MRSR1Baselines
           suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2MRSR1Baselines)
           result = unittest.TextTestRunner(verbosity=2).run(suite)
           if (result.testsRun != 4 or result.failures or result.errors or
@@ -92,7 +92,7 @@ jobs:
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_qg2mr_sr1_red import QG2MRSR1Targeted
+          from tests.qg2mr_sr1_contract import QG2MRSR1Targeted
           all_names = sorted(n for n in dir(QG2MRSR1Targeted) if n.startswith("test_mr"))
           green_names = [n for n in all_names if n.startswith(("test_mr3", "test_mr4"))]
           red_names = [n for n in all_names if n not in green_names]
@@ -129,7 +129,7 @@ jobs:
         run: |
           python - <<'PY'
           import unittest
-          from tests.test_parameter_policy_qg2mr_sr1_red import (
+          from tests.qg2mr_sr1_contract import (
               QG2MRSR1Targeted, MARKER,
           )
           all_names = sorted(n for n in dir(QG2MRSR1Targeted) if n.startswith("test_mr"))
