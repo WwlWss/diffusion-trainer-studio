@@ -4787,10 +4787,11 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
 
     # Direct Trainer acknowledgement is a one-invocation CLI control.  TOML
     # must never be able to seed the argparse Namespace with this field.
-    from mikazuki.direct_trainer_admission_intent import (
-        reject_direct_trainer_ack_toml,
-    )
-    reject_direct_trainer_ack_toml(ignore_nesting_dict)
+    if "experimental_full_bf16_ack" in ignore_nesting_dict:
+        raise ValueError(
+            "experimental_full_bf16_ack is a per-invocation CLI control "
+            "and cannot be supplied by TOML configuration."
+        )
 
     config_args = argparse.Namespace(**ignore_nesting_dict)
     args = parser.parse_args(namespace=config_args)

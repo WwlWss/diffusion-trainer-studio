@@ -7,11 +7,12 @@ import random
 import time
 import json
 from multiprocessing import Value
-from mikazuki.direct_trainer_admission_intent import (
-    DirectTrainerAdmissionIntent,
-    add_direct_trainer_admission_argument,
-    extract_direct_trainer_admission_intent,
-)
+from library import dts_parameter_policy_bridge as _dts_cli_bridge
+
+_cli_intent = _dts_cli_bridge.load_direct_trainer_intent_module()
+DirectTrainerAdmissionIntent = _cli_intent.DirectTrainerAdmissionIntent
+add_direct_trainer_admission_argument = _cli_intent.add_direct_trainer_admission_argument
+extract_direct_trainer_admission_intent = _cli_intent.extract_direct_trainer_admission_intent
 
 import toml
 
