@@ -4033,6 +4033,13 @@ def read_config_from_file(args: argparse.Namespace, parser: argparse.ArgumentPar
     config_path = args.config_file + ".toml" if not args.config_file.endswith(".toml") else args.config_file
 
     if args.output_config:
+        # Consent is valid only for one training invocation. Never silently
+        # discard a positive/invalid acknowledgement while exporting TOML.
+        if getattr(args, "experimental_full_bf16_ack", False) is not False:
+            raise ValueError(
+                "Direct Trainer acknowledgement is per-invocation and "
+                "cannot be combined with --output_config."
+            )
         # check if config file exists
         if os.path.exists(config_path):
             logger.error(f"Config file already exists. Aborting... / 出力先の設定ファイルが既に存在します: {config_path}")

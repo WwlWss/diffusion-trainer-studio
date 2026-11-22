@@ -206,6 +206,8 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
             self.assertNotIn("from mikazuki.direct_trainer_admission_intent import", body, path)
 
     def test_b2_07_output_config_drops_ack_even_if_called_without_extraction(self):
+        # Historical acceptance of positive ACK was a bug: consent only
+        # authorizes one training invocation, never an export operation.
         for path in (
             "scripts/stable/library/train_util.py",
             "scripts/dev/library/train_util.py",
@@ -216,53 +218,59 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
             self.assertIn('"output_config"', body, path)
             self.assertIn("args_dict", body, path)
 
-            # Execute the real read_config_from_file body with minimal Host
-            # collaborators; output_config must not serialize the raw flag.
-            with tempfile.TemporaryDirectory() as directory:
-                config_path = str(Path(directory) / "out.toml")
-                parser = argparse.ArgumentParser()
-                parser.add_argument("--config_file", default=None)
-                parser.add_argument("--output_config", action="store_true")
-                parser.add_argument("--experimental_full_bf16_ack", action="store_true")
-                parser.add_argument("--learning_rate", type=float, default=None)
-                args = SimpleNamespace(
-                    config_file=config_path,
-                    output_config=True,
-                    experimental_full_bf16_ack=True,
-                    learning_rate=1e-4,
-                )
-                captured = {}
+            for ack in (False, True):
+                with self.subTest(path=path, ack=ack), tempfile.TemporaryDirectory() as directory:
+                    config_path = str(Path(directory) / "out.toml")
+                    parser = argparse.ArgumentParser()
+                    parser.add_argument("--config_file", default=None)
+                    parser.add_argument("--output_config", action="store_true")
+                    parser.add_argument("--experimental_full_bf16_ack", action="store_true")
+                    parser.add_argument("--learning_rate", type=float, default=None)
+                    args = SimpleNamespace(
+                        config_file=config_path,
+                        output_config=True,
+                        experimental_full_bf16_ack=ack,
+                        learning_rate=1e-4,
+                    )
+                    captured = {}
 
-                class _Toml:
-                    @staticmethod
-                    def dump(values, stream):
-                        captured.update(values)
+                    class _Toml:
+                        @staticmethod
+                        def dump(values, stream):
+                            captured.update(values)
 
-                class _Logger:
-                    @staticmethod
-                    def info(_message):
-                        pass
+                    class _Logger:
+                        @staticmethod
+                        def info(_message):
+                            pass
 
-                    @staticmethod
-                    def error(_message):
-                        pass
+                        @staticmethod
+                        def error(_message):
+                            pass
 
-                module = ast.Module(body=[read_config], type_ignores=[])
-                ast.fix_missing_locations(module)
-                namespace = {
-                    "argparse": argparse,
-                    "os": os,
-                    "pathlib": __import__("pathlib"),
-                    "toml": _Toml,
-                    "logger": _Logger,
-                    "exit": lambda code: (_ for _ in ()).throw(SystemExit(code)),
-                }
-                exec(compile(module, path, "exec"), namespace)
-                with self.assertRaises(SystemExit) as stopped:
-                    namespace["read_config_from_file"](args, parser)
-                self.assertEqual(stopped.exception.code, 0)
-                self.assertNotIn(ACK, captured, path)
-                self.assertEqual(captured.get("learning_rate"), 1e-4)
+                    module = ast.Module(body=[read_config], type_ignores=[])
+                    ast.fix_missing_locations(module)
+                    namespace = {
+                        "argparse": argparse,
+                        "os": os,
+                        "pathlib": __import__("pathlib"),
+                        "toml": _Toml,
+                        "logger": _Logger,
+                        "exit": lambda code: (_ for _ in ()).throw(SystemExit(code)),
+                    }
+                    exec(compile(module, path, "exec"), namespace)
+                    if ack:
+                        with self.assertRaisesRegex(ValueError, "acknowledgement"):
+                            namespace["read_config_from_file"](args, parser)
+                        self.assertFalse(Path(config_path).exists(), path)
+                        self.assertEqual(captured, {}, path)
+                    else:
+                        with self.assertRaises(SystemExit) as stopped:
+                            namespace["read_config_from_file"](args, parser)
+                        self.assertEqual(stopped.exception.code, 0)
+                        self.assertTrue(Path(config_path).exists(), path)
+                        self.assertNotIn(ACK, captured, path)
+                        self.assertEqual(captured.get("learning_rate"), 1e-4)
 
     def test_b2_08_all_direct_trainer_entrypoints_extract_and_forward_intent(self):
         entrypoints = (
@@ -277,14 +285,16 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
         for path, trainer_class in entrypoints:
             source, main = _main_guard(path)
             body = ast.get_source_segment(source, main)
+            # Preserve the legacy CLI verification before TOML reading, but
+            # consume the acknowledgement only after the FINAL argparse parse.
             self.assertLess(
-                body.index("extract_direct_trainer_admission_intent(args)"),
+                body.index("verify_command_line_training_args(args)"),
                 body.index("read_config_from_file(args, parser)"),
                 path,
             )
             self.assertLess(
+                body.index("read_config_from_file(args, parser)"),
                 body.index("extract_direct_trainer_admission_intent(args)"),
-                body.index("verify_command_line_training_args(args)"),
                 path,
             )
             self.assertIn(

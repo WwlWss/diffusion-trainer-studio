@@ -123,7 +123,7 @@ def _child(program: str, script_dir: Path, cwd: Path):
 
 
 class QG2MRSR1Targeted(unittest.TestCase):
-    """Only these exact 26 methods may fail in the frozen Tests-only RED."""
+    """26 frozen identities: MR-01/02 turn GREEN in C; MR-03/04 remain RED."""
 
     def _toml_final_namespace(self, reader_path: str, *, ack: bool):
         with tempfile.TemporaryDirectory() as tmp:
@@ -137,11 +137,20 @@ class QG2MRSR1Targeted(unittest.TestCase):
             with patch.object(sys, "argv", ["trainer", *cli]):
                 effective = _reader(reader_path)(args, parser)
             self.assertEqual(effective.learning_rate, 0.0003)
+            # The raw flag may exist only between the final argparse parse
+            # and its single typed consumption. Check value AND non-persistence.
+            intent = extract_direct_trainer_admission_intent(effective)
+            self.assertIs(type(intent), DirectTrainerAdmissionIntent)
+            if intent.experimental_full_bf16_ack is not ack:
+                self.fail(
+                    f"{MARKER}: {reader_path} lost/changed final CLI "
+                    f"acknowledgement during TOML reparse (expected {ack}, "
+                    f"got {intent.experimental_full_bf16_ack})."
+                )
             if ACK_ARGUMENT in vars(effective):
                 self.fail(
-                    f"{MARKER}: {reader_path} recreated reserved "
-                    f"{ACK_ARGUMENT}={getattr(effective, ACK_ARGUMENT)!r} "
-                    f"after final TOML/CLI argparse parse (CLI ack={ack})."
+                    f"{MARKER}: {reader_path} retained reserved {ACK_ARGUMENT} "
+                    "after the final typed one-shot extraction."
                 )
 
     def _output_ack_rejected_before_write(self, reader_path: str):
@@ -179,6 +188,7 @@ class QG2MRSR1Targeted(unittest.TestCase):
         token_extract = "extract_direct_trainer_admission_intent(args)"
         if (
             token_read not in segment or token_extract not in segment or
+            segment.count(token_read) != 1 or segment.count(token_extract) != 1 or
             segment.index(token_extract) < segment.index(token_read)
         ):
             self.fail(
