@@ -157,6 +157,13 @@ class NetworkTrainer:
         parameter_policy_requested = bool(
             str(getattr(args, "parameter_policy_config", "") or "").strip()
         )
+        # An experimental one-shot ACK is meaningful only for Component jobs.
+        # Reject it before ordinary training verification or dataset/model work.
+        if not parameter_policy_requested and admission_intent is not None:
+            if type(admission_intent) is not DirectTrainerAdmissionIntent:
+                raise ValueError("Standard Direct Trainer requires a typed admission intent.")
+            if admission_intent.experimental_full_bf16_ack:
+                raise ValueError("Component acknowledgement is invalid for Standard Direct Trainer.")
         parameter_policy_train_type = (
             self.get_parameter_policy_train_type(args)
             if parameter_policy_requested
