@@ -136,10 +136,11 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 and node.func.id == "add_direct_trainer_admission_argument"
             ]
             self.assertEqual(len(calls), 1, path)
-            self.assertIn(
-                "from mikazuki.direct_trainer_admission_intent import",
-                source,
-            )
+            # A single stdlib-only first-party Intent module is loaded through
+            # the pre-existing DTS-root bridge, not an eager top-level import.
+            self.assertIn("load_direct_trainer_intent_module()", source, path)
+            self.assertIn("from library import dts_parameter_policy_bridge", source, path)
+            self.assertNotIn("from mikazuki.direct_trainer_admission_intent import", source, path)
             self.assertIn("add_direct_trainer_admission_argument(parser)", source)
 
         # All model-family NetworkTrainer entrypoints derive their parser from
@@ -163,8 +164,12 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 and node.func.value.id == "train_network"
             ]
             self.assertEqual(len(calls), 1, path)
-            self.assertIn("from mikazuki.direct_trainer_admission_intent import", source)
-            self.assertIn("extract_direct_trainer_admission_intent", source)
+            # Derived models use the already-bootstrapped base trainer identity.
+            self.assertIn(
+                "train_network.extract_direct_trainer_admission_intent(args)",
+                source, path,
+            )
+            self.assertNotIn("from mikazuki.direct_trainer_admission_intent import", source, path)
 
     def test_b2_06_toml_rejection_precedes_namespace_merge_in_both_train_utils(self):
         for path in (
@@ -172,11 +177,20 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
             "scripts/dev/library/train_util.py",
         ):
             source, read_config = _function(path, "read_config_from_file")
-            calls = [
+            # Full Trainers share this reader and must not need DTS on PYTHONPATH.
+            # Require a real fail-closed reserved-key guard before Namespace.
+            guards = [
                 node for node in ast.walk(read_config)
-                if isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Name)
-                and node.func.id == "reject_direct_trainer_ack_toml"
+                if isinstance(node, ast.If)
+                and isinstance(node.test, ast.Compare)
+                and isinstance(node.test.left, ast.Constant)
+                and node.test.left.value == ACK
+                and len(node.test.ops) == 1
+                and isinstance(node.test.ops[0], ast.In)
+                and len(node.test.comparators) == 1
+                and isinstance(node.test.comparators[0], ast.Name)
+                and node.test.comparators[0].id == "ignore_nesting_dict"
+                and any(isinstance(stmt, ast.Raise) for stmt in node.body)
             ]
             namespace_calls = [
                 node for node in ast.walk(read_config)
@@ -184,14 +198,12 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 and isinstance(node.func, ast.Attribute)
                 and node.func.attr == "Namespace"
             ]
-            self.assertEqual(len(calls), 1, path)
+            self.assertEqual(len(guards), 1, path)
             self.assertEqual(len(namespace_calls), 1, path)
-            self.assertLess(calls[0].lineno, namespace_calls[0].lineno, path)
-            self.assertIn("ignore_nesting_dict", ast.get_source_segment(source, read_config))
-            self.assertIn(
-                "from mikazuki.direct_trainer_admission_intent import",
-                ast.get_source_segment(source, read_config),
-            )
+            self.assertLess(guards[0].lineno, namespace_calls[0].lineno, path)
+            body = ast.get_source_segment(source, read_config)
+            self.assertIn("ignore_nesting_dict", body, path)
+            self.assertNotIn("from mikazuki.direct_trainer_admission_intent import", body, path)
 
     def test_b2_07_output_config_drops_ack_even_if_called_without_extraction(self):
         for path in (
@@ -280,10 +292,16 @@ class QG2B2DirectTrainerCliIntentTests(unittest.TestCase):
                 body,
                 path,
             )
-            self.assertIn(
+            if trainer_class == "NetworkTrainer":
+                self.assertIn("load_direct_trainer_intent_module()", source, path)
+            else:
+                self.assertIn(
+                    "train_network.extract_direct_trainer_admission_intent(args)",
+                    body, path,
+                )
+            self.assertNotIn(
                 "from mikazuki.direct_trainer_admission_intent import",
-                source,
-                path,
+                source, path,
             )
 
             # The two base trainers own the optional train() ABI. Derived

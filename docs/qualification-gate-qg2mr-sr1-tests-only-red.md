@@ -16,3 +16,9 @@ Four new real baselines: strict single-use DirectTrainerAdmissionIntent, TOML re
 ## Next controlled transitions
 
 After exact Ubuntu/Windows 26 true source FAIL and baselines PASS, split GREEN into MR-SR1-B Import Bootstrap, MR-SR1-C post-TOML final extraction plus output_config guard, MR-SR1-D Standard positive ACK rejection, MR-SR1-E QG1B main CI and PR metadata, then a new independent FSR. GREEN tests must verify actual clean-subprocess launch/help in an installed CPU environment. Never loosen SD3 Full-BF16 source audit, the Request/Step6F candidate HOLD, Late Session, optimizer, CUDA or checkpoint guards.
+
+## MR-SR1-B Import Bootstrap scoped GREEN changes
+
+Production commit 367adc25dd0a42578610efaa68467c91025d3be5 changes eleven import/reader files only: Stable/Dev bridges use the established root finder to import one first-party stdlib-only CLI Intent module; Stable/Dev base Network Trainers bind the original strict type and functions from that module; five derived trainers reuse their base import; Full Trainer TOML readers reject the reserved ACK directly, before Namespace construction, without importing mikazuki. This does not change main CLI order, output_config behavior, runtime admission, CUDA or checkpoint.
+
+Because historical B2 AST tests required a top-level direct import that is itself the identified defect, the eight B2 test identities are retained and their import clauses updated to require the safe Bridge and an explicit pre-Namespace key guard. Their pre-TOML CLI extraction order assumption remains in place until MR-SR1-C. The nine MR-02 targets must now be actual PASS on both OS, while MR-01/MR-03/MR-04 retain exactly 17 actual source FAIL. Existing four MR baselines, eight B2 and sixteen cumulative B312 tests must stay genuinely passing.
