@@ -231,14 +231,27 @@ class QG2B3CSR1Baselines(unittest.TestCase):
             )
 
     def test_sr905_standard_does_not_require_typed_component_intent(self):
+        # MR-SR1-D added a Standard-only guard before the Component guard.
+        # Do not infer the Component contract from the FIRST textual occurrence
+        # of the same strict type check; assert each guarded path independently.
         for path in TRAINERS:
             body = _trainer_body(path)
             self.assertIn("def train(self, args, admission_intent=None):", body)
-            self.assertIn("if parameter_policy_requested:", body)
-            self.assertIn("if type(admission_intent) is not DirectTrainerAdmissionIntent:", body)
+            standard = "if not parameter_policy_requested and admission_intent is not None:"
+            component = (
+                "if parameter_policy_requested:\n"
+                "            if type(admission_intent) is not DirectTrainerAdmissionIntent:"
+            )
+            self.assertIn(standard, body)
+            self.assertIn("if admission_intent.experimental_full_bf16_ack:", body)
+            self.assertIn(component, body)
             self.assertLess(
-                body.index("if parameter_policy_requested:"),
-                body.index("if type(admission_intent) is not DirectTrainerAdmissionIntent:"),
+                body.index(standard),
+                body.index("train_util.verify_training_args("),
+            )
+            self.assertLess(
+                body.index("train_util.verify_training_args("),
+                body.index(component),
             )
 
 
