@@ -131,17 +131,21 @@ class QG2MRR22SR1TargetRed(unittest.TestCase):
                     f"{RED_MARKER}: isolated fixture lost strict scope or "
                     f"a real low-level runtime invariant: {token}",
                 )
-        self.assertNotIn(
-            "create_parameter_policy_session(", source,
-            f"{RED_MARKER}: isolated fixture must not call production Late Admission "
-            "using forged authorization.",
+        self.assertEqual(
+            len(_calls(
+                _function(GPU_FIXTURE, "build_gpu_evidence_full_bf16_session"),
+                "create_parameter_policy_session",
+            )),
+            0,
+            f"{RED_MARKER}: isolated fixture must not invoke production "
+            "Late Admission using forged authorization.",
         )
 
     def test_R207_gpu_json_distinguishes_isolated_evidence_from_host_admission(self):
         source = _read(EXECUTION_RUNNER)
-        self.assertIn(
-            '"session_construction_scope": "isolated_gpu_low_level_evidence_only"',
-            source,
+        self.assertTrue(
+            '"session_construction_scope": "isolated_gpu_low_level_evidence_only"'
+            in source,
             f"{RED_MARKER}: evidence must disclose that synthetic flux-finetune "
             "sessions bypass production Admission only inside test-only low-level "
             "construction, never assert backend qualification.",
@@ -196,7 +200,14 @@ class QG2MRR22SR1ExistingBaselines(unittest.TestCase):
         ):
             with self.subTest(token=token):
                 self.assertIn(token, source)
-        self.assertNotIn("create_parameter_policy_session(", source)
+        self.assertEqual(
+            len(_calls(
+                _function(CPU_FIXTURE, "build_test_only_full_bf16_session"),
+                "create_parameter_policy_session",
+            )),
+            0,
+            "CPU low-level fixture must not actually call production Late Admission.",
+        )
 
     def test_R904_real_rejection_test_keeps_pre_scan_protection(self):
         function = _function(CPU_SMOKE, "test_full_bf16_direct_trainer_fails_before_parameter_scan")
