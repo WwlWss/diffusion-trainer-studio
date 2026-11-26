@@ -6,8 +6,8 @@ an unqualified backend.  Never expose it as a production Admission bypass.
 
 The synthetic Flux scaffold exercises genuine DTS low-level routing, optimizer,
 dtype, accelerator and checkpoint contracts without claiming Flux Full-BF16
-backend qualification.  The real create_parameter_policy_session() must retain
-its mandatory, fail-closed early/late Admission protocol.
+backend qualification.  The production Late Session entry must retain its mandatory, fail-closed
+early/late Admission protocol.
 """
 
 from __future__ import annotations
