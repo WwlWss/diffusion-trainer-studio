@@ -13,7 +13,16 @@ early/late Admission protocol.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
+import inspect
+from pathlib import Path
 from typing import Any
+
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+_ALLOWED_MODEL_SOURCE_FILES = frozenset({
+    (_REPO_ROOT / "tools" / "run_parameter_policy_execution_gpu_matrix.py").resolve(),
+    (_REPO_ROOT / "tests" / "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.py").resolve(),
+})
 
 
 # Exactly the small, source-owned scaffold geometries used by the C0-C4 GPU
@@ -34,12 +43,25 @@ _SYNTHETIC_SHAPES: dict[str, dict[str, tuple[int, ...]]] = {
         "double_blocks.1.bias": (8,),
     },
 }
-_SYNTHETIC_PROFILES = {
-    "_TinyFlux": {"main": "AdamW"},
-    "_TinyMuonFlux": {"main": "Muon"},
+_EXPECTED_MUON_ARGS = {
+    "momentum": 0.95,
+    "weight_decay": 0.0,
+    "weight_decouple": True,
+    "nesterov": True,
+    "ns_steps": 5,
+    "ns_coeffs": "original",
+    "use_adjusted_lr": False,
+}
+_SYNTHETIC_PROFILE_CONTRACTS = {
+    "_TinyFlux": {
+        "main": {"type": "AdamW", "args": {}},
+    },
+    "_TinyMuonFlux": {
+        "main": {"type": "Muon", "args": _EXPECTED_MUON_ARGS},
+    },
     "_TinyMuonAdamWFallbackFlux": {
-        "muon": "Muon",
-        "adamw_fallback": "AdamW",
+        "muon": {"type": "Muon", "args": _EXPECTED_MUON_ARGS},
+        "adamw_fallback": {"type": "AdamW", "args": {}},
     },
 }
 _SYNTHETIC_ROUTES = {
@@ -91,17 +113,36 @@ def build_gpu_evidence_full_bf16_session(
     if actual_shapes != _SYNTHETIC_SHAPES[model_kind]:
         raise ValueError("GPU evidence helper rejects changed synthetic model geometry.")
 
+    # A matching class name/weight geometry is insufficient: a test helper
+    # must only accept the two reviewed, source-owned tiny-model definitions.
+    # This is a source-scope guard, not a cryptographic identity boundary.
+    try:
+        model_source = inspect.getsourcefile(type(model))
+    except (TypeError, OSError):
+        model_source = None
+    if not model_source:
+        raise ValueError("GPU evidence helper rejects unreviewed model source.")
+    try:
+        model_source_path = Path(model_source).resolve(strict=True)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise ValueError(
+            "GPU evidence helper rejects unreviewed model source."
+        ) from exc
+    if model_source_path not in _ALLOWED_MODEL_SOURCE_FILES:
+        raise ValueError("GPU evidence helper rejects unreviewed model source.")
+
     structural = t._unique_parameters(structural_frozen_parameters)
     if structural:
         raise ValueError("GPU evidence helper does not admit extra frozen parameters.")
 
     policy, policy_hash = t.load_parameter_policy_file(t._policy_path(args))
-    actual_profiles = {
-        name: profile["type"]
-        for name, profile in policy["optimizer_profiles"].items()
-    }
-    if actual_profiles != _SYNTHETIC_PROFILES[model_kind]:
-        raise ValueError("GPU evidence helper rejects unreviewed optimizer profiles.")
+    # Use the canonical, validated policy; include every optimizer argument
+    # instead of dropping profile["args"] while comparing only "type".
+    actual_profiles = policy["optimizer_profiles"]
+    if actual_profiles != _SYNTHETIC_PROFILE_CONTRACTS[model_kind]:
+        raise ValueError(
+            "GPU evidence helper rejects unreviewed optimizer profile arguments."
+        )
     if set(policy["components"]) != {"transformer.double_stream"}:
         raise ValueError("GPU evidence helper rejects non-scaffold Component policies.")
     route = policy["components"]["transformer.double_stream"]

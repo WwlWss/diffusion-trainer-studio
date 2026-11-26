@@ -3,7 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import unittest
+from uuid import uuid4
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -57,13 +59,15 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             cwd=ROOT,
             text=True,
         ).strip()
-        # A locally ignored probe would silently bypass both pre-import gates
-        # and could start the full CUDA matrix.  Confirm Git sees it BEFORE
-        # starting either subprocess, regardless of global/local ignore rules.
-        probe = ROOT / "phase-c-provenance-untracked.json"
-        self.assertFalse(probe.exists(), "Refuse to overwrite an existing probe.")
+        # Always create a unique, Git-visible probe exclusively.  Ownership is
+        # established by successful creation, not by a preflight existence check.
+        probe = ROOT / f"phase-c-provenance-untracked-{uuid4().hex}.json"
+        probe_created = False
         try:
-            probe.write_text("probe\n", encoding="utf-8")
+            with probe.open("x", encoding="utf-8") as stream:
+                probe_created = True
+                stream.write("probe\n")
+
             visible = subprocess.check_output(
                 ["git", "status", "--porcelain=v1", "--untracked-files=all"],
                 cwd=ROOT,
@@ -75,44 +79,46 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
                 "Untracked probe is ignored or working tree is already dirty. "
                 "Refusing to launch GPU qualification runners.",
             )
-            cases = (
-                (
-                    RUNNER,
-                    [
-                        "--expected-commit",
-                        head,
-                        "--output",
-                        str(ROOT.parent / "execution-probe.json"),
-                    ],
-                ),
-                (
-                    BASELINE_RUNNER,
-                    [
-                        "--expected-commit",
-                        head,
-                        "--output",
-                        str(ROOT.parent / "baseline-probe.json"),
-                    ],
-                ),
-            )
-            for runner, args in cases:
-                with self.subTest(runner=runner.name):
-                    completed = subprocess.run(
-                        [sys.executable, str(runner), *args],
-                        cwd=ROOT,
-                        text=True,
-                        capture_output=True,
-                        check=False,
-                        timeout=25,  # fail closed rather than run an accidental GPU matrix
-                    )
-                    self.assertNotEqual(completed.returncode, 0)
-                    combined = completed.stdout + completed.stderr
-                    self.assertIn("completely clean workspace", combined)
-                    self.assertIn(probe.name, combined)
+
+            # Both output files belong exclusively to this one test invocation.
+            # Never unlink fixed external paths: they may contain user evidence.
+            with TemporaryDirectory(
+                prefix="qg2-provenance-probe-",
+                dir=ROOT.parent,
+            ) as temp_dir:
+                output_root = Path(temp_dir)
+                cases = (
+                    (RUNNER, output_root / "execution-probe.json"),
+                    (BASELINE_RUNNER, output_root / "baseline-probe.json"),
+                )
+                for runner, output_path in cases:
+                    with self.subTest(runner=runner.name):
+                        completed = subprocess.run(
+                            [
+                                sys.executable,
+                                str(runner),
+                                "--expected-commit",
+                                head,
+                                "--output",
+                                str(output_path),
+                            ],
+                            cwd=ROOT,
+                            text=True,
+                            capture_output=True,
+                            check=False,
+                            timeout=25,  # fail closed on an accidental CUDA launch
+                        )
+                        self.assertNotEqual(completed.returncode, 0)
+                        combined = completed.stdout + completed.stderr
+                        self.assertIn("completely clean workspace", combined)
+                        self.assertIn(probe.name, combined)
+                        self.assertFalse(
+                            output_path.exists(),
+                            "Strict pre-import rejection must not create evidence.",
+                        )
         finally:
-            probe.unlink(missing_ok=True)
-            (ROOT.parent / "execution-probe.json").unlink(missing_ok=True)
-            (ROOT.parent / "baseline-probe.json").unlink(missing_ok=True)
+            if probe_created:
+                probe.unlink(missing_ok=True)
 
     def test_strict_runners_reject_repository_internal_output_before_cuda(self):
         head = subprocess.check_output(
