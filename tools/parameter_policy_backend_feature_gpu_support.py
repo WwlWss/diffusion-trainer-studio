@@ -248,7 +248,9 @@ def _normalize_backend_command(
                 "an additional Python entrypoint."
             )
     return [
-        str(canonical_entrypoint.relative_to(repo_root.resolve(strict=False))),
+        # Portable repository-relative identity for JSON evidence and argv.
+        # Absolute-path validation above continues to use resolved Path objects.
+        canonical_entrypoint.relative_to(repo_root.resolve(strict=False)).as_posix(),
         *command[1:],
     ]
 
@@ -1210,9 +1212,9 @@ def load_backend_feature_manifest(
                 "fresh_command": commands["fresh_command"],
                 "resume_command": commands["resume_command"],
                 "cwd": str(cwd_path),
-                "entrypoint": str(
-                    canonical_entrypoint.relative_to(repo_root.resolve(strict=False))
-                ),
+                "entrypoint": canonical_entrypoint.relative_to(
+                    repo_root.resolve(strict=False)
+                ).as_posix(),
                 "environment": dict(environment),
                 "fresh_checkpoint_dir": str(fresh_checkpoint),
                 "resume_checkpoint_dir": str(resume_checkpoint),
