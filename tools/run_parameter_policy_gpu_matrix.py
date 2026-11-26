@@ -169,6 +169,8 @@ from mikazuki.parameter_policy_runtime import (
 )
 from mikazuki.parameter_policy_torch import build_parameter_policy_optimizer
 from mikazuki.parameter_policy_trainer import create_parameter_policy_session
+from mikazuki.direct_trainer_admission_intent import DirectTrainerAdmissionIntent
+from mikazuki.parameter_policy_admission import prepare_direct_trainer_admission
 
 
 def _git_sha() -> str | None:
@@ -340,10 +342,23 @@ def _accelerator_device_audit() -> dict:
         )
         args = SimpleNamespace(parameter_policy_config=str(policy_path))
         model = _TinyFlux()
+        intent = DirectTrainerAdmissionIntent(False)
+        admission_snapshot = prepare_direct_trainer_admission(
+            str(policy_path),
+            train_type="flux-finetune",
+            effective_config=vars(args),
+            admission_intent=intent,
+        )
+        if admission_snapshot.admission.status != "inactive":
+            raise AssertionError(
+                "Ordinary GPU device audit must remain an inactive real Admission."
+            )
         session = create_parameter_policy_session(
             args=args,
             train_type="flux-finetune",
             roots={"transformer": model},
+            admission_snapshot=admission_snapshot,
+            admission_intent=intent,
         )
 
         accelerator = Accelerator()

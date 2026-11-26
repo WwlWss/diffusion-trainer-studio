@@ -1,8 +1,8 @@
 """Lazy bridge from sd-scripts trainers into DTS Parameter Policy runtime.
 
-Standard mode never imports this module from trainer code. When Component-wise
-integration opts in, the bridge locates the DTS repository root without assuming
-that it is already present on sys.path.
+Standard trainers use only the lightweight, stdlib-only CLI Intent loader.
+Component-aware runtime/session imports remain lazy; this bridge locates the
+repository root without assuming it is already present on sys.path.
 """
 
 from __future__ import annotations
@@ -21,6 +21,18 @@ def _find_dts_root() -> Path:
     )
 
 
+def load_direct_trainer_intent_module():
+    """Return the one first-party, stdlib-only CLI Intent module.
+
+    Standard training can import this lightweight bridge before Torch; model-
+    aware Component Admission/session imports remain fully lazy.
+    """
+    root_text = str(_find_dts_root())
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    return importlib.import_module("mikazuki.direct_trainer_admission_intent")
+
+
 def load_parameter_policy_trainer():
     root = _find_dts_root()
     root_text = str(root)
@@ -37,6 +49,23 @@ def preflight_component_runtime_booleans(*, args, train_type: str) -> None:
     contract = importlib.import_module("mikazuki.parameter_policy_runtime_bools")
     contract.require_component_runtime_booleans(
         vars(args), train_type=train_type,
+    )
+
+
+
+def preflight_direct_trainer_admission(
+    *, policy_path, train_type, effective_config, admission_intent,
+):
+    """Pure first-party Host admission; never import model-aware Trainer."""
+    root_text = str(_find_dts_root())
+    if root_text not in sys.path:
+        sys.path.insert(0, root_text)
+    admission = importlib.import_module("mikazuki.parameter_policy_admission")
+    return admission.prepare_direct_trainer_admission(
+        policy_path,
+        train_type=train_type,
+        effective_config=effective_config,
+        admission_intent=admission_intent,
     )
 
 
@@ -70,7 +99,9 @@ def plan_stock_lora_full_bf16_resume(**kwargs):
 
 
 __all__ = [
+    "load_direct_trainer_intent_module",
     "preflight_component_runtime_booleans",
+    "preflight_direct_trainer_admission",
     "create_parameter_policy_session",
     "load_parameter_policy_file",
     "load_parameter_policy_trainer",

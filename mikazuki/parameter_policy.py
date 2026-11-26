@@ -14,6 +14,8 @@ import ast
 import hashlib
 import json
 import math
+import os
+import stat
 from pathlib import Path
 from typing import Any, Iterable, Mapping
 
@@ -411,6 +413,52 @@ def serialize_parameter_policy(policy: Mapping[str, Any]) -> tuple[str, str]:
     return (PARAMETER_POLICY_DIR / f"{digest}.json").as_posix(), content
 
 
+
+def load_parameter_policy_sidecar(path: str | os.PathLike[str]) -> tuple[dict[str, Any], str]:
+    """Read a strict JSON sidecar without importing the Trainer or torch.
+
+    The full digest identifies the *canonical* serialized policy.  The short
+    digest embedded in an autosave filename remains a separate legacy ABI.
+    """
+    if not isinstance(path, (str, os.PathLike)):
+        raise TypeError("Parameter Policy path must be a string or PathLike.")
+    location = os.fspath(path)
+    if not isinstance(location, str) or not location.strip():
+        raise ValueError("Parameter Policy path must be a nonempty text path.")
+
+    def unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        obj: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in obj:
+                raise ValueError(f"Duplicate Parameter Policy JSON key: {key!r}")
+            obj[key] = value
+        return obj
+
+    def reject_constant(value: str) -> None:
+        raise ValueError(f"Non-standard Parameter Policy JSON constant: {value}")
+
+    # Reject special files before opening (FIFO/device reads may block), and
+    # recheck the opened descriptor to defend against path replacement.
+    if not Path(location).is_file():
+        raise ValueError("Parameter Policy sidecar must be a regular file.")
+    # Explicit UTF-8 decoding fails closed, independent of platform defaults.
+    # Existing files are never modified.
+    with open(location, "r", encoding="utf-8") as source:
+        if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+            raise ValueError("Parameter Policy sidecar must be a regular file.")
+        raw = json.load(
+            source,
+            object_pairs_hook=unique_keys,
+            parse_constant=reject_constant,
+        )
+    if not isinstance(raw, dict):
+        raise ValueError("Parameter Policy sidecar root must be an object.")
+    canonical = validate_parameter_policy(raw)
+    _autosave_path, canonical_text = serialize_parameter_policy(canonical)
+    digest = hashlib.sha256(canonical_text.encode("utf-8")).hexdigest()
+    return canonical, digest
+
+
 def _append_blocker(blockers: list[str], seen: set[str], message: str) -> None:
     if message in seen:
         return
@@ -579,20 +627,84 @@ def parameter_policy_runtime_blockers(
             )
         )
 
-        # Import lazily so Standard mode and inactive Parameter Policy callers
-        # do not load the execution-feature qualification subsystem.
+        # QG-1B3-B: separate the *typed* implementation/acknowledgement
+        # decision from certificate metadata.  No GUI/CLI intent transport
+        # exists yet: the acknowledgement must remain hardcoded False here.
+        #
+        # Preserve legacy full-BF16 blockers for invalid input and unaudited
+        # backends.  Only the independently source-audited SD1/SDXL routes may
+        # replace certificate-only denial with a missing-acknowledgement
+        # blocker.  Start still fails closed until QG-2 wires both entrances.
+        # Import lazily to leave inactive and Standard behavior undisturbed.
         from mikazuki.parameter_policy_execution import (
+            active_parameter_policy_execution_features,
             parameter_policy_execution_blockers,
         )
 
-        blockers.extend(
-            parameter_policy_execution_blockers(
-                canonical,
-                train_type=normalized_train_type,
-                effective_config=effective_config,
-                require_assets=require_assets,
+        try:
+            active_features = active_parameter_policy_execution_features(
+                effective_config
             )
-        )
+        except ValueError:
+            # Existing strict pseudo-boolean diagnostics remain authoritative.
+            blockers.extend(
+                parameter_policy_execution_blockers(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                    require_assets=require_assets,
+                )
+            )
+        else:
+            if "full_bf16" not in active_features:
+                blockers.extend(
+                    parameter_policy_execution_blockers(
+                        canonical,
+                        train_type=normalized_train_type,
+                        effective_config=effective_config,
+                        require_assets=require_assets,
+                    )
+                )
+            else:
+                from mikazuki.parameter_policy_admission import (
+                    assess_component_training_admission,
+                )
+
+                admission = assess_component_training_admission(
+                    canonical,
+                    train_type=normalized_train_type,
+                    effective_config=effective_config,
+                    purpose="start" if require_assets else "preview",
+                    experimental_ack=False,
+                )
+                if normalized_train_type in {"sd-lora", "sdxl-lora"}:
+                    # Source-audited: typed admission replaces *only* the
+                    # certificate-only blocker. Hard failures retain the
+                    # original execution validator as an independent guard.
+                    blockers.extend(admission.runtime_blockers)
+                    if admission.status == "blocked":
+                        blockers.extend(
+                            parameter_policy_execution_blockers(
+                                canonical,
+                                train_type=normalized_train_type,
+                                effective_config=effective_config,
+                                require_assets=require_assets,
+                            )
+                        )
+                else:
+                    # Not yet source-audited (SD3/Flux/Anima/etc): keep prior
+                    # release diagnostics, then add the source-owned hard
+                    # capability findings. A forged qualified row cannot
+                    # remove either safety boundary.
+                    blockers.extend(
+                        parameter_policy_execution_blockers(
+                            canonical,
+                            train_type=normalized_train_type,
+                            effective_config=effective_config,
+                            require_assets=require_assets,
+                        )
+                    )
+                    blockers.extend(admission.runtime_blockers)
         if normalized_train_type not in {"anima-lora", "anima-finetune"}:
             blockers.extend(
                 _non_anima_policy_structure_and_target_blockers(
@@ -760,6 +872,7 @@ __all__ = [
     "build_parameter_policy_sidecar",
     "canonicalize_parameter_policy",
     "extract_parameter_policy_gui_state",
+    "load_parameter_policy_sidecar",
     "parameter_policy_runtime_blockers",
     "parse_legacy_optimizer_args",
     "rehydrate_parameter_policy",

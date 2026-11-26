@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "feature/qualification-gate-qg1b-trusted-producer"
+      - main
     paths:
       - ".github/workflows/qg1b-trusted-producer-host.yml"
       - "docs/qualification-gate-qg1b-trusted-producer-contract.md"

@@ -1,0 +1,50 @@
+name: DTS QG-2-B3-B SR1 Dynamic Host exact RED (NO CUDA)
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b3b-sr1-dynamic-host.yml"
+      - "tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  sr1:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Exact dynamic RED and 4 working Host tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b3b_sr1_dynamic_host_red import QG2B3BSR1DynamicHost, MARKER
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2B3BSR1DynamicHost)
+          if suite.countTestCases() != 8:
+              raise SystemExit("SR1 INVALID DISCOVERY")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          ids = {case.id().rsplit(".", 1)[-1]: trace for case, trace in result.failures}
+          if result.errors or result.skipped or result.expectedFailures or result.unexpectedSuccesses:
+              raise SystemExit("SR1 INVALID RUN")
+          if (len(ids) == 2 and "test_sr101_active_policy_requires_no_post_snapshot_args_mutation" in ids
+                  and "test_sr106_network_prepare_cannot_mutate_snapshot_identity_silently" in ids
+                  and MARKER in ids["test_sr101_active_policy_requires_no_post_snapshot_args_mutation"]
+                  and "AssertionError" in ids["test_sr106_network_prepare_cannot_mutate_snapshot_identity_silently"]):
+              print("SR1 VALID TESTS-ONLY RED: 6 executed Host PASS, 2 real post-snapshot mutation FAIL")
+              raise SystemExit(1)
+          if result.wasSuccessful():
+              print("SR1 SCOPED DYNAMIC GREEN: 8/8 PASS")
+          else:
+              raise SystemExit("SR1 INVALID RED: " + repr(list(ids)))
+          PY

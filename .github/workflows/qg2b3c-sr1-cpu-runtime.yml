@@ -1,0 +1,271 @@
+name: DTS QG-2-B3-C-SR1 Historical CPU Runtime Tests-only RED
+
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - "docs/qualification-gate-qg2b3c-sr1-cpu-runtime-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_real_late_cpu.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
+      - "tests/test_parameter_policy_trainer_runtime_smoke.py"
+      - "tests/test_parameter_policy_full_runtime_smoke.py"
+      - "tests/test_parameter_policy_network_runtime_smoke.py"
+      - "tests/test_parameter_policy_anima_runtime_smoke.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
+      - "tests/test_parameter_policy_qg2b3c_sr1_real_late_cpu.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
+      - "tests/test_parameter_policy_trainer_runtime_smoke.py"
+      - "tests/test_parameter_policy_full_runtime_smoke.py"
+      - "tests/test_parameter_policy_network_runtime_smoke.py"
+      - "tests/test_parameter_policy_anima_runtime_smoke.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-host-red:
+    name: "SR1 6 exact contract RED + 5 real Host baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile new and inherited Host test suites
+        run: python -m py_compile tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py tests/test_parameter_policy_qg2b3c_sr1_red.py tests/test_parameter_policy_qg2b3c_late_session_red.py tests/test_parameter_policy_qg2b3c_late_dynamic_host.py tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py tests/test_parameter_policy_qg2b3b_early_bridge_red.py tests/test_parameter_policy_qg2b3a_snapshot_red.py tests/test_parameter_policy_qg2b2_cli_intent.py
+      - name: Preserve inherited all-green and B312 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          green = (
+              ("tests.test_parameter_policy_qg1b_trusted_producer", 16),
+              ("tests.test_parameter_policy_qg1b_sr1", 16),
+              ("tests.test_parameter_policy_qg1b_evidence_coverage", 10),
+              ("tests.test_parameter_policy_qg2b2_cli_intent", 8),
+              ("tests.test_parameter_policy_qg2b3a_snapshot_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_early_bridge_red", 12),
+              ("tests.test_parameter_policy_qg2b3b_sr1_dynamic_host_red", 8),
+              ("tests.test_parameter_policy_qg2b3c_late_session_red", 10),
+              ("tests.test_parameter_policy_qg2b3c_late_dynamic_host", 8),
+          )
+          for name, expected in green:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"SR1 INVALID INHERITED DISCOVERY {name}: {suite.countTestCases()} != {expected}")
+              result = unittest.TextTestRunner(verbosity=1).run(suite)
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(f"SR1 INHERITED GREEN REGRESSION {name}")
+          PY
+      - name: B312 Integrated Admission 16/16 GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I:qg2b3c-sr1-cpu-runtime")
+          PY
+      - name: Execute real Stable and Dev Pre-Apply Host checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          name = "tests.test_parameter_policy_qg2b3c_sr1_preapply_host"
+          suite = unittest.defaultTestLoader.loadTestsFromName(name)
+          if suite.countTestCases() != 5:
+              raise SystemExit(f"SR1 PRE-APPLY DISCOVERY ERROR {suite.countTestCases()}")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 5 or result.errors or result.failures or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("SR1 PRE-APPLY REGRESSION")
+          print("QG-2-B3-C-SR1 PRE-APPLY HOST 5/5 PASS")
+          PY
+      - name: Six exact historical missing-contract RED plus five baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b3c_sr1_red import (
+              QG2B3CSR1TargetedRed, QG2B3CSR1Baselines, MARKER,
+          )
+          target = sorted(n for n in dir(QG2B3CSR1TargetedRed) if n.startswith("test_sr1"))
+          baseline = sorted(n for n in dir(QG2B3CSR1Baselines) if n.startswith("test_sr9"))
+          if len(target) != 6 or len(baseline) != 5:
+              raise SystemExit(f"SR1 INVALID DISCOVERY {len(target)}+{len(baseline)}")
+          for i in range(101, 107):
+              if sum(n.startswith(f"test_sr{i}_") for n in target) != 1:
+                  raise SystemExit(f"SR1 INVALID TARGET ID {i}")
+          for i in range(901, 906):
+              if sum(n.startswith(f"test_sr{i}_") for n in baseline) != 1:
+                  raise SystemExit(f"SR1 INVALID BASELINE ID {i}")
+          a = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B3CSR1TargetedRed(n) for n in target)
+          )
+          b = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B3CSR1Baselines(n) for n in baseline)
+          )
+          if (a.testsRun != 6 or b.testsRun != 5
+                  or a.errors or b.errors or a.skipped or b.skipped
+                  or a.expectedFailures or b.expectedFailures
+                  or a.unexpectedSuccesses or b.unexpectedSuccesses or b.failures):
+              raise SystemExit("SR1 INVALID TARGET/BASELINE EXECUTION")
+          failures = {case.id().rsplit(".", 1)[-1]: trace for case, trace in a.failures}
+          bad = [name for name, trace in failures.items() if MARKER not in trace]
+          if len(failures) == 6 and set(failures) == set(target) and not bad:
+              print("QG-2-B3-C-SR1 VALID TESTS-ONLY HOST RED: SR101-SR106 6 exact contract FAIL; SR901-SR905 5 genuine PASS; zero unexpected ERROR/SKIP/xfail/xpass")
+              raise SystemExit(1)
+          if failures:
+              raise SystemExit(f"SR1 INVALID RED IDENTITIES: {sorted(failures)} wrong marker {bad}")
+          print("QG-2-B3-C-SR1 HOST GREEN CANDIDATE; requires real CPU runtime parity and independent review")
+          PY
+
+  real-cpu-torch-red:
+    name: "SR1 four real imported CPU Torch method RED (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pinned real CPU Torch and Accelerate
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0"
+          python -m pip install "accelerate==1.6.0" "numpy==1.26.4" "schedulefree==1.4"
+          python - <<'PY'
+          import torch, accelerate
+          assert torch.__version__.split("+")[0] == "2.7.0", torch.__version__
+          assert accelerate.__version__ == "1.6.0", accelerate.__version__
+          assert not torch.cuda.is_available(), "SR1 CPU evidence must not use CUDA"
+          print(f"QG-2-B3-C-SR1 REAL CPU DEPENDENCIES VERIFIED: torch={torch.__version__}, accelerate={accelerate.__version__}")
+          PY
+      - name: Four exact actual imported runtime smoke calls must expose old ABI error
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          names = (
+              "tests.test_parameter_policy_trainer_runtime_smoke.ParameterPolicyTrainerRuntimeSmokeTests.test_baseline_session_has_no_execution_contract_or_root_refs",
+              "tests.test_parameter_policy_full_runtime_smoke.ParameterPolicyFullRuntimeSmokeTests.test_dreambooth_text_encoder_only_backpropagates_through_frozen_unet",
+              "tests.test_parameter_policy_network_runtime_smoke.ParameterPolicyNetworkRuntimeSmokeTests.test_component_lr_logging_survives_accelerate_scheduler_wrapper",
+              "tests.test_parameter_policy_anima_runtime_smoke.ParameterPolicyAnimaRuntimeSmokeTests.test_anima_full_dit_and_qwen_ownership",
+          )
+          errors = []
+          total = 0
+          for name in names:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != 1:
+                  raise SystemExit(f"SR1 INVALID REAL CPU DISCOVERY: {name}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              total += result.testsRun
+              if result.skipped or result.expectedFailures or result.unexpectedSuccesses:
+                  raise SystemExit(f"SR1 INVALID CPU SKIP/xfail: {name}")
+              if result.failures:
+                  raise SystemExit(f"SR1 UNEXPECTED CPU ASSERTION FAILURE: {name}")
+              if result.errors:
+                  if len(result.errors) != 1:
+                      raise SystemExit(f"SR1 INVALID MULTIPLE CPU ERRORS: {name}")
+                  _case, trace = result.errors[0]
+                  if ("TypeError:" not in trace or "create_parameter_policy_session"
+                      not in trace or "admission_snapshot" not in trace
+                      or "admission_intent" not in trace):
+                      raise SystemExit(f"SR1 UNEXPECTED CPU DEPENDENCY/IMPORT ERROR: {name}\n{trace}")
+                  errors.append(name)
+          if total != 4:
+              raise SystemExit(f"SR1 INVALID CPU EXECUTION COUNT: {total}")
+          if len(errors) == 4:
+              print("QG-2-B3-C-SR1 VALID REAL CPU TORCH RED: four actual historical missing-keyword TypeError regressions; dependencies installed; zero SKIP/unexpected errors")
+              raise SystemExit(1)
+          if not errors:
+              print("QG-2-B3-C-SR1 REAL CPU TORCH GREEN CANDIDATE: four actual Session smoke PASS")
+          else:
+              raise SystemExit(f"SR1 PARTIAL CPU MIGRATION: {errors}")
+          PY
+
+      - name: Run all 52 historical CPU Torch runtime smoke methods without skips
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          cases = (
+              ("tests.test_parameter_policy_trainer_runtime_smoke", 40),
+              ("tests.test_parameter_policy_full_runtime_smoke", 3),
+              ("tests.test_parameter_policy_network_runtime_smoke", 8),
+              ("tests.test_parameter_policy_anima_runtime_smoke", 1),
+          )
+          total = 0
+          for name, expected in cases:
+              suite = unittest.defaultTestLoader.loadTestsFromName(name)
+              if suite.countTestCases() != expected:
+                  raise SystemExit(f"SR1 FULL CPU DISCOVERY MISMATCH {name}: {suite.countTestCases()}/{expected}")
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              total += result.testsRun
+              if (result.testsRun != expected or result.failures or result.errors
+                      or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(
+                      f"SR1 HISTORICAL CPU REGRESSION {name}: "
+                      f"failures={len(result.failures)} errors={len(result.errors)} "
+                      f"skips={len(result.skipped)}"
+                  )
+          if total != 52:
+              raise SystemExit(f"SR1 FULL CPU COUNT ERROR {total}")
+          print("QG-2-B3-C-SR1 FULL HISTORICAL CPU GREEN: 52/52 PASS, 0 ERROR/SKIP/xfail")
+          PY
+
+      - name: Six genuine imported Late Session pre-scan CPU safety checks
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          name = "tests.test_parameter_policy_qg2b3c_sr1_real_late_cpu"
+          suite = unittest.defaultTestLoader.loadTestsFromName(name)
+          if suite.countTestCases() != 6:
+              raise SystemExit(f"SR1 REAL LATE CPU DISCOVERY: {suite.countTestCases()} != 6")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 6 or result.failures or result.errors or result.skipped
+                  or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"SR1 REAL LATE CPU REGRESSION: fail={len(result.failures)} "
+                  f"error={len(result.errors)} skip={len(result.skipped)}"
+              )
+          print("QG-2-B3-C-SR1 REAL IMPORTED LATE CPU SECURITY: 6/6 PASS")
+          PY

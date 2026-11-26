@@ -7,6 +7,13 @@ import random
 import time
 import json
 from multiprocessing import Value
+from library import dts_parameter_policy_bridge as _dts_cli_bridge
+
+_cli_intent = _dts_cli_bridge.load_direct_trainer_intent_module()
+DirectTrainerAdmissionIntent = _cli_intent.DirectTrainerAdmissionIntent
+add_direct_trainer_admission_argument = _cli_intent.add_direct_trainer_admission_argument
+extract_direct_trainer_admission_intent = _cli_intent.extract_direct_trainer_admission_intent
+
 import toml
 
 from tqdm import tqdm
@@ -142,12 +149,21 @@ class NetworkTrainer:
     def sample_images(self, accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet):
         train_util.sample_images(accelerator, args, epoch, global_step, device, vae, tokenizer, text_encoder, unet)
 
-    def train(self, args):
+    def train(self, args, admission_intent=None):
+        # QG-2-B2 carries the one-shot CLI intent separately from args.
+        # QG-2-B3 will consume it at the early/final Host Admission gates.
         session_id = random.randint(0, 2**32)
         training_started_at = time.time()
         parameter_policy_requested = bool(
             str(getattr(args, "parameter_policy_config", "") or "").strip()
         )
+        # An experimental one-shot ACK is meaningful only for Component jobs.
+        # Reject it before ordinary training verification or dataset/model work.
+        if not parameter_policy_requested and admission_intent is not None:
+            if type(admission_intent) is not DirectTrainerAdmissionIntent:
+                raise ValueError("Standard Direct Trainer requires a typed admission intent.")
+            if admission_intent.experimental_full_bf16_ack:
+                raise ValueError("Component acknowledgement is invalid for Standard Direct Trainer.")
         parameter_policy_train_type = (
             self.get_parameter_policy_train_type(args)
             if parameter_policy_requested
@@ -164,6 +180,31 @@ class NetworkTrainer:
             args,
             parameter_policy_runtime_enabled=parameter_policy_train_type is not None,
         )
+        # B3-B early Host gate: no tokenizer cache, logging, dataset, model or
+        # Accelerator initialization is allowed before this first check.
+        admission_snapshot = None
+        if parameter_policy_requested:
+            if type(admission_intent) is not DirectTrainerAdmissionIntent:
+                raise ValueError("Component Direct Trainer requires a typed one-shot admission intent.")
+            initial_effective_config = dict(vars(args))
+            admission_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=initial_effective_config,
+                admission_intent=admission_intent,
+            )
+            # Host eligibility is never a launch permission. Candidate stays
+            # HOLD until the separately reviewed B3-C late-session gate.
+            if admission_snapshot.admission.status in (
+                "blocked", "ack_required", "experimental_host_candidate"
+            ):
+                raise ValueError(
+                    "Direct Trainer early Admission is held: "
+                    + admission_snapshot.admission.status
+                    + "; " + "; ".join(admission_snapshot.admission.runtime_blockers)
+                )
+            if admission_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError("Unsupported Direct Trainer early Admission status.")
         train_util.prepare_dataset_args(args, True)
         deepspeed_utils.prepare_deepspeed_args(args)
         setup_logging(args, reset=True)
@@ -252,6 +293,27 @@ class NetworkTrainer:
             ), "when caching latents, either color_aug or random_crop cannot be used / latentをキャッシュするときはcolor_augとrandom_cropは使えません"
 
         self.assert_extra_args(args, train_dataset_group)
+
+        # Re-evaluate the *final* effective config after model-family
+        # normalization, still before Accelerator and model allocation.
+        if parameter_policy_requested:
+            final_effective_config = dict(vars(args))
+            admission_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=final_effective_config,
+                admission_intent=admission_intent,
+            )
+            if admission_snapshot.admission.status in (
+                "blocked", "ack_required", "experimental_host_candidate"
+            ):
+                raise ValueError(
+                    "Direct Trainer final Host Admission is held: "
+                    + admission_snapshot.admission.status
+                    + "; " + "; ".join(admission_snapshot.admission.runtime_blockers)
+                )
+            if admission_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError("Unsupported Direct Trainer final Admission status.")
 
         # acceleratorを準備する
         logger.info("preparing accelerator")
@@ -345,13 +407,64 @@ class NetworkTrainer:
         if hasattr(network, "prepare_network"):
             network.prepare_network(args)
         if args.scale_weight_norms and not hasattr(network, "apply_max_norm_regularization"):
+            if parameter_policy_requested:
+                raise ValueError(
+                    "Component Policy cannot silently disable scale_weight_norms "
+                    "after the final Host Admission identity snapshot."
+                )
             logger.warning(
                 "warning: scale_weight_norms is specified but the network does not support it / scale_weight_normsが指定されていますが、ネットワークが対応していません"
             )
             args.scale_weight_norms = False
+        if parameter_policy_requested:
+            # A model/network hook may mutate args even without explicit
+            # assignments in this Trainer. All fields are identity-bound:
+            # never ignore drift or silently recanonicalize the snapshot.
+            from mikazuki.parameter_policy_admission import (
+                fingerprint_effective_training_config,
+            )
+            if (
+                fingerprint_effective_training_config(vars(args))
+                != admission_snapshot.effective_config_fingerprint
+            ):
+                raise ValueError(
+                    "Direct Trainer post-network effective config identity mismatch."
+                )
 
         train_unet = not args.network_train_text_encoder_only
         train_text_encoder = self.is_train_text_encoder(args)
+        # B3-C-SR1 PRE-APPLY IDENTITY GUARD START
+        # Pure read-only Host recheck before any LoRA adapter is attached to
+        # the actual model. The post-apply Late Session remains mandatory.
+        if parameter_policy_requested:
+            pre_apply_snapshot = dts_parameter_policy_bridge.preflight_direct_trainer_admission(
+                policy_path=args.parameter_policy_config,
+                train_type=parameter_policy_train_type,
+                effective_config=dict(vars(args)),
+                admission_intent=admission_intent,
+            )
+            try:
+                admission_snapshot.assert_matches(
+                    policy_hash=pre_apply_snapshot.policy_hash,
+                    effective_config_fingerprint=pre_apply_snapshot.effective_config_fingerprint,
+                    train_type=pre_apply_snapshot.train_type,
+                    experimental_ack=pre_apply_snapshot.experimental_ack,
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "Direct Trainer Pre-Apply Admission snapshot identity mismatch."
+                ) from exc
+            if pre_apply_snapshot.admission != admission_snapshot.admission:
+                raise ValueError(
+                    "Direct Trainer Pre-Apply first-party Admission classification drift."
+                )
+            if pre_apply_snapshot.admission.status not in ("inactive", "legacy_approved"):
+                raise ValueError(
+                    "Direct Trainer Pre-Apply Admission is held: "
+                    + pre_apply_snapshot.admission.status
+                )
+        # B3-C-SR1 PRE-APPLY IDENTITY GUARD END
+
         network.apply_to(text_encoder, unet, train_text_encoder, train_unet)
 
         if args.network_weights is not None:
@@ -368,6 +481,8 @@ class NetworkTrainer:
                 args=args,
                 train_type=parameter_policy_train_type,
                 roots={"network": network},
+                admission_snapshot=admission_snapshot,
+                admission_intent=admission_intent,
             )
             train_unet = parameter_policy_session.trains_prefix("unet.")
             train_text_encoder = parameter_policy_session.trains_prefix("text_encoder")
@@ -1255,6 +1370,7 @@ def setup_parser() -> argparse.ArgumentParser:
     train_util.add_sd_models_arguments(parser)
     train_util.add_dataset_arguments(parser, True, True, True)
     train_util.add_training_arguments(parser, True)
+    add_direct_trainer_admission_argument(parser)
     train_util.add_masked_loss_arguments(parser)
     deepspeed_utils.add_deepspeed_arguments(parser)
     train_util.add_optimizer_arguments(parser)
@@ -1381,6 +1497,9 @@ if __name__ == "__main__":
     args = parser.parse_args()
     train_util.verify_command_line_training_args(args)
     args = train_util.read_config_from_file(args, parser)
+    # Consume only the final parsed Namespace; a TOML reparse restores argparse defaults.
+    # The strict one-shot intent travels separately and cannot enter training config.
+    admission_intent = extract_direct_trainer_admission_intent(args)
 
     trainer = NetworkTrainer()
-    trainer.train(args)
+    trainer.train(args, admission_intent=admission_intent)

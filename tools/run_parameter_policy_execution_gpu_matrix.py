@@ -254,9 +254,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from mikazuki import parameter_policy_execution as execution
-from mikazuki.parameter_policy_trainer import (
-    create_parameter_policy_session,
-    make_legacy_scheduler_factory,
+from mikazuki.parameter_policy_trainer import make_legacy_scheduler_factory
+from tools._parameter_policy_gpu_low_level_fixture import (
+    build_gpu_evidence_full_bf16_session,
 )
 from tools.parameter_policy_gpu_qualification_environment import (
     QualificationEnvironmentError,
@@ -1624,7 +1624,7 @@ def _build_muon_runtime(case_dir: Path, *, accumulation_steps: int):
     )
     args = _scheduler_args(policy_path, optimizer_type="Muon")
     model = _TinyMuonFlux()
-    session = create_parameter_policy_session(
+    session = build_gpu_evidence_full_bf16_session(
         args=args,
         train_type="flux-finetune",
         roots={"transformer": model},
@@ -2104,7 +2104,7 @@ def _build_c4_runtime(case_dir: Path, *, accumulation_steps: int):
     )
     args = _scheduler_args(policy_path, optimizer_type="Muon")
     model = _TinyMuonAdamWFallbackFlux()
-    session = create_parameter_policy_session(
+    session = build_gpu_evidence_full_bf16_session(
         args=args,
         train_type="flux-finetune",
         roots={"transformer": model},
@@ -2385,7 +2385,7 @@ def _build_adamw_runtime(case_dir: Path, *, accumulation_steps: int):
     policy_path.write_text(json.dumps(_policy(), sort_keys=True), encoding="utf-8")
     args = _scheduler_args(policy_path)
     model = _TinyFlux()
-    session = create_parameter_policy_session(
+    session = build_gpu_evidence_full_bf16_session(
         args=args,
         train_type="flux-finetune",
         roots={"transformer": model},
@@ -2639,7 +2639,7 @@ def _case_full_bf16_session() -> dict[str, Any]:
             optimizers=("AdamW",),
             evidence_case_id="phase-c:infra-lease:v1",
         ) as lease:
-            session = create_parameter_policy_session(
+            session = build_gpu_evidence_full_bf16_session(
                 args=args,
                 train_type="flux-finetune",
                 roots={"transformer": model},
@@ -2768,6 +2768,10 @@ def _worker_main(args: argparse.Namespace) -> int:
         "commit": None,
         "status": "fail",
     }
+    if args.worker_case != "infra:cuda-bf16-capability:v1":
+        payload["session_construction_scope"] = (
+            "isolated_gpu_low_level_evidence_only"
+        )
     try:
         payload["commit"] = _assert_exact_clean_head(args.expected_commit)
         case_dir.mkdir(parents=True, exist_ok=True)
@@ -2934,6 +2938,10 @@ def _coordinator_main(args: argparse.Namespace) -> int:
                     4,
                 ),
             }
+            if case_id != "infra:cuda-bf16-capability:v1":
+                row.update({
+                    "session_construction_scope": "isolated_gpu_low_level_evidence_only",
+                })
             if case_id in _ADAMW_CASES:
                 row.update(
                     {

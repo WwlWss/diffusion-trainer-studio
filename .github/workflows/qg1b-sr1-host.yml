@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - "feature/qualification-gate-qg1b-trusted-producer"
+      - main
     paths:
       - ".github/workflows/qg1b-sr1-host.yml"
       - "tests/test_parameter_policy_qg1b_sr1.py"

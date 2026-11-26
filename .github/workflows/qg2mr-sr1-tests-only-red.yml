@@ -1,0 +1,147 @@
+name: DTS QG-2-MR-SR1-E all 26 pre-merge source contracts GREEN
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red", main]
+    paths:
+      - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
+      - "tests/qg2mr_sr1_contract.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "scripts/stable/sdxl_train_network.py"
+      - "scripts/dev/sdxl_train_network.py"
+      - "scripts/dev/sd3_train_network.py"
+      - "scripts/dev/flux_train_network.py"
+      - "scripts/dev/lumina_train_network.py"
+      - "scripts/stable/library/train_util.py"
+      - "scripts/dev/library/train_util.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
+      - "tests/qg2mr_sr1_contract.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "tests/qg2b4i_ci_contract.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "scripts/stable/**"
+      - "scripts/dev/**"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  real-source-tests:
+    name: "MR-SR1-E 24 inherited MR-01/02/03 GREEN plus baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile real extracted readers, subprocess checks and frozen B2 tests
+        run: python -m py_compile tests/qg2mr_sr1_contract.py tests/test_parameter_policy_qg2b2_cli_intent.py tests/qg2b4i_ci_contract.py
+      - name: Confirm four real independent MR-SR1 baselines PASS
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.qg2mr_sr1_contract import QG2MRSR1Baselines
+          suite = unittest.defaultTestLoader.loadTestsFromTestCase(QG2MRSR1Baselines)
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 4 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("MR-SR1 invalid four genuine baselines")
+          print("MR-SR1 BASELINES: 4/4 actual PASS")
+          PY
+      - name: Preserve eight QG2-B2 CLI contracts with updated safe Bridge source expectations
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          suite = unittest.defaultTestLoader.loadTestsFromName("tests.test_parameter_policy_qg2b2_cli_intent")
+          result = unittest.TextTestRunner(verbosity=2).run(suite)
+          if (result.testsRun != 8 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit("MR-SR1 frozen B2 regression: expected 8/8 real PASS")
+          print("MR-SR1 INHERITED B2: 8/8 actual PASS")
+          PY
+      - name: Preserve cumulative B312 plus baseline sixteen actual GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-MR-SR1 frozen parent baseline")
+          PY
+      - name: Exactly 24 MR-01 MR-02 MR-03 real Final CLI Bootstrap and Standard GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.qg2mr_sr1_contract import QG2MRSR1Targeted
+          all_names = sorted(n for n in dir(QG2MRSR1Targeted) if n.startswith("test_mr"))
+          green_names = [n for n in all_names if n.startswith(("test_mr1", "test_mr2", "test_mr3", "test_mr4", "test_mr5"))]
+          red_names = [n for n in all_names if n not in green_names]
+          if (len(all_names), len(green_names), len(red_names)) != (26, 24, 2):
+              raise SystemExit("MR-SR1-E invalid independent target discovery")
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2MRSR1Targeted(n) for n in green_names)
+          )
+          if (result.testsRun != 24 or result.failures or result.errors
+              or result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"MR-SR1-E twenty-four inherited GREEN tests NOT PASS: "
+                  f"{len(result.failures)} FAIL; {len(result.errors)} ERROR"
+              )
+          print("MR-SR1-E VERIFIED INHERITED GREEN: MR-01 13/13 + MR-02 9/9 + MR-03 2/2 PASS")
+          PY
+  remaining-source-green:
+    name: "MR-SR1-E two final QG1B main CI source GREEN (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Precisely two MR-04 main CI source contracts must PASS
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.qg2mr_sr1_contract import QG2MRSR1Targeted
+          all_names = sorted(n for n in dir(QG2MRSR1Targeted) if n.startswith("test_mr"))
+          red_names = [n for n in all_names if n.startswith("test_mr6")]
+          if len(all_names) != 26 or len(red_names) != 2:
+              raise SystemExit("MR-SR1-E remaining target discovery drift")
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2MRSR1Targeted(n) for n in red_names)
+          )
+          if (result.testsRun != 2 or result.failures or result.errors
+              or result.skipped or result.expectedFailures
+              or result.unexpectedSuccesses):
+              raise SystemExit(
+                  "MR-SR1-E final CI main push coverage 2/2 must PASS"
+              )
+          print("MR-SR1-E VERIFIED FINAL: MR-04 2/2 PASS; cumulative MR-01/02/03/04 all 26 GREEN")
+          PY

@@ -11,12 +11,18 @@ from pathlib import Path
 import mikazuki.app.api as legacy_api
 from mikazuki.multi_caption_config import build_multi_caption_sidecar
 from mikazuki.parameter_policy import build_parameter_policy_sidecar, parameter_policy_runtime_blockers
+from mikazuki.parameter_policy_admission import (
+    ComponentAdmission, assess_component_training_admission,
+)
 from mikazuki.parameter_policy_editor import normalize_parameter_policy_editor_state
 from mikazuki.parameter_policy_matrix import (
     PARAMETER_POLICY_RUNTIME_TRAIN_TYPES,
     parameter_policy_gpu_selection_blockers,
 )
-from mikazuki.training_config import PAGE_BACKEND_MAP, prepare_training_config
+from mikazuki.training_config import (
+    PAGE_BACKEND_MAP, RequestAdmissionIntent, prepare_training_config,
+)
+from mikazuki.training_gui_args import parse_ui_custom_params
 from mikazuki.training_validation import validate_prepared_config
 from mikazuki.utils import train_utils
 
@@ -184,11 +190,66 @@ def prepare_request_config(
     toml_path: str | None = None,
     *,
     materialize: bool = False,
+    admission_intent: RequestAdmissionIntent | None = None,
+    admission_purpose: str | None = None,
 ):
+    """Compile effective Trainer config and request-scoped Host admission.
+
+    QG-2-A1 is *diagnostic only*: a per-job acknowledgement may change the
+    typed Host admission result, never the existing Step 6F Start gate.
+    A2/B must independently wire and audit API/Direct Trainer transport.
+    """
     del stamp
+    if not isinstance(config, dict):
+        raise ValueError("Request training config must be a dictionary.")
+    if type(launch) is not bool:
+        raise ValueError("Request launch must be a real boolean.")
+    if type(materialize) is not bool:
+        raise ValueError("Request materialize must be a real boolean.")
+    if admission_purpose is None:
+        admission_purpose = "start" if launch else "preview"
+    if (
+        type(admission_purpose) is not str
+        or admission_purpose not in {"preview", "export", "start"}
+        or (admission_purpose == "start") != launch
+    ):
+        raise ValueError("Request admission purpose does not match launch intent.")
+    # Legacy Start and explicit Export may deliberately write sidecars.
+    # Preview is strictly model-free and MUST reject a write instruction
+    # before config normalization or any Standard launch preparation.
+    if admission_purpose == "preview" and materialize:
+        raise ValueError("Preview cannot materialize sidecars.")
+    if admission_intent is None:
+        admission_intent = RequestAdmissionIntent()
+    elif type(admission_intent) is not RequestAdmissionIntent:
+        raise ValueError("Request admission intent must be a typed, per-job intent.")
+
+    # An acknowledgement must come from the future, dedicated control plane,
+    # never from Trainer arguments, raw GUI data or custom TOML overrides.
+    # Perform this inspection before any launch-time normalization or staging.
+    reserved = frozenset((
+        "experimental_full_bf16_ack", "admission_intent", "admission",
+    ))
+    custom_overrides = parse_ui_custom_params(config.get("ui_custom_params"))
+    nested_overrides = config.get("__ui_custom_overrides")
+    if (
+        reserved.intersection(config)
+        or reserved.intersection(custom_overrides)
+        or (isinstance(nested_overrides, dict)
+            and reserved.intersection(nested_overrides))
+    ):
+        raise ValueError(
+            "experimental_full_bf16_ack / admission_intent are Host-owned "
+            "per-job controls; Trainer config and ui_custom_params cannot set them."
+        )
+
     train_utils.fix_config_types(config)
     normalize_parameter_policy_editor_state(config)
     policy_path, policy_sidecars, policy = build_parameter_policy_sidecar(config, page_type)
+    if policy is None and admission_intent.experimental_full_bf16_ack:
+        # Standard Start can already have launch-time staging in its compiler.
+        # Reject inappropriate consent *before* invoking that compiler.
+        raise ValueError("Experimental Full-BF16 acknowledgement requires Component mode.")
     multi_path, multi_sidecars, _multi_policy = build_multi_caption_sidecar(config, page_type)
     sidecars, prompt_warnings = prepare_prompt_fields(config, page_type)
 
@@ -216,12 +277,55 @@ def prepare_request_config(
         raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 手工注入。")
     if multi_path is not None and effective_multi_path != multi_path:
         raise ValueError("multi_caption_config 是 DTS 托管字段，不能通过 ui_custom_params 覆盖。")
+    if reserved.intersection(prepared.config):
+        raise ValueError(
+            "experimental_full_bf16_ack / admission_intent cannot appear in "
+            "the normalized Trainer config."
+        )
+
     prepared.sidecars.update(policy_sidecars)
     prepared.sidecars.update(multi_sidecars)
     prepared.sidecars.update(sidecars)
     prepared.warnings.extend(prompt_warnings)
+
+    # Every invocation begins with a *new* neutral intent. Preview/Export may
+    # be given a UI intent by a future caller, but MUST NOT consume or retain
+    # its positive acknowledgement, including in any portable sidecar.
+    prepared.admission_intent = RequestAdmissionIntent()
     if policy is not None:
-        blockers = parameter_policy_runtime_blockers(
+        explicit_start_ack = (
+            launch and admission_purpose == "start"
+            and admission_intent.experimental_full_bf16_ack
+        )
+        admission = assess_component_training_admission(
+            policy,
+            train_type=prepared.train_type,
+            effective_config=prepared.config,
+            purpose=admission_purpose,
+            experimental_ack=explicit_start_ack,
+        )
+        if type(admission) is not ComponentAdmission:
+            raise ValueError(
+                "Request requires a first-party typed ComponentAdmission "
+                "diagnostic, never None or a caller-provided permission."
+            )
+        prepared.admission = admission
+        if explicit_start_ack:
+            if admission.status in {"inactive", "legacy_approved"}:
+                raise ValueError(
+                    "Experimental Full-BF16 acknowledgement is only valid "
+                    "for a nonqualified, source-audited Component candidate."
+                )
+            # Preserve genuine per-request acknowledgement only for the
+            # audited *candidate* state. Never carry consent when blocked.
+            if admission.status == "experimental_host_candidate":
+                prepared.admission_intent = admission_intent
+
+        # Defense in depth: the existing Step 6F and GPU hard gates MUST
+        # remain independent of the typed Host admission producer.  An
+        # experimental ack is still False in Step 6F until BOTH QG-2-A2 and
+        # QG-2-B are reviewed; it is not an authorization token.
+        legacy_blockers = parameter_policy_runtime_blockers(
             policy,
             train_type=prepared.train_type,
             effective_config=prepared.config,
@@ -230,8 +334,34 @@ def prepare_request_config(
             # intent (effective_launch is deliberately false for Components).
             require_assets=launch,
         )
-        blockers.extend(parameter_policy_gpu_selection_blockers(prepared.gpu_ids))
+        gpu_blockers = parameter_policy_gpu_selection_blockers(prepared.gpu_ids)
+        # Typed source errors must also appear in Preview's comprehensive
+        # runtime diagnostics. Preserve all old diagnostic ordering and
+        # de-duplicate by exact text, never by searching for "pending".
+        blockers = list(dict.fromkeys(
+            [*legacy_blockers, *gpu_blockers, *admission.runtime_blockers]
+        ))
         prepared.runtime_blockers.extend(blockers)
+        if launch:
+            if admission.status in {"blocked", "ack_required"}:
+                # Reject independently of legacy Step 6F, but preserve its
+                # existing user-visible first error whenever it is present
+                # (including historical full_bf16 pending diagnostics).
+                # If the old gate ever omits the error, the first-party
+                # typed reason still fails the request closed.
+                raise ValueError(
+                    legacy_blockers[0] if legacy_blockers
+                    else admission.runtime_blockers[0]
+                )
+            if admission.status == "experimental_host_candidate":
+                raise ValueError(
+                    "QG-2-A2 and QG-2-B admission transport and Direct "
+                    "Trainer verification are still HOLD; experimental "
+                    "Host candidacy cannot authorize Start."
+                )
+        # Preserve the exact historical Step 6F early-Start gate after the
+        # new independent typed decision. Old B904 source/ordering contract
+        # explicitly checks this guard appears before sidecar materialization.
         if launch and blockers:
             raise ValueError(blockers[0])
     if materialize:

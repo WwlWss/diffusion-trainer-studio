@@ -1,0 +1,64 @@
+name: DTS QG-1B3-B FSR runner matrix scoped GREEN
+on:
+  push:
+    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    paths:
+      - ".github/workflows/qg1b3b-fsr-runner.yml"
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - "tests/test_parameter_policy_qg1b3b_runner_label.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  runner-label-contract:
+    name: "QG-1B3-B runner label and 8+4 tests (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 16
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile actual typed migration and runner-identity checks
+        run: python -m py_compile tests/test_parameter_policy_qg1b3b_runner_label.py tests/test_parameter_policy_qg1b3b_runtime_migration.py
+      - name: Old 8 migration and 4 first-party baseline tests must remain GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg1b3b_runtime_migration import (
+              QG1B3BTypedMigrationRed, QG1B3BTrueExistingBaselines,
+          )
+          for cls, expected in ((QG1B3BTypedMigrationRed, 8),
+                                (QG1B3BTrueExistingBaselines, 4)):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              result = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (result.testsRun != expected or result.failures or result.errors or
+                  result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B historical typed contract FAIL: {cls.__name__}")
+          print("QG1B3-B real 8/8 targeted +4/4 baselines PASS")
+          PY
+      - name: Exact typed runner label and independent baseline both GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg1b3b_runner_label import (
+              QG1B3BRunnerLabelTarget, QG1B3BRunnerLabelBaseline,
+          )
+          for cls in (QG1B3BRunnerLabelTarget, QG1B3BRunnerLabelBaseline):
+              suite = unittest.defaultTestLoader.loadTestsFromTestCase(cls)
+              outcome = unittest.TextTestRunner(verbosity=2).run(suite)
+              if (outcome.testsRun != 1 or outcome.failures or outcome.errors or
+                  outcome.skipped or outcome.expectedFailures or outcome.unexpectedSuccesses):
+                  raise SystemExit(f"QG1B3-B RUNNER LABEL GREEN REGRESSION: {cls.__name__}")
+          print("QG-1B3-B VALID SCOPED GREEN: proper Ubuntu/Windows runner + 1+1 source test PASS +8/8 typed target +4/4 baseline PASS")
+          PY

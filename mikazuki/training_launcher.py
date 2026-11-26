@@ -12,6 +12,7 @@ from mikazuki.app.models import APIResponse
 from mikazuki.gpu_runtime import validate_cuda_training_runtime
 from mikazuki.log import log
 from mikazuki.tasks import tm
+from mikazuki.training_config import RequestAdmissionIntent
 
 
 ACCELERATE_GPU_CONFIG = Path(__file__).resolve().parents[1] / "config" / "accelerate-gpu.yaml"
@@ -25,8 +26,29 @@ def run_prepared_train(
     *,
     page_train_type: str | None = None,
     run_id: str | None = None,
+    admission_intent: RequestAdmissionIntent | None = None,
 ):
-    """Start Accelerate without mutating trainer configuration again."""
+    """Start Accelerate without mutating trainer configuration again.
+
+    The optional request intent is one invocation's *confirmation*, never
+    authorization to skip the upstream Request or downstream Trainer gates.
+    """
+    # Fail closed on forged, mutated or non-typed Host controls before GPU
+    # validation, task creation, logging, or any other observable side effect.
+    if admission_intent is not None:
+        if type(admission_intent) is not RequestAdmissionIntent:
+            raise ValueError("Request admission intent must be an exact first-party type.")
+        if (
+            type(admission_intent.experimental_full_bf16_ack) is not bool
+            or type(admission_intent.origin) is not str
+            or admission_intent.origin not in ("default", "webui_start")
+            or (
+                admission_intent.experimental_full_bf16_ack is True
+                and admission_intent.origin != "webui_start"
+            )
+        ):
+            raise ValueError("Invalid Request admission intent for this Start invocation.")
+
     try:
         selected_gpu_ids, gpu_names = validate_cuda_training_runtime(gpu_ids)
     except RuntimeError as exc:
@@ -53,6 +75,14 @@ def run_prepared_train(
         "--config_file",
         toml_path,
     ]
+    if (
+        admission_intent is not None
+        and admission_intent.origin == "webui_start"
+        and admission_intent.experimental_full_bf16_ack is True
+    ):
+        # Child trainer argument ONLY, after its own --config_file. Not an
+        # Accelerate parent option, TOML value, environment or task metadata.
+        args.append("--experimental_full_bf16_ack")
 
     env = os.environ.copy()
     env["ACCELERATE_DISABLE_RICH"] = "1"

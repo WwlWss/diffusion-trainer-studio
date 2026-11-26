@@ -17,7 +17,14 @@ class FrontendEffectiveConfigPatchTests(unittest.TestCase):
     def test_preview_export_start_all_send_raw_gui_state(self):
         self.assertIn('/api/training/preview', self.patched)
         self.assertIn('/api/training/export', self.patched)
-        self.assertIn('__trainingRequest("/api/run",T())', self.patched)
+        # QG-2-A2 one-job confirmation is a Start-only argument, not
+        # a serialized GUI config value; preserve explicit UI consent.
+        self.assertIn('__trainingRequest("/api/run",T(),__ack)', self.patched)
+        self.assertIn('const __ack=__isComponentMode()&&__admission.value', self.patched)
+        self.assertIn('endpoint==="/api/run"&&experimentalAck===!0&&(body.experimental_full_bf16_ack=!0)', self.patched)
+        self.assertIn('__experimentalFullBf16Ack.value=!1;__startPending.value=!0', self.patched)
+        self.assertIn('finally{__experimentalFullBf16Ack.value=!1,__startPending.value=!1}', self.patched)
+        self.assertNotIn('a.value.experimental_full_bf16_ack', self.patched)
         self.assertIn('__requestEffective(T(),"/api/training/export")', self.patched)
         self.assertNotIn('O=async()=>{const _=parseParams(', self.patched)
         self.assertNotIn('stringify(parseParams(n.value(clone(m.value)),t))', self.patched)

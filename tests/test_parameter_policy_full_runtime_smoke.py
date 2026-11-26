@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from tests._parameter_policy_admission_fixtures import make_test_admission_kwargs
 
 
 _RUNTIME_DEPS_AVAILABLE = all(
@@ -116,10 +117,14 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
             policy_path = self._write_policy(temp_dir, _policy(components))
             unet = TinyDreamUNet()
             text_encoder = TinyTextEncoder()
+            case_args = _args(policy_path)
+            typed_admission = make_test_admission_kwargs(case_args, "sd-dreambooth")
             session = create_parameter_policy_session(
-                args=_args(policy_path),
+                args=case_args,
                 train_type="sd-dreambooth",
                 roots={"unet": unet, "text_encoder": text_encoder},
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
             self.assertFalse(session.trains_prefix("unet."))
             self.assertTrue(session.trains_component("text_encoder"))
@@ -158,8 +163,10 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
             structural = tuple(te1.text_model.encoder.layers[-1].parameters()) + tuple(
                 te1.text_model.final_layer_norm.parameters()
             )
+            case_args = _args(policy_path, train_text_encoder=True)
+            typed_admission = make_test_admission_kwargs(case_args, "sdxl-finetune")
             session = create_parameter_policy_session(
-                args=_args(policy_path, train_text_encoder=True),
+                args=case_args,
                 train_type="sdxl-finetune",
                 roots={
                     "unet": unet,
@@ -167,6 +174,8 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
                     "text_encoder_2": te2,
                 },
                 structural_frozen_parameters=structural,
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             owned = session.trainable_parameter_ids
@@ -197,10 +206,14 @@ class ParameterPolicyFullRuntimeSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             policy_path = self._write_policy(temp_dir, _policy(components))
             flux = TinyFlux()
+            case_args = _args(policy_path)
+            typed_admission = make_test_admission_kwargs(case_args, "flux-finetune")
             session = create_parameter_policy_session(
-                args=_args(policy_path),
+                args=case_args,
                 train_type="flux-finetune",
                 roots={"transformer": flux},
+                admission_snapshot=typed_admission["admission_snapshot"],
+                admission_intent=typed_admission["admission_intent"],
             )
 
             self.assertTrue(session.trains_component("transformer.double_stream"))

@@ -1,0 +1,83 @@
+name: DTS QG-2-B4-I all 13 inherited B312 workflows integrated GREEN
+on:
+  push:
+    branches:
+      - main
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2b4i-integrated-green.yml"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_parameter_policy_qg2b4i_ci_migration.py"
+      - "docs/qualification-gate-qg2b4i-integrated-green.md"
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - ".github/workflows/qg2a2-api-host.yml"
+      - ".github/workflows/qg2b2-cli-intent-host.yml"
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - ".github/workflows/qg2b3b-early-bridge-host.yml"
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/app/training_api.py"
+      - "mikazuki/training_launcher.py"
+      - "mikazuki/**"
+      - "scripts/stable/**"
+      - "scripts/dev/**"
+      - "tests/**"
+      - ".github/workflows/qg2b4fsr-sr1-ci.yml"
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  all-13-source-contracts:
+    name: "B4-I thirteen inherited CI GREEN + cumulative B312 GREEN (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 18
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile Host-only shared suite and 13-source contract checks
+        run: python -m py_compile tests/qg2b4i_ci_contract.py tests/test_parameter_policy_qg2b4i_ci_migration.py tests/test_parameter_policy_admission_red.py
+      - name: Prove cumulative B301-B312 and B901-B904 actual 16/16 GREEN before migrating CI
+        shell: bash
+        run: |
+          python - <<'PY'
+          from tests.qg2b4i_ci_contract import assert_cumulative_admission_green
+          assert_cumulative_admission_green("QG-2-B4-I parent real Host baseline")
+          PY
+      - name: Thirteen real inherited workflow source contract tests GREEN
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_parameter_policy_qg2b4i_ci_migration import (
+              QG2B4IInheritedWorkflowMigration, WORKFLOWS,
+          )
+          cases = sorted(n for n in dir(QG2B4IInheritedWorkflowMigration) if n.startswith("test_i1"))
+          if len(WORKFLOWS) != 13 or len(cases) != 13 or len(set(WORKFLOWS)) != 13:
+              raise SystemExit(f"B4-I INVALID CI CONSUMER DISCOVERY: {len(WORKFLOWS)}, {len(cases)}")
+          result = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2B4IInheritedWorkflowMigration(name) for name in cases)
+          )
+          if (result.testsRun != 13 or result.failures or result.errors or
+              result.skipped or result.expectedFailures or result.unexpectedSuccesses):
+              raise SystemExit(
+                  f"B4-I WORKFLOW CONTRACT REGRESSION: 13 actual PASS required; "
+                  f"fail={len(result.failures)}, error={len(result.errors)}"
+              )
+          print("QG-2-B4-I MIGRATION GREEN: 13/13 workflows require B312 16/16 true PASS; no stale expected-RED gate")
+          PY
