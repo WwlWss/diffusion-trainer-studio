@@ -555,6 +555,9 @@ class BackendFeatureManifestTests(unittest.TestCase):
         self.assertEqual(cases[0]["feature"], "full_bf16")
         self.assertEqual(cases[0]["entrypoint"], "scripts/dev/flux_train.py")
         self.assertEqual(cases[0]["fresh_command"][0], "scripts/dev/flux_train.py")
+        self.assertEqual(cases[0]["resume_command"][0], "scripts/dev/flux_train.py")
+        self.assertEqual(cases[0]["entrypoint"], cases[0]["fresh_command"][0])
+        self.assertEqual(cases[0]["entrypoint"], cases[0]["resume_command"][0])
 
     def test_d1_sd_lora_manifest_validates_explicit_policy_contracts(self):
         with tempfile.TemporaryDirectory() as temp_dir:
