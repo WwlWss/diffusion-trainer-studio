@@ -34,12 +34,12 @@ def _read(path: Path) -> str:
 def _function(path: Path, name: str) -> ast.FunctionDef:
     module = ast.parse(_read(path), filename=str(path))
     matches = [
-        node for node in module.body
+        node for node in ast.walk(module)
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
         and node.name == name
     ]
     if len(matches) != 1 or not isinstance(matches[0], ast.FunctionDef):
-        raise AssertionError(f"Expected exactly one top-level function {name!r} in {path}")
+        raise AssertionError(f"Expected exactly one function or test method {name!r} in {path}")
     return matches[0]
 
 
