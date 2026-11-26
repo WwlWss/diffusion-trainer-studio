@@ -97,6 +97,7 @@ class SR101FileOwnershipRed(unittest.TestCase):
                 self.assertEqual(run.call_count, 2)
 
             for file in prior_files:
+                self.assertTrue(file.is_file(), MARKER + ": user evidence deleted")
                 self.assertEqual(
                     file.read_bytes(),
                     b"preexisting user evidence\n",
