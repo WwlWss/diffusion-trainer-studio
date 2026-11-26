@@ -57,9 +57,24 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
             cwd=ROOT,
             text=True,
         ).strip()
-        probe = ROOT / "phase-c-provenance-untracked.tmp"
+        # A locally ignored probe would silently bypass both pre-import gates
+        # and could start the full CUDA matrix.  Confirm Git sees it BEFORE
+        # starting either subprocess, regardless of global/local ignore rules.
+        probe = ROOT / "phase-c-provenance-untracked.json"
+        self.assertFalse(probe.exists(), "Refuse to overwrite an existing probe.")
         try:
             probe.write_text("probe\n", encoding="utf-8")
+            visible = subprocess.check_output(
+                ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+                cwd=ROOT,
+                text=True,
+            ).splitlines()
+            self.assertEqual(
+                visible,
+                [f"?? {probe.name}"],
+                "Untracked probe is ignored or working tree is already dirty. "
+                "Refusing to launch GPU qualification runners.",
+            )
             cases = (
                 (
                     RUNNER,
@@ -88,6 +103,7 @@ class ParameterPolicyExecutionGpuHarnessContractTests(unittest.TestCase):
                         text=True,
                         capture_output=True,
                         check=False,
+                        timeout=25,  # fail closed rather than run an accidental GPU matrix
                     )
                     self.assertNotEqual(completed.returncode, 0)
                     combined = completed.stdout + completed.stderr
