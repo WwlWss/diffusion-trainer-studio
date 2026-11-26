@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 from pathlib import Path
+import subprocess
 from tempfile import TemporaryDirectory
 import unittest
 from unittest import mock
@@ -45,6 +46,62 @@ class SR101FileOwnershipRed(unittest.TestCase):
         source = _probe_source()
         self.assertNotIn('(ROOT.parent / "execution-probe.json").unlink', source, MARKER)
         self.assertNotIn('(ROOT.parent / "baseline-probe.json").unlink', source, MARKER)
+
+    def test_SR101_T4_existing_external_files_survive_harness_rejection(self):
+        # Run the *real Harness test method* against an isolated fake repo;
+        # all Git and child process invocations are mocked, never CUDA.
+        import test_parameter_policy_execution_gpu_harness as harness
+
+        with TemporaryDirectory(prefix="qg2-fsr-external-") as temp_dir:
+            outer = Path(temp_dir)
+            fake_repo = outer / "repo"
+            fake_repo.mkdir()
+            prior_files = [
+                outer / "execution-probe.json",
+                outer / "baseline-probe.json",
+            ]
+            for file in prior_files:
+                file.write_bytes(b"preexisting user evidence\n")
+
+            def fake_git(argv, **kwargs):
+                if argv == ["git", "rev-parse", "HEAD"]:
+                    return "f" * 40
+                if argv == ["git", "status", "--porcelain=v1", "--untracked-files=all"]:
+                    probes = list(fake_repo.glob("phase-c-provenance-untracked*.json"))
+                    if len(probes) != 1:
+                        raise AssertionError("Expected exactly one Git-visible probe")
+                    return f"?? {probes[0].name}\n"
+                raise AssertionError(f"Unexpected Git command: {argv!r}")
+
+            def fake_runner(argv, **kwargs):
+                probes = list(fake_repo.glob("phase-c-provenance-untracked*.json"))
+                if len(probes) != 1:
+                    raise AssertionError("Missing exclusive untracked probe")
+                return subprocess.CompletedProcess(
+                    argv, 1,
+                    stdout=f"completely clean workspace: {probes[0].name}",
+                    stderr="",
+                )
+
+            with (
+                mock.patch.object(harness, "ROOT", fake_repo),
+                mock.patch.object(harness, "RUNNER", fake_repo / "exec.py"),
+                mock.patch.object(harness, "BASELINE_RUNNER", fake_repo / "base.py"),
+                mock.patch.object(harness.subprocess, "check_output", side_effect=fake_git),
+                mock.patch.object(harness.subprocess, "run", side_effect=fake_runner) as run,
+            ):
+                case = harness.ParameterPolicyExecutionGpuHarnessContractTests(
+                    "test_strict_runners_reject_untracked_workspace_before_runtime_imports"
+                )
+                case.test_strict_runners_reject_untracked_workspace_before_runtime_imports()
+                self.assertEqual(run.call_count, 2)
+
+            for file in prior_files:
+                self.assertEqual(
+                    file.read_bytes(),
+                    b"preexisting user evidence\n",
+                    MARKER + ": external evidence was deleted or altered",
+                )
 
     def test_SR101_B1_existing_git_guard_and_timeout_are_retained(self):
         source = _probe_source()
