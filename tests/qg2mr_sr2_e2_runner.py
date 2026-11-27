@@ -2,7 +2,7 @@
 
 Test infrastructure only. Keep the original unittest discovery module identity.
 The two real Torch-only R2 modules are excluded before discovery/import.
-E2-C2 owns their mandatory CPU execution; never use this as a runtime pass.
+R2 CPU execution is explicit and mandatory in its own pinned CPU job.
 """
 from __future__ import annotations
 
@@ -158,13 +158,211 @@ def strict_host_success(record: dict) -> bool:
     )
 
 
+# Freeze original test identities, not merely suite lengths. The top-level
+# module names intentionally match "unittest discover -s tests".
+CPU_SUITE_FILES = {
+    "helper": "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.py",
+    "fsr": "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.py",
+}
+CPU_SUITE_IDS = {
+    "helper": (
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G01_tiny_adamw_low_level_session",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G02_tiny_muon_low_level_session",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G03_tiny_muon_adamw_fallback_low_level_session",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G04_wrong_model_class_is_rejected_before_root_scan",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G05_inactive_precision_is_rejected_before_root_scan",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G06_production_full_bf16_flux_remains_blocked_pre_scan",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.IsolatedGpuEvidenceHelperCpuTests.test_R2G07_inactive_real_admission_still_constructs_legacy_session",
+    ),
+    "fsr": (
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR101FileOwnershipRed.test_SR101_B1_existing_git_guard_and_timeout_are_retained",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR101FileOwnershipRed.test_SR101_T1_probe_created_exclusively",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR101FileOwnershipRed.test_SR101_T2_runner_outputs_in_private_external_directory",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR101FileOwnershipRed.test_SR101_T3_never_unlinks_fixed_unowned_outputs",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR101FileOwnershipRed.test_SR101_T4_existing_external_files_survive_harness_rejection",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T1_adamw_extra_argument",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T2_muon_momentum_changed",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T3_muon_ns_steps_changed",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T4_muon_field_removed",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T5_fallback_adamw_extra_argument",
+        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.SR102SyntheticScopeRed.test_SR102_T6_same_name_and_shape_but_external_source",
+    ),
+}
+CPU_PINS = {
+    "accelerate": "1.6.0",
+    "numpy": "1.26.4",
+    "schedulefree": "1.4",
+    "pytorch-optimizer": "3.10.0",
+    "safetensors": "0.4.5",
+}
+CPU_DISCOVERY_MARKER = "DTS_E2_CPU_DISCOVERY_JSON "
+CPU_RESULT_MARKER = "DTS_E2_CPU_RESULT_JSON "
+CPU_ENV_MARKER = "DTS_E2_CPU_ENV_JSON "
+
+
+def expected_cpu_ids(selection: str) -> tuple[str, ...]:
+    if selection == "all":
+        return CPU_SUITE_IDS["helper"] + CPU_SUITE_IDS["fsr"]
+    if selection not in CPU_SUITE_IDS:
+        raise PartitionError(f"Unknown CPU suite: {selection}")
+    return CPU_SUITE_IDS[selection]
+
+
+def validate_cpu_ids(actual, expected) -> None:
+    if (len(actual) != len(expected) or len(actual) != len(set(actual))
+            or set(actual) != set(expected)):
+        raise PartitionError(
+            f"CPU identity mismatch: expected={len(expected)}, actual={len(actual)}, "
+            f"missing={sorted(set(expected) - set(actual))}, "
+            f"unexpected={sorted(set(actual) - set(expected))}"
+        )
+
+
+def verify_pinned_cpu() -> dict:
+    # Import Torch only in the CPU execution/diagnostic entry, never Host.
+    import importlib.metadata as metadata
+    import os
+
+    if sys.version_info[:2] != (3, 11):
+        raise PartitionError("R2 CPU qualification requires Python 3.11")
+    if os.environ.get("CUDA_VISIBLE_DEVICES") != "":
+        raise PartitionError("R2 CPU qualification requires CUDA_VISIBLE_DEVICES to be empty")
+    try:
+        versions = {name: metadata.version(name) for name in ("torch", *CPU_PINS)}
+    except metadata.PackageNotFoundError as exc:
+        raise PartitionError(f"Missing pinned CPU dependency: {exc}") from exc
+    if (versions["torch"] not in {"2.7.0", "2.7.0+cpu"}
+            or any(versions[name] != pin for name, pin in CPU_PINS.items())):
+        raise PartitionError(f"Unexpected pinned CPU dependencies: {versions}")
+    import torch
+    if (str(torch.__version__) not in {"2.7.0", "2.7.0+cpu"}
+            or torch.version.cuda is not None
+            or getattr(torch.version, "hip", None) is not None
+            or torch.cuda.is_available()):
+        raise PartitionError("R2 CPU qualification requires actual CPU-only Torch 2.7.0")
+    if torch.zeros(1).device.type != "cpu":
+        raise PartitionError("Default Torch tensor device is not CPU")
+    record = {
+        "python": sys.version.split()[0],
+        "versions": versions,
+        "torch_module_version": str(torch.__version__),
+        "cuda_build": torch.version.cuda,
+        "hip_build": getattr(torch.version, "hip", None),
+        "cuda_available": torch.cuda.is_available(),
+        "tensor_device": "cpu",
+        "cuda_visible_devices": os.environ["CUDA_VISIBLE_DEVICES"],
+    }
+    print(CPU_ENV_MARKER + json.dumps(record), flush=True)
+    return record
+
+
+def verify_cpu_sources(selection: str) -> None:
+    # FSR imports the original helper by its top-level unittest identity.
+    # Require exact checked-in module origins and reject duplicate aliases.
+    expected = {"helper"} if selection == "helper" else {"helper", "fsr"}
+    names = {Path(CPU_SUITE_FILES[k]).stem for k in expected}
+    if set(loaded_cpu_modules()) != names:
+        raise PartitionError(f"Unexpected CPU module aliases: {loaded_cpu_modules()}")
+    for key in expected:
+        filename = CPU_SUITE_FILES[key]
+        module = sys.modules.get(Path(filename).stem)
+        if module is None or Path(module.__file__).resolve() != (TESTS_DIR / filename).resolve():
+            raise PartitionError(f"Unexpected CPU module source: {filename}")
+
+
+def discover_cpu(selection: str):
+    require_no_cpu_modules()
+    select_host_files(TESTS_DIR)
+    if frozenset(CPU_SUITE_FILES.values()) != R2_CPU_ONLY_FILES:
+        raise PartitionError("CPU ownership does not match exact Host exclusions")
+    expected = expected_cpu_ids(selection)
+    keys = ("helper", "fsr") if selection == "all" else (selection,)
+    loader = unittest.TestLoader()
+    suite = unittest.TestSuite()
+    for key in keys:
+        suite.addTests(loader.discover(
+            start_dir=str(TESTS_DIR),
+            pattern=CPU_SUITE_FILES[key],
+            top_level_dir=str(TESTS_DIR),
+        ))
+    if loader.errors:
+        raise PartitionError("CPU discovery errors:\n" + "\n".join(loader.errors))
+    ids = test_ids(suite)
+    validate_cpu_ids(ids, expected)
+    verify_cpu_sources(selection)
+    return suite, ids
+
+
+class CpuIdentityResult(unittest.TextTestResult):
+    """Record actual test starts; a matching count alone is insufficient."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.executed_ids = []
+
+    def startTest(self, test):
+        self.executed_ids.append(test.id())
+        super().startTest(test)
+
+
+def cpu_result_record(result: CpuIdentityResult, ids: list[str]) -> dict:
+    record = result_record(result, len(ids))
+    record["ids"] = list(ids)
+    record["executed_ids"] = list(result.executed_ids)
+    return record
+
+
+def strict_cpu_success(record: dict, expected) -> bool:
+    try:
+        validate_cpu_ids(record["ids"], expected)
+        validate_cpu_ids(record["executed_ids"], expected)
+    except PartitionError:
+        return False
+    return (
+        record["discovered"] == record["tests_run"] == len(expected)
+        and record["ids"] == record["executed_ids"]
+        and not record["failures"]
+        and not record["errors"]
+        and not record["skipped"]
+        and not record["expected_failures"]
+        and not record["unexpected_successes"]
+    )
+
+
+def run_cpu(selection: str, *, discover_only: bool) -> int:
+    verify_pinned_cpu()
+    suite, ids = discover_cpu(selection)
+    if discover_only:
+        print(CPU_DISCOVERY_MARKER + json.dumps({
+            "suite": selection, "ids": ids, "errors": [],
+            "loaded_cpu": loaded_cpu_modules(),
+        }), flush=True)
+        return 0
+    result = unittest.TextTestRunner(
+        verbosity=2, resultclass=CpuIdentityResult).run(suite)
+    verify_cpu_sources(selection)
+    record = cpu_result_record(result, ids)
+    record["suite"] = selection
+    print(CPU_RESULT_MARKER + json.dumps(record), flush=True)
+    if not strict_cpu_success(record, expected_cpu_ids(selection)):
+        return 1
+    print(f"E2-C2 R2 CPU {selection}: {len(ids)}/{len(ids)} actual PASS; "
+          "0 FAIL/ERROR/SKIP/xfail/xpass", flush=True)
+    return 0
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=("host",))
+    parser.add_argument("mode", choices=("host", "r2-cpu"))
+    parser.add_argument("--suite", choices=("helper", "fsr", "all"))
     parser.add_argument("--discover-only", action="store_true")
     args = parser.parse_args(argv)
     if Path.cwd().resolve() != ROOT:
         raise PartitionError("Run the test partition from the repository root")
+    if args.mode == "r2-cpu":
+        return run_cpu(args.suite or "all", discover_only=args.discover_only)
+    if args.suite is not None:
+        parser.error("--suite is only valid with r2-cpu")
     suite, ids, selected = discover_host()
     if args.discover_only:
         print(DISCOVERY_MARKER + json.dumps({

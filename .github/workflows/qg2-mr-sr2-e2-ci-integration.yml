@@ -1,26 +1,114 @@
-name: DTS QG-2-MR-SR2-E2-C1 Host partition scoped GREEN and remaining RED (NO CUDA)
+name: DTS QG-2-MR-SR2-E2-C2 R2 CPU runtime and Host partition scoped GREEN (NO CUDA)
 
 on:
   push:
     branches:
+      - main
       - "feature/qg2-mr-fsr-pr69-sr2b-ci-deps-red"
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
-      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
-      - "tests/qg2mr_sr2_e2_contract.py"
+      - "tools/_parameter_policy_gpu_low_level_fixture.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_red.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.py"
       - "tests/qg2mr_sr2_e2_runner.py"
-      - "tests/qg2mr_sr2_e2_c1_contract.py"
-      - ".github/workflows/anima-qwen3-review.yml"
-      - "docs/qualification-gate-qg2-mr-sr2-e2-c1-host-partition.md"
+      - "tests/qg2mr_sr2_e2_contract.py"
+      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
       - "docs/qualification-gate-qg2-mr-sr2-e2-ci-integration-contract.md"
+      - "tests/test_parameter_policy_execution_gpu_harness.py"
+      - "tools/run_parameter_policy_execution_gpu_matrix.py"
+      - "tools/run_parameter_policy_gpu_matrix.py"
+      - "tools/parameter_policy_execution_gpu_support.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "mikazuki/parameter_policy_torch.py"
+      - "mikazuki/parameter_routing.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/model_component_profiles.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/training_gui_args.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
+      - "mikazuki/sd3_architecture_contract.py"
+      - "tools/parameter_policy_execution_gpu_runtime.py"
+      - "tools/parameter_policy_gpu_qualification_environment.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
+      - "tests/test_parameter_policy_trainer_runtime_smoke.py"
+      - "tools/run_parameter_policy_backend_feature_gpu_matrix.py"
+      - "tools/run_parameter_policy_backend_gpu_matrix.py"
+      - ".github/workflows/parameter-policy-gpu-matrix.yml"
+      - "tests/qg2mr_sr2_e2_c1_contract.py"
+      - "tests/qg2mr_sr2_e2_c2_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c2-r2-cpu-runtime.md"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c1-host-partition.md"
+      - ".github/workflows/anima-qwen3-review.yml"
+      - "tests/test_parameter_policy*.py"
+      - "frontend"
+      - "sd-scripts"
+      - "mikazuki/dataset-tag-editor"
+      - ".gitmodules"
   pull_request:
     paths:
-      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
-      - "tests/qg2mr_sr2_e2_contract.py"
+      - "tools/_parameter_policy_gpu_low_level_fixture.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_red.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper.py"
+      - "tests/test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red.py"
       - "tests/qg2mr_sr2_e2_runner.py"
-      - "tests/qg2mr_sr2_e2_c1_contract.py"
-      - ".github/workflows/anima-qwen3-review.yml"
-      - "docs/qualification-gate-qg2-mr-sr2-e2-c1-host-partition.md"
+      - "tests/qg2mr_sr2_e2_contract.py"
+      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
       - "docs/qualification-gate-qg2-mr-sr2-e2-ci-integration-contract.md"
+      - "tests/test_parameter_policy_execution_gpu_harness.py"
+      - "tools/run_parameter_policy_execution_gpu_matrix.py"
+      - "tools/run_parameter_policy_gpu_matrix.py"
+      - "tools/parameter_policy_execution_gpu_support.py"
+      - "tools/parameter_policy_backend_feature_gpu_support.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "mikazuki/parameter_policy_trainer.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_runtime.py"
+      - "mikazuki/parameter_policy_torch.py"
+      - "mikazuki/parameter_routing.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/model_component_profiles.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/training_gui_args.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
+      - "mikazuki/sd3_architecture_contract.py"
+      - "tools/parameter_policy_execution_gpu_runtime.py"
+      - "tools/parameter_policy_gpu_qualification_environment.py"
+      - "tests/_parameter_policy_admission_fixtures.py"
+      - "tests/_parameter_policy_low_level_fixtures.py"
+      - "tests/test_parameter_policy_trainer_runtime_smoke.py"
+      - "tools/run_parameter_policy_backend_feature_gpu_matrix.py"
+      - "tools/run_parameter_policy_backend_gpu_matrix.py"
+      - ".github/workflows/parameter-policy-gpu-matrix.yml"
+      - "tests/qg2mr_sr2_e2_c1_contract.py"
+      - "tests/qg2mr_sr2_e2_c2_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c2-r2-cpu-runtime.md"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c1-host-partition.md"
+      - ".github/workflows/anima-qwen3-review.yml"
+      - "tests/test_parameter_policy*.py"
+      - "frontend"
+      - "sd-scripts"
+      - "mikazuki/dataset-tag-editor"
+      - ".gitmodules"
   workflow_dispatch:
 
 permissions:
@@ -28,7 +116,7 @@ permissions:
 
 jobs:
   host-contract:
-    name: "E2-C1 one GREEN 35 retained RED and 8 actual baselines (${{ matrix.os }})"
+    name: "E2-C2 five GREEN 31 retained RED and 8 actual baselines (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -40,7 +128,7 @@ jobs:
       PYTHONUTF8: "1"
       CUDA_VISIBLE_DEVICES: ""
     steps:
-      - name: Checkout actual C1 candidate without submodules
+      - name: Checkout actual C2 candidate without submodules
         uses: actions/checkout@v4
         with:
           submodules: false
@@ -54,10 +142,10 @@ jobs:
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
           python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
-      - name: Compile frozen integration and C1 test infrastructure
-        run: python -m py_compile tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_c1_contract.py
-      - name: Exact C1 partition GREEN and 35 retained RED with independent baselines
-        run: python -m tests.qg2mr_sr2_e2_c1_contract stage
+      - name: Compile frozen integration and C1/C2 test infrastructure
+        run: python -m py_compile tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_c1_contract.py tests/qg2mr_sr2_e2_c2_contract.py
+      - name: Exact C2 partition GREEN and 31 retained RED with independent baselines
+        run: python -m tests.qg2mr_sr2_e2_c2_contract stage
 
   host-partition:
     name: "E2-C1 full Host partition parity and actual suite (${{ matrix.os }})"
@@ -92,3 +180,42 @@ jobs:
           python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
       - name: Execute actual full Host suite and independently compare legacy outcomes
         run: python -m tests.qg2mr_sr2_e2_c1_contract host
+
+  r2-cpu:
+    name: "E2-C2 actual 7+11 pinned R2 CPU and discovery parity (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - name: Checkout exact source without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Print exact checkout
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+      - name: Install actual pinned CPU Torch and runtime dependencies
+        shell: bash
+        run: |
+          python -m pip install --index-url https://download.pytorch.org/whl/cpu "torch==2.7.0"
+          python -m pip install "accelerate==1.6.0" "numpy==1.26.4" "schedulefree==1.4" "pytorch-optimizer==3.10.0" "safetensors==0.4.5"
+          python -m pip check
+      - name: Execute exact seven original R2 Helper CPU tests
+        run: python -m tests.qg2mr_sr2_e2_runner r2-cpu --suite helper
+      - name: Execute exact eleven original R2 FSR CPU tests
+        run: python -m tests.qg2mr_sr2_e2_runner r2-cpu --suite fsr
+      - name: Compare full original discovery with both actual partitions in pinned CPU environment
+        run: python -m tests.qg2mr_sr2_e2_c2_contract partition-parity
