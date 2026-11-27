@@ -1,0 +1,52 @@
+name: DTS QG-2-MR-SR2-E2-B CI integration Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qg2-mr-fsr-pr69-sr2b-ci-deps-red"
+    paths:
+      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
+      - "tests/qg2mr_sr2_e2_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-ci-integration-contract.md"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
+      - "tests/qg2mr_sr2_e2_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-ci-integration-contract.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host-contract:
+    name: "E2-B 36 exact RED and 8 actual baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - name: Checkout actual RED candidate without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Setup Python 3.11 without runtime dependencies
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Print exact checkout and verify no Torch
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
+      - name: Compile Tests-only integration contract
+        run: python -m py_compile tests/qg2mr_sr2_e2_contract.py
+      - name: Exact real discovery RED, lifecycle RED and independent baselines
+        run: python -m tests.qg2mr_sr2_e2_contract red
