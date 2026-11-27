@@ -1,0 +1,55 @@
+name: DTS QG-2 E2-D-SR1-B Tests-only RED (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qg2-mr-fsr-pr69-sr2b-ci-deps-red"
+    paths:
+      - "tests/qg2mr_sr2_e2_sr1_contract.py"
+      - ".github/workflows/qg2-mr-sr2-e2-sr1-contract.yml"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-sr1-corrective-design.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  exact-red:
+    name: "E2-D-SR1-B actual counterexamples and protection baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUTF8: "1"
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - name: Checkout actual candidate and pinned recursive submodules
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Setup Node for actual checkout gate
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Verify exact event checkout and no Torch
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
+      - name: Install test-only YAML mutation witness
+        run: python -m pip install "PyYAML==6.0.2"
+      - name: Compile new test-only contract
+        run: python -m py_compile tests/qg2mr_sr2_e2_sr1_contract.py
+      - name: Exact actual SR1 RED and independent protection baselines
+        run: python -m tests.qg2mr_sr2_e2_sr1_contract red
