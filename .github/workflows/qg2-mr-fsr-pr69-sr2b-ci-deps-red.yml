@@ -1,0 +1,93 @@
+name: DTS QG-2-MR-FSR-PR69-SR2-B CI dependency trigger RED to GREEN (NO CUDA)
+
+on:
+  push:
+    branches:
+      - "feature/qg2-mr-fsr-pr69-sr2b-ci-deps-red"
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
+    paths:
+      - ".github/workflows/qg2-mr-fsr-pr69-sr2b-ci-deps-red.yml"
+      - "tests/test_qg2_mr_sr2_ci_dependencies_red.py"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2-mr-fsr-pr69-sr2b-ci-deps-red.yml"
+      - "tests/test_qg2_mr_sr2_ci_dependencies_red.py"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  qg1b-ci-dependency-red:
+    name: "SR2-B six missing dependency paths and five real baselines (${{ matrix.os }})"
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout exact source without submodules
+        uses: actions/checkout@v4
+        with:
+          submodules: false
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Compile exact source-contract test
+        run: python -m py_compile tests/test_qg2_mr_sr2_ci_dependencies_red.py
+      - name: Exact six targeted RED plus five genuine GREEN baselines
+        shell: bash
+        run: |
+          python - <<'PY'
+          import unittest
+          from tests.test_qg2_mr_sr2_ci_dependencies_red import (
+              QG2MRFSRPR69SR2BTargetedRED,
+              QG2MRFSRPR69SR2BBaselines,
+              MARKER,
+          )
+          targets = tuple(sorted(n for n in dir(QG2MRFSRPR69SR2BTargetedRED)
+                                 if n.startswith("test_srb1")))
+          baselines = tuple(sorted(n for n in dir(QG2MRFSRPR69SR2BBaselines)
+                                   if n.startswith("test_srb9")))
+          expected_target = {f"test_srb{number}_" for number in range(101, 107)}
+          expected_baseline = {f"test_srb{number}_" for number in range(901, 906)}
+          if (len(targets) != 6 or len(baselines) != 5
+                  or any(sum(name.startswith(p) for name in targets) != 1
+                         for p in expected_target)
+                  or any(sum(name.startswith(p) for name in baselines) != 1
+                         for p in expected_baseline)):
+              raise SystemExit("SR2-B INVALID TEST IDENTITY/DISCOVERY")
+          red = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2MRFSRPR69SR2BTargetedRED(n) for n in targets)
+          )
+          base = unittest.TextTestRunner(verbosity=2).run(
+              unittest.TestSuite(QG2MRFSRPR69SR2BBaselines(n) for n in baselines)
+          )
+          if (red.testsRun != 6 or base.testsRun != 5
+                  or red.errors or base.errors or base.failures
+                  or red.skipped or base.skipped
+                  or red.expectedFailures or base.expectedFailures
+                  or red.unexpectedSuccesses or base.unexpectedSuccesses):
+              raise SystemExit("SR2-B INVALID EXECUTION: error/skip/xfail/xpass/baseline-fail")
+          failed = {case.id().rsplit(".", 1)[-1]: trace
+                    for case, trace in red.failures}
+          unexpected = [name for name, trace in failed.items() if MARKER not in trace]
+          if len(red.failures) == 6 and set(failed) == set(targets) and not unexpected:
+              print("QG2-MR-SR2-B VALID TESTS-ONLY RED: 6/6 known dependency "
+                    "FAIL + 5/5 real baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
+                    "QG1B workflows and production source unchanged")
+              raise SystemExit(1)  # An accepted RED is a real failing CI job.
+          if not red.failures:
+              print("QG2-MR-SR2-C GREEN CANDIDATE: 6/6 target + 5/5 "
+                    "baseline PASS; requires independent source/CI review")
+          else:
+              raise SystemExit(f"SR2-B INVALID RED SHAPE: {sorted(failed)=} {unexpected=}")
+          PY
