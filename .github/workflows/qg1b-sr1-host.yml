@@ -15,6 +15,10 @@ on:
       - "mikazuki/parameter_policy_evidence_coverage.py"
       - "mikazuki/parameter_policy_readiness.py"
       - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
       - "mikazuki/optimizer_profiles.py"
       - "tools/parameter_policy_backend_feature_gpu_support.py"
   pull_request:
@@ -28,6 +32,10 @@ on:
       - "mikazuki/parameter_policy_evidence_coverage.py"
       - "mikazuki/parameter_policy_readiness.py"
       - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
       - "mikazuki/optimizer_profiles.py"
       - "tools/parameter_policy_backend_feature_gpu_support.py"
   workflow_dispatch:
