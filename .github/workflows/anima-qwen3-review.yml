@@ -362,7 +362,7 @@ jobs:
         run: python -m unittest tests.test_optimizer_profile_capabilities -v
 
       - name: Parameter Policy host contract
-        run: python -m unittest discover -s tests -p 'test_parameter_policy*.py' -v
+        run: python -m tests.qg2mr_sr2_e2_runner host
 
       - name: SD3 architecture and component audit contracts
         run: python -m unittest discover -s tests -p 'test_sd3_architecture_audit.py' -v
