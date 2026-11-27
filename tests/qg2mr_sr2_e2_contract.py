@@ -390,25 +390,12 @@ def _test_inputs(text: str) -> set[str]:
 
 
 REFERENCE_CODE = r"""
-import importlib.util, json, sys, unittest
-if importlib.util.find_spec("torch") is not None:
-    raise SystemExit("RED environment invalid: Torch is discoverable")
-loader = unittest.TestLoader()
-suite = loader.discover(start_dir="tests", pattern="test_parameter_policy*.py")
-def flatten(s):
-    for item in s:
-        if isinstance(item, unittest.TestSuite):
-            yield from flatten(item)
-        else:
-            yield item.id()
+import json, runpy, sys
+from pathlib import Path
+reference = runpy.run_path(sys.argv[1])["discover_reference"]
+_, ids = reference(Path(sys.argv[2]), sys.argv[3:])
 print("DTS_E2_REFERENCE_DISCOVERY_JSON " + json.dumps({
-    "ids": list(flatten(suite)), "errors": loader.errors,
-    "loaded_cpu": [name for name in sys.modules if name in (
-        "test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper",
-        "test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red",
-        "tests.test_parameter_policy_qg2_mr_r2_2_sr1_gpu_helper",
-        "tests.test_parameter_policy_qg2_mr_r2_2_sr1_fsr_sr1_red",
-    )],
+    "ids": ids, "errors": [], "loaded_cpu": [],
 }))
 """
 
@@ -432,28 +419,18 @@ def _child_json(args: list[str], marker: str) -> dict:
 
 
 def reference_discovery() -> list[str]:
-    ref = _child_json(["-c", REFERENCE_CODE], REFERENCE_MARKER)
-    expected = {Path(name).stem for name in CPU_FILES}
-    errors = ref["errors"]
-    actual = set()
-    for error in errors:
-        match = re.search(r"(?m)^Failed to import test module: (\w+)\s*$", error)
-        if not match or "ModuleNotFoundError: No module named 'torch'" not in error:
-            raise RuntimeError("Unexpected reference import failure:\n" + error)
-        actual.add(match.group(1))
-        print("E2 REFERENCE REAL IMPORT ERROR:", match.group(1))
-        print(error)
-    if actual != expected or len(errors) != 2:
-        raise RuntimeError(f"Invalid frozen no-Torch discovery: expected {expected}, got {actual}")
-    ids = ref["ids"]
-    failed = [i for i in ids if i.startswith("unittest.loader._FailedTest.")]
-    if {i.rsplit(".", 1)[-1] for i in failed} != expected or len(failed) != 2:
-        raise RuntimeError(f"Invalid real _FailedTest identities: {failed}")
-    good = [i for i in ids if i not in failed]
-    if not good or len(good) != len(set(good)):
-        raise RuntimeError("Invalid reference Host identity census")
-    print(f"E2 REFERENCE DISCOVERY: {len(good)} non-error test identities, 2 real import errors")
-    return good
+    script = Path(__file__).resolve().with_name("qg2mr_sr2_e2_positive_reference.py")
+    ref = _child_json(["-c", REFERENCE_CODE, str(script), str(TESTS),
+                       *sorted(CPU_FILES)], REFERENCE_MARKER)
+    ids = ref.get("ids")
+    if (ref.get("errors") != [] or ref.get("loaded_cpu") != []
+            or type(ids) is not list or not ids
+            or any(type(i) is not str or not i for i in ids)
+            or len(ids) != len(set(ids))):
+        raise RuntimeError("Invalid positive reference Host identity census")
+    print(f"E2 POSITIVE REFERENCE DISCOVERY: {len(ids)} Host identities; "
+          "CPU ownership excluded before import", flush=True)
+    return ids
 
 
 class E2Targets(unittest.TestCase):
@@ -490,7 +467,7 @@ class E2Targets(unittest.TestCase):
         command = named_step_command(validate, "Parameter Policy host contract")
         good = reference_discovery()
         if command == LEGACY_COMMAND:
-            self.fail(MARKER + ": real original Host discovery imports both Torch-only modules")
+            self.fail(MARKER + ": original broad Host discovery violates CPU ownership")
         self.require(command == HOST_COMMAND, "Anima is not wired to the reviewed Host partition")
         observed = _child_json(
             ["-m", "tests.qg2mr_sr2_e2_runner", "host", "--discover-only"],
@@ -500,7 +477,7 @@ class E2Targets(unittest.TestCase):
         self.require(observed.get("loaded_cpu") == [], "partition imported a CPU-only module")
         ids = observed.get("ids")
         self.require(type(ids) is list and len(ids) == len(set(ids))
-                     and set(ids) == set(good), "partition lost or duplicated actual Host identities")
+                     and ids == good, "partition lost, reordered or duplicated actual Host identities")
 
     def test_e2h102_helper_seven_cpu_execution_entry(self):
         job = job_text(source(E2), "r2-cpu")
@@ -675,11 +652,21 @@ class E2Baselines(unittest.TestCase):
         self.assertTrue(FROZEN_FILES <= files, sorted(FROZEN_FILES - files))
         self.assertEqual(CPU_FILES, frozenset((HELPER, FSR)))
         self.assertTrue(CPU_FILES <= files)
-        for filename in CPU_FILES:
+        # Ownership is the original method census and file path, not the
+        # historical presence of an eager module-level Torch import.
+        from tests import qg2mr_sr2_e2_runner as runner
+        self.assertEqual(set(runner.CPU_SUITE_FILES.values()), CPU_FILES)
+        for key, filename in runner.CPU_SUITE_FILES.items():
             tree = ast.parse((TESTS / filename).read_text(encoding="utf-8"))
-            self.assertTrue(any(isinstance(n, ast.Import)
-                                and any(alias.name == "torch" for alias in n.names)
-                                for n in tree.body), filename)
+            methods = [
+                f"{Path(filename).stem}.{cls.name}.{method.name}"
+                for cls in tree.body if isinstance(cls, ast.ClassDef)
+                for method in cls.body if isinstance(method, ast.FunctionDef)
+                and method.name.startswith("test_")
+            ]
+            expected = runner.expected_cpu_ids(key)
+            self.assertEqual(len(methods), len(expected), filename)
+            self.assertEqual(set(methods), set(expected), filename)
         fixture = (ROOT / "tools/_parameter_policy_gpu_low_level_fixture.py").read_text(encoding="utf-8")
         self.assertIn('"' + HELPER + '"', fixture)
         self.assertIn("_ALLOWED_MODEL_SOURCE_FILES", fixture)

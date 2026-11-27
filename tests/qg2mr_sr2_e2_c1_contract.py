@@ -1,9 +1,9 @@
 """Independent C1 scope checks. Do not edit the accepted E2-B test identities.
 
 stage: one real GREEN, 35 known RED, eight actual baselines; exit 1.
-host: full pinned-submodule Host execution + reference skip/identity parity.
-legacy-reference: diagnostic only; run legacy discovered Host cases after
-confirming the two exact real no-Torch import errors.
+host: current-commit gitlink checks and full Host identity/outcome parity.
+legacy-reference: retained command/log identity; independently execute the
+positive Host reference without importing CPU-owned modules.
 """
 from __future__ import annotations
 
@@ -11,7 +11,6 @@ from contextlib import contextmanager
 import importlib.util
 import json
 from pathlib import Path
-import re
 import subprocess
 import sys
 import tempfile
@@ -22,6 +21,8 @@ from unittest import mock
 from tests import qg2mr_sr2_e2_contract as frozen
 from tests import qg2mr_sr2_e2_runner as runner
 from tests import qg2mr_sr2_e2_test_results as results
+from tests import qg2mr_sr2_e2_checkout as checkout
+from tests import qg2mr_sr2_e2_positive_reference as positive_reference
 
 ROOT = frozen.ROOT
 HOST_ID = "test_e2h101_real_no_torch_discovery_partition"
@@ -220,37 +221,9 @@ def stage() -> int:
 
 
 def legacy_reference() -> int:
-    # Diagnostic only. The production Host entry NEVER imports then filters.
+    # Retain CLI and log identity; the permanent reference is positive.
     require_no_torch()
-    expected_modules = {Path(n).stem for n in frozen.CPU_FILES}
-    loader = unittest.TestLoader()
-    legacy = loader.discover(start_dir="tests", pattern="test_parameter_policy*.py")
-    errors = []
-    for error in loader.errors:
-        match = re.search(r"(?m)^Failed to import test module: (\w+)\s*$", error)
-        if not match or "ModuleNotFoundError: No module named 'torch'" not in error:
-            raise RuntimeError("Unexpected legacy discovery error:\n" + error)
-        errors.append(match.group(1))
-    if len(errors) != 2 or set(errors) != expected_modules:
-        raise RuntimeError(f"Unexpected legacy import failures: {errors}")
-
-    failed = []
-    def prune(suite):
-        if isinstance(suite, unittest.TestCase):
-            ident = suite.id()
-            if ident.startswith("unittest.loader._FailedTest."):
-                failed.append(ident.rsplit(".", 1)[-1])
-                return None
-            return suite
-        if type(suite) is not unittest.TestSuite:
-            raise RuntimeError(f"Review legacy custom suite semantics: {type(suite)!r}")
-        retained = [item for child in suite if (item := prune(child)) is not None]
-        return unittest.TestSuite(retained)
-
-    suite = prune(legacy)
-    if len(failed) != 2 or set(failed) != expected_modules:
-        raise RuntimeError(f"Unexpected legacy failed identities: {failed}")
-    ids = runner.test_ids(suite)
+    suite, ids = positive_reference.discover_reference(ROOT / "tests", frozen.CPU_FILES)
     result = results.run_recorded_suite(suite)
     record = runner.result_record(result, ids)
     print(LEGACY_RESULT + json.dumps(record), flush=True)
@@ -273,19 +246,12 @@ def checked_child(module: str, args: list[str], marker: str) -> dict:
 
 def full_host() -> int:
     require_no_torch()
+    identity = checkout.verify_current_checkout(ROOT)
+    print(checkout.CHECKOUT_MARKER + json.dumps(identity), flush=True)
+    for rel, sha in identity["actual_gitlinks"].items():
+        print(f"E2-C1 SUBMODULE {rel}: {sha}", flush=True)
     if not (ROOT / "frontend/dist/assets/layout.96d49288.js").is_file():
-        raise RuntimeError("Missing pinned frontend asset; Host execution incomplete")
-    for rel, sha in (
-        ("frontend", "20513393bfdd9ee897c538cf68d478c95fcde6c1"),
-        ("sd-scripts", "45dddfccb704b6b0591f65d98f0d695c997b3115"),
-        ("mikazuki/dataset-tag-editor", "8ee3a6f30c046f3c89c531dc1abbff2d2a466bcf"),
-    ):
-        actual = subprocess.check_output(
-            ["git", "-C", str(ROOT / rel), "rev-parse", "HEAD"],
-            text=True, timeout=30).strip()
-        if actual != sha:
-            raise RuntimeError(f"Pinned submodule mismatch: {rel} {actual}")
-        print(f"E2-C1 SUBMODULE {rel}: {actual}", flush=True)
+        raise RuntimeError("Missing required frontend asset; Host execution incomplete")
     subprocess.run(["node", "--version"], check=True, timeout=30, shell=False)
     reference = checked_child("tests.qg2mr_sr2_e2_c1_contract", ["legacy-reference"], LEGACY_RESULT)
     discovered = checked_child("tests.qg2mr_sr2_e2_runner", ["host", "--discover-only"], runner.DISCOVERY_MARKER)
@@ -310,7 +276,7 @@ def full_host() -> int:
     print(f"E2-C1 FULL HOST GREEN: {actual['tests_run']} actual test outcomes; "
           f"{len(actual['passed_ids'])} PASS, "
           f"{len(actual['skipped'])} inherited dependency SKIP, 0 FAIL/ERROR/xfail/xpass; "
-          "legacy ordered identity and skip parity; Frontend 6/6 real PASS", flush=True)
+          "independent positive ordered identity and skip parity; Frontend 6/6 real PASS", flush=True)
     return 0
 
 

@@ -1,4 +1,4 @@
-name: DTS QG-2 E2-D-SR1-C1 strict results scoped GREEN (NO CUDA)
+name: DTS QG-2 E2-D-SR1-C2 checkout partition scoped GREEN (NO CUDA)
 
 on:
   push:
@@ -18,6 +18,10 @@ on:
       - "tests/qg2mr_sr2_e2_c3_contract.py"
       - "tests/qg2mr_sr2_e2_c4_contract.py"
       - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
+      - "tests/qg2mr_sr2_e2_checkout.py"
+      - "tests/qg2mr_sr2_e2_positive_reference.py"
+      - "tests/qg2mr_sr2_e2_sr1_c2_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-sr1-c2-current-checkout.md"
   workflow_dispatch:
 
 permissions:
@@ -25,7 +29,7 @@ permissions:
 
 jobs:
   exact-red:
-    name: "E2-D-SR1-C1 actual results and retained RED (${{ matrix.os }})"
+    name: "E2-D-SR1-C2 current checkout and positive partition (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -61,5 +65,7 @@ jobs:
         run: python -m pip install "PyYAML==6.0.2"
       - name: Compile strict result and scoped contract
         run: python -m py_compile tests/qg2mr_sr2_e2_test_results.py tests/qg2mr_sr2_e2_sr1_c1_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_c1_contract.py tests/qg2mr_sr2_e2_c2_contract.py tests/qg2mr_sr2_e2_c3_contract.py tests/qg2mr_sr2_e2_c4_contract.py tests/qg2mr_sr2_e2_sr1_contract.py
-      - name: Exact Fix A GREEN and sixteen retained RED with protection baselines
-        run: python -m tests.qg2mr_sr2_e2_sr1_c1_contract
+      - name: Compile current checkout and positive partition
+        run: python -m py_compile tests/qg2mr_sr2_e2_checkout.py tests/qg2mr_sr2_e2_positive_reference.py tests/qg2mr_sr2_e2_sr1_c2_contract.py
+      - name: Exact Fix A and B GREEN and twelve retained RED with protection baselines
+        run: python -m tests.qg2mr_sr2_e2_sr1_c2_contract
