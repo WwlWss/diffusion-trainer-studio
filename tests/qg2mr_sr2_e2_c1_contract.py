@@ -75,8 +75,10 @@ class PartitionBehavior(unittest.TestCase):
             self.assertEqual(files, tuple(FIXTURE_PREFIX + n + ".py" for n in ("first", "later")))
             self.assertEqual(ids, [FIXTURE_PREFIX + n + ".Probe.test_real" for n in ("first", "later")])
             self.assertEqual(runner.loaded_cpu_modules(), [])
-            result = unittest.TextTestRunner(verbosity=1).run(suite)
-            self.assertTrue(runner.strict_host_success(runner.result_record(result, 2)))
+            result = results.run_recorded_suite(suite, verbosity=1)
+            record = runner.result_record(result, ids)
+            self.assertTrue(runner.strict_host_success(record))
+            self.assertEqual(record["passed_ids"], ids)
 
     def test_c1102_missing_cpu_file_fails_closed(self):
         with fixture_directory() as path:
@@ -129,7 +131,8 @@ def load_tests(loader, tests, pattern):
 ''')
             suite, ids, _ = runner.discover_host(path)
             self.assertEqual(ids, [FIXTURE_PREFIX + "hook.Probe.test_real"])
-            self.assertTrue(unittest.TextTestRunner(verbosity=1).run(suite).wasSuccessful())
+            result = results.run_recorded_suite(suite, verbosity=1)
+            self.assertTrue(runner.strict_host_success(runner.result_record(result, ids)))
 
     def test_c1108_cpu_alias_already_loaded_fails_closed(self):
         with fixture_directory() as path:
