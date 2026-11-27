@@ -3,6 +3,7 @@ name: DTS QG-2-B2 CLI Intent scoped GREEN with B312 Integrated GREEN (NO CUDA)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2b2-cli-intent-host.yml"

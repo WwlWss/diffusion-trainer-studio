@@ -3,6 +3,7 @@ name: DTS QG-2-A1-SR1 Strict Review RED to scoped GREEN (NO CUDA)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2a1-sr1-host.yml"
@@ -16,6 +17,7 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
   pull_request:
     paths:
       - ".github/workflows/qg2a1-sr1-host.yml"
@@ -29,6 +31,7 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
   workflow_dispatch:
 
 permissions:

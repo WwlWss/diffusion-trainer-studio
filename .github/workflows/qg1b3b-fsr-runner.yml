@@ -1,14 +1,32 @@
 name: DTS QG-1B3-B FSR runner matrix scoped GREEN
 on:
   push:
-    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    branches:
+      - main
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg1b3b-fsr-runner.yml"
       - ".github/workflows/qg1b3b-typed-migration-host.yml"
       - "tests/test_parameter_policy_qg1b3b_runner_label.py"
       - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_admission_red.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "mikazuki/parameter_policy_readiness_producer.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/model_component_profiles.py"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/training_gui_args.py"
+      - "mikazuki/sd3_full_bf16_scope.py"
+      - "mikazuki/sd3_architecture_contract.py"
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

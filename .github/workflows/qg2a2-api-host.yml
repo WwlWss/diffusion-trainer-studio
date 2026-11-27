@@ -3,6 +3,7 @@ name: DTS QG-2-A2 API and WebUI scoped GREEN with B312 Integrated GREEN (NO CUDA
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2a2-api-host.yml"
@@ -16,6 +17,18 @@ on:
       - "tests/qg2b4i_ci_contract.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
+      - "tests/test_training_api_overlay_contract.py"
+      - "frontend"
+      - ".gitmodules"
+      - "mikazuki/app/api_overlay.py"
   pull_request:
     paths:
       - ".github/workflows/qg2a2-api-host.yml"
@@ -29,6 +42,18 @@ on:
       - "tests/qg2b4i_ci_contract.py"
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg2a1_request_red.py"
+      - "tests/test_parameter_policy_qg2a1_sr1.py"
+      - "tests/test_parameter_policy_qg2a1_sr1_lifecycle.py"
+      - "tests/test_training_api_overlay_contract.py"
+      - "frontend"
+      - ".gitmodules"
+      - "mikazuki/app/api_overlay.py"
   workflow_dispatch:
 
 permissions:

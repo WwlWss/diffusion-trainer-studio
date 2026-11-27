@@ -1,4 +1,4 @@
-name: DTS QG-2-MR-SR2-E2-C2 R2 CPU runtime and Host partition scoped GREEN (NO CUDA)
+name: DTS QG-2-MR-SR2-E2-C3 persistent CI lifecycle scoped GREEN (NO CUDA)
 
 on:
   push:
@@ -57,6 +57,38 @@ on:
       - "sd-scripts"
       - "mikazuki/dataset-tag-editor"
       - ".gitmodules"
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - ".github/workflows/qg1b3b-fsr-runner.yml"
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - ".github/workflows/qg2-mr-fsr-pr69-sr2b-ci-deps-red.yml"
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - ".github/workflows/qg2a2-api-host.yml"
+      - ".github/workflows/qg2b2-cli-intent-host.yml"
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - ".github/workflows/qg2b3b-early-bridge-host.yml"
+      - ".github/workflows/qg2b3b-sr1-dynamic-host.yml"
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - ".github/workflows/qg2b4a1-api-handoff-red.yml"
+      - ".github/workflows/qg2b4fsr-sr1-ci.yml"
+      - ".github/workflows/qg2b4i-integrated-green.yml"
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
+      - "tests/qg2mr_sr2_e2_c3_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c3-persistent-ci-lifecycle.md"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_qg2_mr_sr2_ci_dependencies_red.py"
+      - "docs/qualification-gate-qg2-mr-fsr-pr69-sr2b-ci-deps-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b4i_ci_migration.py"
+      - "tests/test_parameter_policy_qg2b4fsr_sr1_ci.py"
+      - "tests/test_parameter_policy_admission_red.py"
   pull_request:
     paths:
       - "tools/_parameter_policy_gpu_low_level_fixture.py"
@@ -109,6 +141,38 @@ on:
       - "sd-scripts"
       - "mikazuki/dataset-tag-editor"
       - ".gitmodules"
+      - ".github/workflows/qg1a-readiness-host.yml"
+      - ".github/workflows/qg1a-sr1-host.yml"
+      - ".github/workflows/qg1b-sr1-host.yml"
+      - ".github/workflows/qg1b-trusted-producer-host.yml"
+      - ".github/workflows/qg1b3-qg2-admission-host.yml"
+      - ".github/workflows/qg1b3a-admission-adapter-host.yml"
+      - ".github/workflows/qg1b3b-fsr-runner.yml"
+      - ".github/workflows/qg1b3b-typed-migration-host.yml"
+      - ".github/workflows/qg2-mr-fsr-pr69-sr2b-ci-deps-red.yml"
+      - ".github/workflows/qg2a1-request-intent-host.yml"
+      - ".github/workflows/qg2a1-sr1-host.yml"
+      - ".github/workflows/qg2a2-api-host.yml"
+      - ".github/workflows/qg2b2-cli-intent-host.yml"
+      - ".github/workflows/qg2b3a-policy-snapshot-host.yml"
+      - ".github/workflows/qg2b3b-early-bridge-host.yml"
+      - ".github/workflows/qg2b3b-sr1-dynamic-host.yml"
+      - ".github/workflows/qg2b3c-late-session-host.yml"
+      - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - ".github/workflows/qg2b4-0-b312-contract-red.yml"
+      - ".github/workflows/qg2b4a1-api-handoff-red.yml"
+      - ".github/workflows/qg2b4fsr-sr1-ci.yml"
+      - ".github/workflows/qg2b4i-integrated-green.yml"
+      - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - ".github/workflows/qg2mr-sr1-tests-only-red.yml"
+      - "tests/qg2mr_sr2_e2_c3_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-c3-persistent-ci-lifecycle.md"
+      - "tests/qg2b4i_ci_contract.py"
+      - "tests/test_qg2_mr_sr2_ci_dependencies_red.py"
+      - "docs/qualification-gate-qg2-mr-fsr-pr69-sr2b-ci-deps-tests-only-red.md"
+      - "tests/test_parameter_policy_qg2b4i_ci_migration.py"
+      - "tests/test_parameter_policy_qg2b4fsr_sr1_ci.py"
+      - "tests/test_parameter_policy_admission_red.py"
   workflow_dispatch:
 
 permissions:
@@ -116,7 +180,7 @@ permissions:
 
 jobs:
   host-contract:
-    name: "E2-C2 five GREEN 31 retained RED and 8 actual baselines (${{ matrix.os }})"
+    name: "E2-C3 33 GREEN 3 retained RED and 8 actual baselines (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -128,7 +192,7 @@ jobs:
       PYTHONUTF8: "1"
       CUDA_VISIBLE_DEVICES: ""
     steps:
-      - name: Checkout actual C2 candidate without submodules
+      - name: Checkout actual C3 candidate without submodules
         uses: actions/checkout@v4
         with:
           submodules: false
@@ -142,10 +206,10 @@ jobs:
           git rev-parse HEAD
           git rev-parse HEAD^{tree}
           python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
-      - name: Compile frozen integration and C1/C2 test infrastructure
-        run: python -m py_compile tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_c1_contract.py tests/qg2mr_sr2_e2_c2_contract.py
-      - name: Exact C2 partition GREEN and 31 retained RED with independent baselines
-        run: python -m tests.qg2mr_sr2_e2_c2_contract stage
+      - name: Compile frozen integration and C1/C2/C3 test infrastructure
+        run: python -m py_compile tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_c1_contract.py tests/qg2mr_sr2_e2_c2_contract.py tests/qg2mr_sr2_e2_c3_contract.py
+      - name: Exact C3 lifecycle GREEN and 3 retained RED with independent baselines
+        run: python -m tests.qg2mr_sr2_e2_c3_contract stage
 
   host-partition:
     name: "E2-C1 full Host partition parity and actual suite (${{ matrix.os }})"

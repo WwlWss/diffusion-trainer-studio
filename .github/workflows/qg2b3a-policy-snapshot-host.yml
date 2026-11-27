@@ -3,6 +3,7 @@ name: DTS QG-2-B3-A Policy loader and snapshot Tests-only RED (NO CUDA)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2b3a-policy-snapshot-host.yml"

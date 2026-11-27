@@ -1,13 +1,32 @@
 name: DTS QG-2-B3-B SR1 Dynamic Host exact RED (NO CUDA)
 on:
   push:
-    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    branches:
+      - main
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2b3b-sr1-dynamic-host.yml"
       - "tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py"
       - "scripts/stable/train_network.py"
       - "scripts/dev/train_network.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
+  pull_request:
+    paths:
+      - ".github/workflows/qg2b3b-sr1-dynamic-host.yml"
+      - "tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py"
+      - "scripts/stable/train_network.py"
+      - "scripts/dev/train_network.py"
+      - "mikazuki/direct_trainer_admission_intent.py"
+      - "mikazuki/parameter_policy_admission.py"
+      - "scripts/stable/library/dts_parameter_policy_bridge.py"
+      - "scripts/dev/library/dts_parameter_policy_bridge.py"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

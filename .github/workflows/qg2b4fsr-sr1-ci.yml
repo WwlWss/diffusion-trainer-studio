@@ -1,7 +1,9 @@
 name: DTS QG-2-B4-FSR-SR1 exact CI coverage and reachability scoped GREEN
 on:
   push:
-    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    branches:
+      - main
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2b4fsr-sr1-ci.yml"
       - "tests/test_parameter_policy_qg2b4fsr_sr1_ci.py"
@@ -21,8 +23,10 @@ on:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
       - ".github/workflows/qg2b4-0-b312-contract-red.yml"
       - ".github/workflows/qg2b4l1-launcher-transport-red.yml"
+      - "tests/test_parameter_policy_qg2b4i_ci_migration.py"
   pull_request:
   workflow_dispatch:
+
 permissions:
   contents: read
 jobs:

@@ -2,7 +2,9 @@ name: DTS QG-2-B3-C-SR1 Historical CPU Runtime Tests-only RED
 
 on:
   push:
-    branches: ["feature/qualification-gate-qg1b3-qg2-admission-red"]
+    branches:
+      - main
+      - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
       - "docs/qualification-gate-qg2b3c-sr1-cpu-runtime-tests-only-red.md"
@@ -22,9 +24,19 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
+      - "tests/test_parameter_policy_qg2b3b_early_bridge_red.py"
+      - "tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py"
+      - "tests/test_parameter_policy_qg2b3c_late_dynamic_host.py"
+      - "tests/test_parameter_policy_qg2b3c_late_session_red.py"
   pull_request:
     paths:
       - ".github/workflows/qg2b3c-sr1-cpu-runtime.yml"
+      - "docs/qualification-gate-qg2b3c-sr1-cpu-runtime-tests-only-red.md"
       - "tests/test_parameter_policy_qg2b3c_sr1_red.py"
       - "tests/test_parameter_policy_qg2b3c_sr1_preapply_host.py"
       - "tests/test_parameter_policy_qg2b3c_sr1_real_late_cpu.py"
@@ -41,6 +53,15 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
+      - "tests/test_parameter_policy_qg2b2_cli_intent.py"
+      - "tests/test_parameter_policy_qg2b3a_snapshot_red.py"
+      - "tests/test_parameter_policy_qg2b3b_early_bridge_red.py"
+      - "tests/test_parameter_policy_qg2b3b_sr1_dynamic_host_red.py"
+      - "tests/test_parameter_policy_qg2b3c_late_dynamic_host.py"
+      - "tests/test_parameter_policy_qg2b3c_late_session_red.py"
   workflow_dispatch:
 
 permissions:

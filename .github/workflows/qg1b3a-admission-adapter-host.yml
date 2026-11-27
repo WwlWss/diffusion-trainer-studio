@@ -3,6 +3,7 @@ name: DTS QG-1B3-A/B and QG-2-A1 staged Host GREEN (B312 Integrated GREEN)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg1b3a-admission-adapter-host.yml"
@@ -17,6 +18,9 @@ on:
       - "tests/qg2b4i_ci_contract.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
   pull_request:
     paths:
       - ".github/workflows/qg1b3a-admission-adapter-host.yml"
@@ -25,10 +29,15 @@ on:
       - "tests/test_parameter_policy_admission_adapter_host.py"
       - "mikazuki/parameter_policy_readiness_producer.py"
       - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy.py"
       - "docs/qualification-gate-qg1b3-qg2-admission-contract.md"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
       - "tests/qg2b4i_ci_contract.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
   workflow_dispatch:
 
 permissions:

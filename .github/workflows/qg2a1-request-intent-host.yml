@@ -3,6 +3,7 @@ name: DTS QG-2-A1 Request Admission RED to scoped GREEN (NO CUDA)
 on:
   push:
     branches:
+      - main
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
       - ".github/workflows/qg2a1-request-intent-host.yml"
@@ -18,6 +19,11 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
   pull_request:
     paths:
       - ".github/workflows/qg2a1-request-intent-host.yml"
@@ -33,6 +39,11 @@ on:
       - "tests/test_parameter_policy_admission_red.py"
       - "mikazuki/app/training_api.py"
       - "mikazuki/training_launcher.py"
+      - "tests/test_parameter_policy_admission_adapter_host.py"
+      - "tests/test_parameter_policy_qg1b3b_runtime_migration.py"
+      - "tests/test_parameter_policy_qg1b_evidence_coverage.py"
+      - "tests/test_parameter_policy_qg1b_sr1.py"
+      - "tests/test_parameter_policy_qg1b_trusted_producer.py"
   workflow_dispatch:
 
 permissions:
