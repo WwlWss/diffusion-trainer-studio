@@ -1,8 +1,9 @@
-name: DTS QG-2-MR-FSR-PR69-SR2-B CI dependency trigger RED to GREEN (NO CUDA)
+name: DTS QG-2-MR-FSR-PR69-SR2 permanent strict CI dependency GREEN (NO CUDA)
 
 on:
   push:
     branches:
+      - main
       - "feature/qg2-mr-fsr-pr69-sr2b-ci-deps-red"
       - "feature/qualification-gate-qg1b3-qg2-admission-red"
     paths:
@@ -11,6 +12,15 @@ on:
       - ".github/workflows/qg1b-trusted-producer-host.yml"
       - ".github/workflows/qg1b-sr1-host.yml"
       - "mikazuki/parameter_policy_readiness_producer.py"
+      - "docs/qualification-gate-qg2-mr-fsr-pr69-sr2b-ci-deps-tests-only-red.md"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
   pull_request:
     paths:
       - ".github/workflows/qg2-mr-fsr-pr69-sr2b-ci-deps-red.yml"
@@ -18,6 +28,15 @@ on:
       - ".github/workflows/qg1b-trusted-producer-host.yml"
       - ".github/workflows/qg1b-sr1-host.yml"
       - "mikazuki/parameter_policy_readiness_producer.py"
+      - "docs/qualification-gate-qg2-mr-fsr-pr69-sr2b-ci-deps-tests-only-red.md"
+      - "mikazuki/optimizer_profiles.py"
+      - "mikazuki/parameter_policy_evidence_coverage.py"
+      - "mikazuki/parameter_policy.py"
+      - "mikazuki/parameter_policy_compat.py"
+      - "mikazuki/parameter_policy_execution.py"
+      - "mikazuki/parameter_policy_matrix.py"
+      - "mikazuki/parameter_policy_readiness.py"
+      - "mikazuki/parameter_policy_runtime_bools.py"
   workflow_dispatch:
 
 permissions:
@@ -43,51 +62,99 @@ jobs:
           python-version: "3.11"
       - name: Compile exact source-contract test
         run: python -m py_compile tests/test_qg2_mr_sr2_ci_dependencies_red.py
-      - name: Exact six targeted RED plus five genuine GREEN baselines
+      - name: Print exact checkout and verify no Torch
+        shell: bash
+        run: |
+          git rev-parse HEAD
+          git rev-parse HEAD^{tree}
+          python -c "import importlib.util; assert importlib.util.find_spec('torch') is None"
+      - name: Exact six target and five baseline permanent strict GREEN
         shell: bash
         run: |
           python - <<'PY'
+          import json
           import unittest
           from tests.test_qg2_mr_sr2_ci_dependencies_red import (
               QG2MRFSRPR69SR2BTargetedRED,
               QG2MRFSRPR69SR2BBaselines,
-              MARKER,
           )
-          targets = tuple(sorted(n for n in dir(QG2MRFSRPR69SR2BTargetedRED)
-                                 if n.startswith("test_srb1")))
-          baselines = tuple(sorted(n for n in dir(QG2MRFSRPR69SR2BBaselines)
-                                   if n.startswith("test_srb9")))
-          expected_target = {f"test_srb{number}_" for number in range(101, 107)}
-          expected_baseline = {f"test_srb{number}_" for number in range(901, 906)}
-          if (len(targets) != 6 or len(baselines) != 5
-                  or any(sum(name.startswith(p) for name in targets) != 1
-                         for p in expected_target)
-                  or any(sum(name.startswith(p) for name in baselines) != 1
-                         for p in expected_baseline)):
-              raise SystemExit("SR2-B INVALID TEST IDENTITY/DISCOVERY")
-          red = unittest.TextTestRunner(verbosity=2).run(
-              unittest.TestSuite(QG2MRFSRPR69SR2BTargetedRED(n) for n in targets)
+
+          TARGETS = (
+              "test_srb101_original_evidence_coverage",
+              "test_srb102_original_runtime_bools",
+              "test_srb103_sr1_parameter_policy",
+              "test_srb104_sr1_policy_compat",
+              "test_srb105_sr1_policy_matrix",
+              "test_srb106_sr1_runtime_bools",
           )
-          base = unittest.TextTestRunner(verbosity=2).run(
-              unittest.TestSuite(QG2MRFSRPR69SR2BBaselines(n) for n in baselines)
+          BASELINES = (
+              "test_srb901_actual_producer_direct_imports_are_present",
+              "test_srb902_original_keeps_existing_event_matrix",
+              "test_srb903_original_green_is_strict_and_unskipped",
+              "test_srb904_sr1_keeps_existing_event_matrix",
+              "test_srb905_sr1_green_preserves_prior_and_d1_counts",
           )
-          if (red.testsRun != 6 or base.testsRun != 5
-                  or red.errors or base.errors or base.failures
-                  or red.skipped or base.skipped
-                  or red.expectedFailures or base.expectedFailures
-                  or red.unexpectedSuccesses or base.unexpectedSuccesses):
-              raise SystemExit("SR2-B INVALID EXECUTION: error/skip/xfail/xpass/baseline-fail")
-          failed = {case.id().rsplit(".", 1)[-1]: trace
-                    for case, trace in red.failures}
-          unexpected = [name for name, trace in failed.items() if MARKER not in trace]
-          if len(red.failures) == 6 and set(failed) == set(targets) and not unexpected:
-              print("QG2-MR-SR2-B VALID TESTS-ONLY RED: 6/6 known dependency "
-                    "FAIL + 5/5 real baseline PASS; 0 ERROR/SKIP/xfail/xpass; "
-                    "QG1B workflows and production source unchanged")
-              raise SystemExit(1)  # An accepted RED is a real failing CI job.
-          if not red.failures:
-              print("QG2-MR-SR2-C GREEN CANDIDATE: 6/6 target + 5/5 "
-                    "baseline PASS; requires independent source/CI review")
-          else:
-              raise SystemExit(f"SR2-B INVALID RED SHAPE: {sorted(failed)=} {unexpected=}")
+
+
+          class IdentityResult(unittest.TextTestResult):
+              def __init__(self, *args, **kwargs):
+                  super().__init__(*args, **kwargs)
+                  self.started_ids = []
+                  self.passed_ids = []
+
+              def startTest(self, test):
+                  self.started_ids.append(test.id())
+                  super().startTest(test)
+
+              def addSuccess(self, test):
+                  self.passed_ids.append(test.id())
+                  super().addSuccess(test)
+
+
+          def run_exact_suite(cls, names):
+              loader = unittest.TestLoader()
+              expected = [f"{cls.__module__}.{cls.__qualname__}.{name}" for name in names]
+              discovered = loader.getTestCaseNames(cls)
+              if (not names or len(names) != len(set(names))
+                      or tuple(discovered) != tuple(names)):
+                  raise SystemExit(f"SR2 INVALID TEST IDENTITY: {cls.__name__}: {discovered}")
+              suite = loader.loadTestsFromTestCase(cls)
+              if (loader.errors or suite.countTestCases() != len(expected)
+                      or [case.id() for case in suite] != expected):
+                  raise SystemExit(f"SR2 INVALID DISCOVERY: {cls.__name__}")
+              result = unittest.TextTestRunner(
+                  verbosity=2, resultclass=IdentityResult).run(suite)
+              record = {
+                  "class": cls.__name__,
+                  "expected_ids": expected,
+                  "started_ids": result.started_ids,
+                  "passed_ids": result.passed_ids,
+                  "tests_run": result.testsRun,
+                  "failures": len(result.failures),
+                  "errors": len(result.errors),
+                  "skipped": len(result.skipped),
+                  "expected_failures": len(result.expectedFailures),
+                  "unexpected_successes": len(result.unexpectedSuccesses),
+              }
+              print("DTS_SR2_STRICT_RESULT_JSON " + json.dumps(record), flush=True)
+              if (result.testsRun != len(expected)
+                      or result.started_ids != expected or result.passed_ids != expected
+                      or result.failures or result.errors or result.skipped
+                      or result.expectedFailures or result.unexpectedSuccesses):
+                  raise SystemExit(f"SR2 STRICT GREEN REGRESSION: {cls.__name__}")
+              return result.testsRun
+
+
+          def main():
+              target_count = run_exact_suite(QG2MRFSRPR69SR2BTargetedRED, TARGETS)
+              baseline_count = run_exact_suite(QG2MRFSRPR69SR2BBaselines, BASELINES)
+              if target_count != 6 or baseline_count != 5:
+                  raise SystemExit("SR2 INVALID TOTAL")
+              print("QG2-MR-SR2 PERMANENT STRICT GREEN: 11/11 actual PASS; "
+                    "6/6 target + 5/5 baseline; 0 FAIL/ERROR/SKIP/xfail/xpass", flush=True)
+              return 0
+
+
+          if __name__ == "__main__":
+              raise SystemExit(main())
           PY
