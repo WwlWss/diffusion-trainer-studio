@@ -14,6 +14,8 @@ import re
 import sys
 import unittest
 
+from tests import qg2mr_sr2_e2_test_results as results
+
 ROOT = Path(__file__).resolve().parents[1]
 TESTS_DIR = ROOT / "tests"
 PATTERN = "test_parameter_policy*.py"
@@ -131,31 +133,17 @@ def discover_host(test_dir: Path = TESTS_DIR):
     return suite, ids, selected
 
 
-def result_record(result: unittest.TestResult, expected: int) -> dict:
-    return {
-        "discovered": expected,
-        "tests_run": result.testsRun,
-        "failures": len(result.failures),
-        "errors": len(result.errors),
-        "skipped": [[case.id(), reason] for case, reason in result.skipped],
-        "expected_failures": len(result.expectedFailures),
-        "unexpected_successes": len(result.unexpectedSuccesses),
-        "loaded_cpu": loaded_cpu_modules(),
-    }
+def result_record(result: results.StrictIdentityResult, ids: list[str]) -> dict:
+    record = results.result_record(result, ids)
+    record["loaded_cpu"] = loaded_cpu_modules()
+    return record
 
 
 def strict_host_success(record: dict) -> bool:
-    # Preserve ordinary existing dependency-based unittest skips. Runtime
-    # owners must run those tests independently; skip is not a PASS.
-    return (
-        record["tests_run"] == record["discovered"]
-        and record["discovered"] > 0
-        and not record["failures"]
-        and not record["errors"]
-        and not record["expected_failures"]
-        and not record["unexpected_successes"]
-        and not record["loaded_cpu"]
-    )
+    # Skip accounting only here; authorization/Runtime ownership is Fix C.
+    return (results.closed_result(record, allow_skips=True)
+            and type(record.get("loaded_cpu")) is list
+            and not record["loaded_cpu"])
 
 
 # Freeze original test identities, not merely suite lengths. The top-level
@@ -293,40 +281,22 @@ def discover_cpu(selection: str):
     return suite, ids
 
 
-class CpuIdentityResult(unittest.TextTestResult):
-    """Record actual test starts; a matching count alone is insufficient."""
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.executed_ids = []
-
-    def startTest(self, test):
-        self.executed_ids.append(test.id())
-        super().startTest(test)
+# Keep the original public test seam and result field names for callers.
+CpuIdentityResult = results.StrictIdentityResult
 
 
 def cpu_result_record(result: CpuIdentityResult, ids: list[str]) -> dict:
-    record = result_record(result, len(ids))
-    record["ids"] = list(ids)
-    record["executed_ids"] = list(result.executed_ids)
-    return record
+    return result_record(result, ids)
 
 
 def strict_cpu_success(record: dict, expected) -> bool:
+    if not results.closed_result(record):
+        return False
     try:
         validate_cpu_ids(record["ids"], expected)
-        validate_cpu_ids(record["executed_ids"], expected)
     except PartitionError:
         return False
-    return (
-        record["discovered"] == record["tests_run"] == len(expected)
-        and record["ids"] == record["executed_ids"]
-        and not record["failures"]
-        and not record["errors"]
-        and not record["skipped"]
-        and not record["expected_failures"]
-        and not record["unexpected_successes"]
-    )
+    return True
 
 
 def run_cpu(selection: str, *, discover_only: bool) -> int:
@@ -338,8 +308,7 @@ def run_cpu(selection: str, *, discover_only: bool) -> int:
             "loaded_cpu": loaded_cpu_modules(),
         }), flush=True)
         return 0
-    result = unittest.TextTestRunner(
-        verbosity=2, resultclass=CpuIdentityResult).run(suite)
+    result = results.run_recorded_suite(suite)
     verify_cpu_sources(selection)
     record = cpu_result_record(result, ids)
     record["suite"] = selection
@@ -373,8 +342,8 @@ def main(argv=None) -> int:
         return 0
     print(f"E2 HOST PARTITION: {len(selected)} files; {len(ids)} test identities; "
           f"{len(R2_CPU_ONLY_FILES)} CPU-only files deferred", flush=True)
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
-    record = result_record(result, len(ids))
+    result = results.run_recorded_suite(suite)
+    record = result_record(result, ids)
     print(RESULT_MARKER + json.dumps(record), flush=True)
     return 0 if strict_host_success(record) else 1
 

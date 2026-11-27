@@ -1,4 +1,4 @@
-name: DTS QG-2 E2-D-SR1-B Tests-only RED (NO CUDA)
+name: DTS QG-2 E2-D-SR1-C1 strict results scoped GREEN (NO CUDA)
 
 on:
   push:
@@ -8,6 +8,16 @@ on:
       - "tests/qg2mr_sr2_e2_sr1_contract.py"
       - ".github/workflows/qg2-mr-sr2-e2-sr1-contract.yml"
       - "docs/qualification-gate-qg2-mr-sr2-e2-sr1-corrective-design.md"
+      - "tests/qg2mr_sr2_e2_test_results.py"
+      - "tests/qg2mr_sr2_e2_sr1_c1_contract.py"
+      - "docs/qualification-gate-qg2-mr-sr2-e2-sr1-c1-strict-results.md"
+      - "tests/qg2mr_sr2_e2_runner.py"
+      - "tests/qg2mr_sr2_e2_contract.py"
+      - "tests/qg2mr_sr2_e2_c1_contract.py"
+      - "tests/qg2mr_sr2_e2_c2_contract.py"
+      - "tests/qg2mr_sr2_e2_c3_contract.py"
+      - "tests/qg2mr_sr2_e2_c4_contract.py"
+      - ".github/workflows/qg2-mr-sr2-e2-ci-integration.yml"
   workflow_dispatch:
 
 permissions:
@@ -15,7 +25,7 @@ permissions:
 
 jobs:
   exact-red:
-    name: "E2-D-SR1-B actual counterexamples and protection baselines (${{ matrix.os }})"
+    name: "E2-D-SR1-C1 actual results and retained RED (${{ matrix.os }})"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -49,7 +59,7 @@ jobs:
           python -c "import importlib.util,sys; print(sys.version); assert importlib.util.find_spec('torch') is None"
       - name: Install test-only YAML mutation witness
         run: python -m pip install "PyYAML==6.0.2"
-      - name: Compile new test-only contract
-        run: python -m py_compile tests/qg2mr_sr2_e2_sr1_contract.py
-      - name: Exact actual SR1 RED and independent protection baselines
-        run: python -m tests.qg2mr_sr2_e2_sr1_contract red
+      - name: Compile strict result and scoped contract
+        run: python -m py_compile tests/qg2mr_sr2_e2_test_results.py tests/qg2mr_sr2_e2_sr1_c1_contract.py tests/qg2mr_sr2_e2_runner.py tests/qg2mr_sr2_e2_contract.py tests/qg2mr_sr2_e2_c1_contract.py tests/qg2mr_sr2_e2_c2_contract.py tests/qg2mr_sr2_e2_c3_contract.py tests/qg2mr_sr2_e2_c4_contract.py tests/qg2mr_sr2_e2_sr1_contract.py
+      - name: Exact Fix A GREEN and sixteen retained RED with protection baselines
+        run: python -m tests.qg2mr_sr2_e2_sr1_c1_contract

@@ -15,6 +15,8 @@ import subprocess
 import sys
 import textwrap
 import unittest
+
+from tests import qg2mr_sr2_e2_test_results as results
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -660,9 +662,8 @@ def strict_suite(name: str, count: int):
     suite = loader.loadTestsFromName(name)
     if loader.errors or suite.countTestCases() != count:
         raise AssertionError(f"Invalid inherited suite discovery {name}: {loader.errors}")
-    result = unittest.TextTestRunner(verbosity=1).run(suite)
-    if (result.testsRun != count or result.failures or result.errors or result.skipped
-            or result.expectedFailures or result.unexpectedSuccesses):
+    result = results.run_recorded_suite(suite, verbosity=1)
+    if not results.exact_result(result, count):
         raise AssertionError(f"Inherited suite {name} did not execute {count}/{count} GREEN")
     print(f"E2 INHERITED GREEN: {name} {count}/{count} PASS", flush=True)
 
@@ -746,13 +747,10 @@ def run_exact(phase: str) -> int:
         suites.append(unittest.TestSuite(cls(n) for n in found))
         names.append(set(found))
     targets, baselines = [
-        unittest.TextTestRunner(verbosity=2).run(suite) for suite in suites
+        results.run_recorded_suite(suite) for suite in suites
     ]
-    if (targets.testsRun != 36 or baselines.testsRun != 8
-            or targets.errors or baselines.errors or baselines.failures
-            or targets.skipped or baselines.skipped
-            or targets.expectedFailures or baselines.expectedFailures
-            or targets.unexpectedSuccesses or baselines.unexpectedSuccesses):
+    if (not results.exact_result(targets, 36, allow_failures=True)
+            or not results.exact_result(baselines, 8)):
         print("E2 INVALID EXECUTION: error/skip/xfail/xpass/baseline/count")
         return 2
     failed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in targets.failures}

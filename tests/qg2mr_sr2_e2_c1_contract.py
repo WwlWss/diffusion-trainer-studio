@@ -21,6 +21,7 @@ from unittest import mock
 
 from tests import qg2mr_sr2_e2_contract as frozen
 from tests import qg2mr_sr2_e2_runner as runner
+from tests import qg2mr_sr2_e2_test_results as results
 
 ROOT = frozen.ROOT
 HOST_ID = "test_e2h101_real_no_torch_discovery_partition"
@@ -145,13 +146,21 @@ def load_tests(loader, tests, pattern):
             runner.test_ids(suite)
 
     def test_c1110_strict_host_outcomes_and_explicit_skip_accounting(self):
-        result = unittest.TestResult()
-        result.testsRun = 2
-        case = self
-        result.skipped.append((case, "runtime dependencies are not installed"))
-        record = runner.result_record(result, 2)
+        class Actual(unittest.TestCase):
+            def test_pass(self):
+                self.assertTrue(True)
+
+            @unittest.skip("runtime dependencies are not installed")
+            def test_deferred(self):
+                self.fail("Deferred fixture must not execute")
+
+        suite = unittest.TestLoader().loadTestsFromTestCase(Actual)
+        result = results.run_recorded_suite(suite)
+        record = runner.result_record(result, result.discovered_ids)
         self.assertTrue(runner.strict_host_success(record))
         self.assertEqual(len(record["skipped"]), 1)
+        self.assertEqual(len(record["passed_ids"]), 1)
+        self.assertEqual(record["started_ids"], record["discovered_ids"])
         for key, value in (("tests_run", 1), ("discovered", 3), ("failures", 1),
                            ("errors", 1), ("expected_failures", 1),
                            ("unexpected_successes", 1), ("loaded_cpu", ["cpu"])):
@@ -160,9 +169,7 @@ def load_tests(loader, tests, pattern):
 
 
 def exact_result(result, count):
-    return (result.testsRun == count and not result.errors
-            and not result.skipped and not result.expectedFailures
-            and not result.unexpectedSuccesses)
+    return results.exact_result(result, count, allow_failures=True)
 
 
 def run_behavior() -> bool:
@@ -170,7 +177,7 @@ def run_behavior() -> bool:
     prefixes = [f"test_c1{i}_" for i in range(101, 111)]
     if len(names) != 10 or any(sum(n.startswith(p) for n in names) != 1 for p in prefixes):
         raise RuntimeError(f"Wrong C1 behavior test identities: {names}")
-    result = unittest.TextTestRunner(verbosity=2).run(
+    result = results.run_recorded_suite(
         unittest.TestSuite(PartitionBehavior(n) for n in names))
     ok = exact_result(result, 10) and not result.failures
     print(f"E2-C1 BEHAVIOR: {'10/10 PASS' if ok else 'HOLD'}", flush=True)
@@ -192,9 +199,9 @@ def stage() -> int:
                             (base_names, frozen.BASE_PREFIXES)):
         if len(names) != len(prefixes) or any(sum(n.startswith(p) for n in names) != 1 for p in prefixes):
             raise RuntimeError(f"Frozen test identity mismatch: {names}")
-    targets = unittest.TextTestRunner(verbosity=2).run(
+    targets = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Targets(n) for n in target_names))
-    baselines = unittest.TextTestRunner(verbosity=2).run(
+    baselines = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Baselines(n) for n in base_names))
     failed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in targets.failures}
     if (not exact_result(targets, 36) or not exact_result(baselines, 8)
@@ -241,9 +248,8 @@ def legacy_reference() -> int:
     if len(failed) != 2 or set(failed) != expected_modules:
         raise RuntimeError(f"Unexpected legacy failed identities: {failed}")
     ids = runner.test_ids(suite)
-    result = unittest.TextTestRunner(verbosity=2).run(suite)
-    record = runner.result_record(result, len(ids))
-    record["ids"] = ids
+    result = results.run_recorded_suite(suite)
+    record = runner.result_record(result, ids)
     print(LEGACY_RESULT + json.dumps(record), flush=True)
     return 0 if runner.strict_host_success(record) else 1
 
@@ -284,7 +290,11 @@ def full_host() -> int:
     ids = discovered["ids"]
     if (discovered["errors"] or discovered["loaded_cpu"]
             or ids != reference["ids"] or len(ids) != len(set(ids))
-            or actual["discovered"] != len(ids)
+            or actual.get("discovered_ids") != ids
+            or actual.get("started_ids") != ids
+            or reference.get("discovered_ids") != ids
+            or reference.get("started_ids") != ids
+            or actual.get("passed_ids") != reference.get("passed_ids")
             or not runner.strict_host_success(actual)
             or not runner.strict_host_success(reference)
             or sorted(actual["skipped"]) != sorted(reference["skipped"])):
@@ -292,10 +302,10 @@ def full_host() -> int:
     if any(reason not in KNOWN_SKIP_REASONS for _, reason in actual["skipped"]):
         raise RuntimeError(f"Unexpected Host skip reasons: {actual['skipped']}")
     frontend = [i for i in ids if i.startswith("test_parameter_policy_frontend_behavior.")]
-    if len(frontend) != 6 or set(frontend) & {i for i, _ in actual["skipped"]}:
+    if len(frontend) != 6 or not set(frontend) <= set(actual["passed_ids"]):
         raise RuntimeError("Six real Frontend tests were not exercised")
     print(f"E2-C1 FULL HOST GREEN: {actual['tests_run']} actual test outcomes; "
-          f"{actual['tests_run'] - len(actual['skipped'])} PASS, "
+          f"{len(actual['passed_ids'])} PASS, "
           f"{len(actual['skipped'])} inherited dependency SKIP, 0 FAIL/ERROR/xfail/xpass; "
           "legacy ordered identity and skip parity; Frontend 6/6 real PASS", flush=True)
     return 0

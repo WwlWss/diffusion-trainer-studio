@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from tests import qg2mr_sr2_e2_contract as frozen
+from tests import qg2mr_sr2_e2_test_results as results
 from tests import qg2mr_sr2_e2_c1_contract as c1
 from tests import qg2mr_sr2_e2_runner as runner
 
@@ -78,6 +79,8 @@ class CpuContractBehavior(unittest.TestCase):
                 self.assertTrue(True)
         record, ids = self.run_suite(Good)
         self.assertEqual(record["executed_ids"], ids)
+        self.assertEqual(record["passed_ids"], ids)
+        self.assertEqual(record["stopped_ids"], ids)
         self.assertTrue(runner.strict_cpu_success(record, ids))
 
     def test_c2104_actual_failure_error_skip_xfail_xpass_all_rejected(self):
@@ -116,6 +119,9 @@ class CpuContractBehavior(unittest.TestCase):
             ("executed_ids", [ids[0], ids[0]]),
             ("executed_ids", [ids[0], "different.id"]),
             ("skipped", [[ids[0], "silent skip"]]),
+            ("passed_ids", []),
+            ("passed_ids", [ids[0], ids[0]]),
+            ("stopped_ids", ids[:-1]),
         ):
             with self.subTest(field=field, value=value):
                 self.assertFalse(runner.strict_cpu_success(dict(record, **{field: value}), ids))
@@ -136,7 +142,7 @@ def run_behavior() -> bool:
     prefixes = [f"test_c2{i}_" for i in range(101, 107)]
     if len(names) != 6 or any(sum(n.startswith(p) for n in names) != 1 for p in prefixes):
         raise RuntimeError(f"Wrong C2 behavior identities: {names}")
-    result = unittest.TextTestRunner(verbosity=2).run(
+    result = results.run_recorded_suite(
         unittest.TestSuite(CpuContractBehavior(n) for n in names))
     ok = c1.exact_result(result, 6) and not result.failures
     print(f"E2-C2 BEHAVIOR: {'6/6 PASS' if ok else 'HOLD'}", flush=True)
@@ -155,9 +161,9 @@ def stage() -> int:
     green = {n for n in targets if n.startswith(GREEN_PREFIXES)}
     if len(green) != 5:
         raise RuntimeError(f"Wrong C2 scoped identities: {green}")
-    target_result = unittest.TextTestRunner(verbosity=2).run(
+    target_result = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Targets(n) for n in targets))
-    base_result = unittest.TextTestRunner(verbosity=2).run(
+    base_result = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Baselines(n) for n in baselines))
     failed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in target_result.failures}
     if (not c1.exact_result(target_result, 36) or not c1.exact_result(base_result, 8)

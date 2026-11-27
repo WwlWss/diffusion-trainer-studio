@@ -14,6 +14,7 @@ import sys
 import unittest
 
 from tests import qg2mr_sr2_e2_contract as frozen
+from tests import qg2mr_sr2_e2_test_results as results
 from tests import qg2mr_sr2_e2_c1_contract as c1
 from tests import qg2mr_sr2_e2_c2_contract as c2
 
@@ -313,7 +314,7 @@ def run_behavior():
     prefixes = [f"test_c3{i}_" for i in range(101, 108)]
     if len(names) != 7 or any(sum(n.startswith(p) for n in names) != 1 for p in prefixes):
         raise RuntimeError(f"Wrong C3 behavior identities: {names}")
-    result = unittest.TextTestRunner(verbosity=2).run(
+    result = results.run_recorded_suite(
         unittest.TestSuite(LifecycleBehavior(n) for n in names))
     ok = c1.exact_result(result, 7) and not result.failures
     print(f"E2-C3 BEHAVIOR: {'7/7 PASS' if ok else 'HOLD'}", flush=True)
@@ -335,9 +336,9 @@ def stage():
     red = {n for n in targets if n.startswith(RETAINED_RED)}
     if len(red) != 3:
         raise RuntimeError(f"Wrong C3 retained RED identities: {red}")
-    tr = unittest.TextTestRunner(verbosity=2).run(
+    tr = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Targets(n) for n in targets))
-    br = unittest.TextTestRunner(verbosity=2).run(
+    br = results.run_recorded_suite(
         unittest.TestSuite(frozen.E2Baselines(n) for n in baselines))
     failed = {case.id().rsplit(".", 1)[-1]: trace for case, trace in tr.failures}
     if (not c1.exact_result(tr, 36) or not c1.exact_result(br, 8)
